@@ -41,7 +41,8 @@
     <style>
       #${ROOT_ID}{position:fixed;right:20px;bottom:20px;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
       #${ROOT_ID} *{box-sizing:border-box}
-      #${ROOT_ID} .vonza-lite-button{width:58px;height:58px;border:0;border-radius:999px;cursor:pointer;background:linear-gradient(145deg,#0fb896,#122441);color:#fff;font:700 18px/1 inherit;box-shadow:0 16px 36px rgba(0,0,0,.28)}
+      #${ROOT_ID} .vonza-lite-button{width:58px;height:58px;border:0;border-radius:999px;cursor:pointer;background:radial-gradient(circle at 28% 24%,rgba(255,255,255,.26),transparent 30%),linear-gradient(145deg,#6D28D9 0%,#9333EA 52%,#C084FC 100%);color:#fff;font:900 24px/1 inherit;letter-spacing:-.12em;text-shadow:0 4px 18px rgba(76,29,149,.32);box-shadow:0 18px 42px rgba(76,29,149,.34),0 0 22px rgba(192,132,252,.22),inset 0 1px 0 rgba(255,255,255,.2);transition:transform .22s ease,box-shadow .22s ease}
+      #${ROOT_ID} .vonza-lite-button:hover{transform:translateY(-2px) scale(1.05);box-shadow:0 22px 50px rgba(76,29,149,.4),0 0 28px rgba(192,132,252,.34),inset 0 1px 0 rgba(255,255,255,.24)}
       #${ROOT_ID} .vonza-lite-modal{position:fixed;inset:0;display:none;align-items:flex-end;justify-content:flex-end;padding:18px;background:rgba(3,8,18,.24)}
       #${ROOT_ID} .vonza-lite-modal[data-open="true"]{display:flex}
       #${ROOT_ID} .vonza-lite-panel{position:relative;width:min(390px,calc(100vw - 24px));height:min(680px,calc(100vh - 24px));overflow:hidden;border-radius:24px;background:#09101d;box-shadow:0 32px 96px rgba(0,0,0,.34)}
