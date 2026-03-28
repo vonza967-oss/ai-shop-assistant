@@ -107,28 +107,23 @@ async function ensureBusinessRecord(supabase, options = {}) {
   const { businessId, websiteUrl, name } = options;
 
   if (businessId) {
-    const { data: business, error } = await supabase
-      .from(BUSINESSES_TABLE)
-      .select("id, name, website_url")
-      .eq("id", businessId)
-      .single();
+    const business = await findBusinessByIdentifier(supabase, businessId);
 
-    if (error) {
-      console.error(error);
-      throw error;
+    if (business?.website_url) {
+      return business;
     }
 
-    if (!business?.website_url) {
+    if (business && !business.website_url) {
       const notFoundError = new Error("Business website_url not found");
       notFoundError.statusCode = 404;
       throw notFoundError;
     }
-
-    return business;
   }
 
   if (!websiteUrl) {
-    const missingError = new Error("business_id or website_url is required");
+    const missingError = new Error(
+      "Business not found. Use a valid business UUID, matching business key, or set data-website-url in the embed script."
+    );
     missingError.statusCode = 400;
     throw missingError;
   }
@@ -194,6 +189,101 @@ function normalizePathname(url) {
 
 function cleanText(value) {
   return value ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return UUID_PATTERN.test(cleanText(value));
+}
+
+function slugifyLookupValue(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function getHostnameFromUrl(value) {
+  try {
+    return new URL(value).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function buildBusinessLookupKeys(business) {
+  const keys = new Set();
+  const businessId = cleanText(business.id).toLowerCase();
+  const businessName = cleanText(business.name);
+  const websiteUrl = cleanText(business.website_url);
+
+  if (businessId) {
+    keys.add(businessId);
+  }
+
+  if (businessName) {
+    keys.add(businessName.toLowerCase());
+    keys.add(slugifyLookupValue(businessName));
+  }
+
+  if (websiteUrl) {
+    keys.add(websiteUrl.toLowerCase());
+    keys.add(slugifyLookupValue(websiteUrl));
+
+    const hostname = getHostnameFromUrl(websiteUrl);
+    if (hostname) {
+      keys.add(hostname);
+      keys.add(slugifyLookupValue(hostname));
+    }
+  }
+
+  return keys;
+}
+
+async function findBusinessByIdentifier(supabase, businessIdentifier) {
+  const lookupValue = cleanText(businessIdentifier);
+
+  if (!lookupValue) {
+    return null;
+  }
+
+  if (isUuid(lookupValue)) {
+    const { data: business, error } = await supabase
+      .from(BUSINESSES_TABLE)
+      .select("id, name, website_url")
+      .eq("id", lookupValue)
+      .maybeSingle();
+
+    if (error) {
+      console.error(error);
+      throw error;
+    }
+
+    return business || null;
+  }
+
+  const normalizedLookup = slugifyLookupValue(lookupValue);
+  const lowercaseLookup = lookupValue.toLowerCase();
+  const { data: businesses, error } = await supabase
+    .from(BUSINESSES_TABLE)
+    .select("id, name, website_url");
+
+  if (error) {
+    console.error(error);
+    throw error;
+  }
+
+  return (
+    (businesses || []).find((business) => {
+      const keys = buildBusinessLookupKeys(business);
+      return keys.has(lowercaseLookup) || keys.has(normalizedLookup);
+    }) || null
+  );
 }
 
 function tokenizeForMatching(value) {
@@ -860,6 +950,7 @@ app.post("/chat", async (req, res) => {
     console.log("FULL BODY:", req.body);
     const message = req.body.message;
     const businessId = req.body.business_id || req.body.businessId;
+    const websiteUrl = cleanText(req.body.website_url || req.body.websiteUrl || "");
     const history = sanitizeChatHistory(req.body.history);
     const supabase = getSupabaseClient();
     const openai = getOpenAIClient();
@@ -876,16 +967,22 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "No message provided" });
     }
 
-    if (!businessId) {
-      const error = new Error("business_id is required");
+    if (!businessId && !websiteUrl) {
+      const error = new Error("business_id or website_url is required");
       error.statusCode = 400;
       throw error;
     }
 
-    let websiteContent = await getStoredWebsiteContent(supabase, businessId);
+    const business = await ensureBusinessRecord(supabase, {
+      businessId,
+      websiteUrl,
+    });
+
+    let websiteContent = await getStoredWebsiteContent(supabase, business.id);
     if (!websiteContent) {
       websiteContent = await extractBusinessWebsiteContent(supabase, {
-        businessId,
+        businessId: business.id,
+        websiteUrl: business.website_url,
       });
     }
 

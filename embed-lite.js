@@ -21,6 +21,10 @@
     script?.dataset.businessId ||
     config.businessId ||
     "";
+  const websiteUrl =
+    script?.dataset.websiteUrl ||
+    config.websiteUrl ||
+    (/^https?:$/.test(window.location.protocol) ? window.location.origin : "");
   const label =
     script?.dataset.buttonLabel ||
     config.buttonLabel ||
@@ -29,6 +33,7 @@
 
   widgetUrl.searchParams.set("embedded", "1");
   if (businessId) widgetUrl.searchParams.set("business_id", businessId);
+  if (websiteUrl) widgetUrl.searchParams.set("website_url", websiteUrl);
 
   const root = document.createElement("div");
   root.id = ROOT_ID;

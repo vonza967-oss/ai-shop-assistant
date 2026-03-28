@@ -47,6 +47,10 @@
         currentScript?.dataset.businessId ||
         scriptConfig.businessId ||
         "",
+      websiteUrl:
+        currentScript?.dataset.websiteUrl ||
+        scriptConfig.websiteUrl ||
+        (/^https?:$/.test(window.location.protocol) ? window.location.origin : ""),
       buttonLabel:
         currentScript?.dataset.buttonLabel ||
         scriptConfig.buttonLabel ||
@@ -57,12 +61,16 @@
     };
   }
 
-  function buildWidgetUrl(baseUrl, businessId) {
+  function buildWidgetUrl(baseUrl, businessId, websiteUrl) {
     const url = new URL("/widget", baseUrl);
     url.searchParams.set("embedded", "1");
 
     if (businessId) {
       url.searchParams.set("business_id", businessId);
+    }
+
+    if (websiteUrl) {
+      url.searchParams.set("website_url", websiteUrl);
     }
 
     return url;
@@ -431,17 +439,22 @@
     const currentScript = resolveCurrentScript();
     const config = getConfig(currentScript);
     const logger = createLogger(config.debug);
-    const widgetUrl = buildWidgetUrl(config.baseUrl, config.businessId);
+    const widgetUrl = buildWidgetUrl(
+      config.baseUrl,
+      config.businessId,
+      config.websiteUrl
+    );
 
-    if (!config.businessId) {
+    if (!config.businessId && !config.websiteUrl) {
       logger.warn(
-        "No business ID was provided. Pass data-business-id on the script tag to target a specific business."
+        "No business identifier was provided. Pass data-business-id or data-website-url on the script tag."
       );
     }
 
     logger.log("Initializing", {
       baseUrl: config.baseUrl,
       businessId: config.businessId || null,
+      websiteUrl: config.websiteUrl || null,
       widgetUrl: widgetUrl.toString(),
     });
 

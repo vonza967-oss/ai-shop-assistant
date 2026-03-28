@@ -4,6 +4,10 @@ const BUSINESS_ID =
   searchParams.get("business_id") ||
   window.VonzaWidgetConfig?.businessId ||
   "";
+const WEBSITE_URL =
+  searchParams.get("website_url") ||
+  window.VonzaWidgetConfig?.websiteUrl ||
+  "";
 const conversationHistory = [];
 
 function addToHistory(role, content) {
@@ -59,12 +63,12 @@ async function sendMessage() {
 
   if (!message) return;
 
-  if (!BUSINESS_ID) {
-    console.error("Vonza assistant configuration error: missing business_id");
+  if (!BUSINESS_ID && !WEBSITE_URL) {
+    console.error("Vonza assistant configuration error: missing business_id and website_url");
     appendMessage(
       chat,
       "bot",
-      "This assistant is not configured yet. Please add a valid business ID to the embed script."
+      "This assistant is not configured yet. Please add a valid business ID or website URL to the embed script."
     );
     return;
   }
@@ -84,6 +88,7 @@ async function sendMessage() {
       body: JSON.stringify({
         message,
         business_id: BUSINESS_ID,
+        website_url: WEBSITE_URL,
         history: historySnapshot
       })
     });
