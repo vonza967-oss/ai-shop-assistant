@@ -34,6 +34,9 @@ app.get("/embed-lite.js", (_req, res) => {
   res.setHeader("Content-Type", "application/javascript");
   res.sendFile(path.join(__dirname, "embed-lite.js"));
 });
+app.get("/generator", (_req, res) => {
+  res.sendFile(path.join(__dirname, "generator.html"));
+});
 app.get("/manifest.json", (_req, res) => {
   res.sendFile(path.join(__dirname, "manifest.json"));
 });
