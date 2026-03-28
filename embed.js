@@ -157,6 +157,10 @@
           filter: drop-shadow(0 0 6px rgba(147, 51, 234, 0.16));
         }
 
+        .launcher-badge.is-opening {
+          animation: launcherLogoPulse 280ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
         .launcher-label {
           position: absolute;
           right: 72px;
@@ -195,9 +199,7 @@
           backdrop-filter: blur(6px);
           opacity: 0;
           pointer-events: none;
-          transition:
-            opacity 220ms ease,
-            backdrop-filter 220ms ease;
+          transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
         }
 
         .modal[data-open="true"] {
@@ -218,11 +220,11 @@
           background:
             linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
             #09101d;
-          transform: translateY(24px) scale(0.96);
+          transform: translateY(10px) scale(0.95);
           opacity: 0;
           transition:
             transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
-            opacity 220ms ease;
+            opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
         }
 
         .modal[data-open="true"] .panel {
@@ -365,6 +367,24 @@
           }
         }
 
+        @keyframes launcherLogoPulse {
+          0% {
+            transform: translateY(10px) scale(0.95);
+            opacity: 0;
+            filter: drop-shadow(0 0 3px rgba(147, 51, 234, 0.12));
+          }
+          55% {
+            transform: translateY(0) scale(1.04);
+            opacity: 1;
+            filter: drop-shadow(0 0 12px rgba(196, 181, 253, 0.22));
+          }
+          100% {
+            transform: translateY(0) scale(1);
+            opacity: 1;
+            filter: drop-shadow(0 0 6px rgba(147, 51, 234, 0.16));
+          }
+        }
+
         @media (max-width: 640px) {
           .widget-shell {
             right: 16px;
@@ -472,6 +492,7 @@
     shadowRoot.innerHTML = createTemplate(config.buttonLabel);
 
     const launcher = shadowRoot.querySelector(".launcher");
+    const launcherBadge = shadowRoot.querySelector(".launcher-badge");
     const modal = shadowRoot.querySelector(".modal");
     const panel = shadowRoot.querySelector(".panel");
     const closeButton = shadowRoot.querySelector(".close");
@@ -536,9 +557,17 @@
       startLoadTimer();
     }
 
+    function pulseLauncherLogo() {
+      launcherBadge.classList.remove("is-opening");
+      void launcherBadge.offsetWidth;
+      launcherBadge.classList.add("is-opening");
+      window.setTimeout(() => launcherBadge.classList.remove("is-opening"), 320);
+    }
+
     function openModal() {
       modal.setAttribute("data-open", "true");
       modal.setAttribute("aria-hidden", "false");
+      pulseLauncherLogo();
       previousBodyOverflow = document.body.style.overflow;
       previousHtmlOverflow = document.documentElement.style.overflow;
       document.body.style.overflow = "hidden";
