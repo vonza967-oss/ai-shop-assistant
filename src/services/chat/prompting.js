@@ -61,13 +61,20 @@ export function buildBusinessContextForChat(contentRecord, userMessage) {
     .join("\n\n");
 }
 
-export function buildChatSystemPrompt(language) {
+export function buildChatSystemPrompt(language, agent = {}) {
+  const customPrompt = cleanText(agent.systemPrompt || "");
+  const purpose = cleanText(agent.purpose || "");
+  const tone = cleanText(agent.tone || "");
+  const agentName = cleanText(agent.name || "the assistant");
+
   return `You are a thoughtful personal advisor helping a visitor figure out the best next step with this business.
 
 Your mission:
 - understand what the user is actually trying to achieve
 - guide them toward the most relevant product, service, or next step
 - make the decision process feel easy, personal, and clear
+- represent the assistant identity as ${agentName}
+${purpose ? `- primary assistant purpose: ${purpose}` : ""}
 
 How to behave:
 - Always reply in ${language}
@@ -90,13 +97,16 @@ Style:
 - no fluff
 - no robotic repetition
 - no generic marketing language
+${tone ? `- preferred tone: ${tone}` : ""}
 
 Hard rules:
 - Do not invent facts, services, prices, or guarantees
 - Do not speak as "we" or as the company
 - Do not sound like a scripted chatbot or advertisement
 - Avoid sounding like you are trying to close the sale too early
-- End with one clear next-step question that moves the conversation forward`;
+- End with one clear next-step question that moves the conversation forward
+
+${customPrompt ? `Additional agent instructions:\n${customPrompt}` : ""}`;
 }
 
 export function buildConversationGuidance(message, history) {

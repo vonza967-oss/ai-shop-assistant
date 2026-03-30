@@ -2,6 +2,12 @@
   const GLOBAL_FLAG = "__VonzaAssistantWidgetLoaded__";
   const ROOT_ID = "vonza-widget-root";
   const LOG_PREFIX = "[Vonza widget]";
+  const DEFAULT_WIDGET_CONFIG = {
+    assistantName: "Vonza AI",
+    buttonLabel: "Chat with Vonza",
+    primaryColor: "#10a37f",
+    secondaryColor: "#0c7f75",
+  };
 
   if (window[GLOBAL_FLAG] || document.getElementById(ROOT_ID)) {
     console.warn(`${LOG_PREFIX} widget already injected, skipping duplicate load.`);
@@ -43,6 +49,14 @@
 
     return {
       baseUrl,
+      agentId:
+        currentScript?.dataset.agentId ||
+        scriptConfig.agentId ||
+        "",
+      agentKey:
+        currentScript?.dataset.agentKey ||
+        scriptConfig.agentKey ||
+        "",
       businessId:
         currentScript?.dataset.businessId ||
         scriptConfig.businessId ||
@@ -61,22 +75,52 @@
     };
   }
 
-  function buildWidgetUrl(baseUrl, businessId, websiteUrl) {
+  function buildWidgetUrl(baseUrl, config) {
     const url = new URL("/widget", baseUrl);
     url.searchParams.set("embedded", "1");
 
-    if (businessId) {
-      url.searchParams.set("business_id", businessId);
+    if (config.agentId) {
+      url.searchParams.set("agent_id", config.agentId);
     }
 
-    if (websiteUrl) {
-      url.searchParams.set("website_url", websiteUrl);
+    if (config.agentKey) {
+      url.searchParams.set("agent_key", config.agentKey);
+    }
+
+    if (config.businessId) {
+      url.searchParams.set("business_id", config.businessId);
+    }
+
+    if (config.websiteUrl) {
+      url.searchParams.set("website_url", config.websiteUrl);
     }
 
     return url;
   }
 
-  function createTemplate(buttonLabel) {
+  function buildBootstrapUrl(baseUrl, config) {
+    const url = new URL("/widget/bootstrap", baseUrl);
+
+    if (config.agentId) {
+      url.searchParams.set("agent_id", config.agentId);
+    }
+
+    if (config.agentKey) {
+      url.searchParams.set("agent_key", config.agentKey);
+    }
+
+    if (config.businessId) {
+      url.searchParams.set("business_id", config.businessId);
+    }
+
+    if (config.websiteUrl) {
+      url.searchParams.set("website_url", config.websiteUrl);
+    }
+
+    return url;
+  }
+
+  function createTemplate(buttonLabel, visualConfig = DEFAULT_WIDGET_CONFIG) {
     return `
       <style>
         :host {
@@ -96,64 +140,50 @@
         }
 
         .launcher {
-        .launcher {
-  position: relative;
-  overflow: visible;
-}
-
-.launcher::after {
-  content: "";
-  position: absolute;
-  inset: -12px;
-  border-radius: 50%;
-
-  background: conic-gradient(
-    from 0deg,
-    transparent,
-    rgba(168, 85, 247, 0.5),
-    transparent
-  );
-
-  filter: blur(12px);
-  opacity: 0.6;
-
-  animation: orbitSpin 10s linear infinite;
-  pointer-events: none;
-}
-  @keyframes orbitSpin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+          position: relative;
+          overflow: visible;
           width: 60px;
           height: 60px;
           border: none;
           border-radius: 999px;
-          position: relative;
           display: grid;
           place-items: center;
           cursor: pointer;
           color: #ede9fe;
           background:
             radial-gradient(circle at 28% 24%, rgba(192, 132, 252, 0.12), transparent 34%),
-            linear-gradient(145deg, #0F0A1F 0%, #181028 52%, #25163b 100%);
+            linear-gradient(145deg, var(--widget-primary, ${visualConfig.primaryColor}) 0%, var(--widget-secondary, ${visualConfig.secondaryColor}) 72%, #25163b 100%);
           box-shadow:
             0 14px 30px rgba(6, 4, 17, 0.34),
-            0 0 18px rgba(147, 51, 234, 0.14),
+            0 0 18px color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 16%, transparent),
             inset 0 1px 0 rgba(255, 255, 255, 0.08);
           transition:
             transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
             box-shadow 220ms ease;
         }
 
+        .launcher::after {
+          content: "";
+          position: absolute;
+          inset: -12px;
+          border-radius: 50%;
+          background: conic-gradient(
+            from 0deg,
+            transparent,
+            color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 50%, transparent),
+            transparent
+          );
+          filter: blur(12px);
+          opacity: 0.35;
+          animation: orbitSpin 10s linear infinite;
+          pointer-events: none;
+        }
+
         .launcher:hover {
           transform: translateY(-1px) scale(1.05);
           box-shadow:
             0 18px 36px rgba(6, 4, 17, 0.38),
-            0 0 24px rgba(147, 51, 234, 0.2),
+            0 0 24px color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 22%, transparent),
             inset 0 1px 0 rgba(255, 255, 255, 0.1);
         }
 
@@ -162,7 +192,7 @@
           position: absolute;
           inset: -8px;
           border-radius: 999px;
-          background: radial-gradient(circle, rgba(147, 51, 234, 0.16), transparent 70%);
+          background: radial-gradient(circle, color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 16%, transparent), transparent 70%);
           opacity: 0.55;
           transform: scale(0.92);
           animation: ring 2.6s infinite ease-out;
@@ -185,8 +215,8 @@
           -webkit-text-fill-color: transparent;
           text-shadow:
             0 0 10px rgba(196, 181, 253, 0.18),
-            0 0 18px rgba(147, 51, 234, 0.12);
-          filter: drop-shadow(0 0 6px rgba(147, 51, 234, 0.16));
+            0 0 18px color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 18%, transparent);
+          filter: drop-shadow(0 0 6px color-mix(in srgb, var(--widget-primary, ${visualConfig.primaryColor}) 18%, transparent));
         }
 
         .launcher-badge.is-opening {
@@ -309,7 +339,7 @@
           height: 34px;
           border-radius: 999px;
           border: 3px solid rgba(255, 255, 255, 0.16);
-          border-top-color: #10a37f;
+          border-top-color: var(--widget-primary, ${visualConfig.primaryColor});
           animation: spin 850ms linear infinite;
         }
 
@@ -336,7 +366,7 @@
           border: none;
           border-radius: 999px;
           padding: 10px 14px;
-          background: linear-gradient(135deg, #10a37f, #0f766e);
+          background: linear-gradient(135deg, var(--widget-primary, ${visualConfig.primaryColor}), var(--widget-secondary, ${visualConfig.secondaryColor}));
           color: #ffffff;
           font: inherit;
           font-size: 13px;
@@ -394,6 +424,15 @@
         }
 
         @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @keyframes orbitSpin {
+          from {
+            transform: rotate(0deg);
+          }
           to {
             transform: rotate(360deg);
           }
@@ -469,7 +508,7 @@
         }
       </style>
       <div class="widget-shell">
-        <button class="launcher" type="button" aria-label="${buttonLabel}">
+        <button class="launcher" type="button" aria-label="${buttonLabel}" title="${buttonLabel}">
           <span class="launcher-badge">V</span>
         </button>
         <div class="launcher-label">${buttonLabel}</div>
@@ -479,13 +518,13 @@
             <div class="status-layer">
               <div class="status-spinner"></div>
               <div class="status-title">Loading assistant</div>
-              <div class="status-copy">The widget is connecting to Vonza.</div>
+              <div class="status-copy">The widget is connecting to ${visualConfig.assistantName}.</div>
               <div class="status-actions" hidden>
                 <button class="status-button" type="button" data-action="retry">Retry</button>
                 <button class="status-button secondary" type="button" data-action="close">Close</button>
               </div>
             </div>
-            <iframe class="frame" title="Vonza Assistant" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            <iframe class="frame" title="${visualConfig.assistantName}" referrerpolicy="strict-origin-when-cross-origin"></iframe>
           </div>
         </div>
       </div>
@@ -496,20 +535,19 @@
     const currentScript = resolveCurrentScript();
     const config = getConfig(currentScript);
     const logger = createLogger(config.debug);
-    const widgetUrl = buildWidgetUrl(
-      config.baseUrl,
-      config.businessId,
-      config.websiteUrl
-    );
+    const widgetUrl = buildWidgetUrl(config.baseUrl, config);
+    const bootstrapUrl = buildBootstrapUrl(config.baseUrl, config);
 
-    if (!config.businessId && !config.websiteUrl) {
+    if (!config.agentId && !config.agentKey && !config.businessId && !config.websiteUrl) {
       logger.warn(
-        "No business identifier was provided. Pass data-business-id or data-website-url on the script tag."
+        "No agent or business identifier was provided. Pass data-agent-id, data-agent-key, data-business-id, or data-website-url on the script tag."
       );
     }
 
     logger.log("Initializing", {
       baseUrl: config.baseUrl,
+      agentId: config.agentId || null,
+      agentKey: config.agentKey || null,
       businessId: config.businessId || null,
       websiteUrl: config.websiteUrl || null,
       widgetUrl: widgetUrl.toString(),
@@ -521,7 +559,13 @@
     window[GLOBAL_FLAG] = true;
 
     const shadowRoot = host.attachShadow({ mode: "open" });
-    shadowRoot.innerHTML = createTemplate(config.buttonLabel);
+    const visualConfig = {
+      ...DEFAULT_WIDGET_CONFIG,
+      buttonLabel: config.buttonLabel || DEFAULT_WIDGET_CONFIG.buttonLabel,
+    };
+    shadowRoot.innerHTML = createTemplate(visualConfig.buttonLabel, visualConfig);
+    host.style.setProperty("--widget-primary", visualConfig.primaryColor);
+    host.style.setProperty("--widget-secondary", visualConfig.secondaryColor);
 
     const launcher = shadowRoot.querySelector(".launcher");
     const launcherBadge = shadowRoot.querySelector(".launcher-badge");
@@ -540,6 +584,31 @@
     let loadTimer = null;
     let previousBodyOverflow = "";
     let previousHtmlOverflow = "";
+
+    fetch(bootstrapUrl.toString())
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!data?.widgetConfig) {
+          return;
+        }
+
+        const nextConfig = {
+          ...DEFAULT_WIDGET_CONFIG,
+          ...data.widgetConfig,
+        };
+
+        host.style.setProperty("--widget-primary", nextConfig.primaryColor);
+        host.style.setProperty("--widget-secondary", nextConfig.secondaryColor);
+        launcher.setAttribute("aria-label", nextConfig.buttonLabel);
+        launcher.setAttribute("title", nextConfig.buttonLabel);
+        shadowRoot.querySelector(".launcher-label").textContent = nextConfig.buttonLabel;
+        statusCopy.textContent = `The widget is connecting to ${nextConfig.assistantName}.`;
+        panel.setAttribute("aria-label", nextConfig.assistantName);
+        iframe.setAttribute("title", nextConfig.assistantName);
+      })
+      .catch((error) => {
+        logger.warn("Bootstrap config unavailable, using defaults.", error);
+      });
 
     function showLoadingState() {
       statusLayer.hidden = false;

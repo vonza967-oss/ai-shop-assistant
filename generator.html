@@ -69,6 +69,7 @@
     }
 
     input,
+    select,
     textarea {
       width: 100%;
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -78,7 +79,8 @@
       font: inherit;
     }
 
-    input {
+    input,
+    select {
       padding: 15px 16px;
       margin-bottom: 16px;
     }
@@ -127,8 +129,14 @@
     <h1>Vonza AI Widget Generator</h1>
     <p>Generate an install script for your client in one step.</p>
 
-    <label for="business-name">Business Name</label>
+    <label for="business-name" id="business-name-label">Business Name</label>
     <input id="business-name" type="text" placeholder="e.g. Client One">
+
+    <label for="identifier-type">Identifier Type</label>
+    <select id="identifier-type">
+      <option value="agent_key" selected>Agent Key</option>
+      <option value="agent_id">Agent ID</option>
+    </select>
 
     <div class="row">
       <button id="generate-button" class="primary" type="button">Generate Script</button>
@@ -141,6 +149,8 @@
 
   <script>
     const input = document.getElementById("business-name");
+    const identifierType = document.getElementById("identifier-type");
+    const inputLabel = document.getElementById("business-name-label");
     const output = document.getElementById("output");
     const successMessage = document.getElementById("success-message");
 
@@ -148,16 +158,31 @@
       return value.trim().toLowerCase().replace(/\s+/g, "_");
     }
 
-    function generateScript() {
-      const businessId = buildBusinessId(input.value);
+    function syncInputMode() {
+      if (identifierType.value === "agent_id") {
+        inputLabel.textContent = "Agent ID";
+        input.placeholder = "e.g. 11111111-2222-3333-4444-555555555555";
+      } else {
+        inputLabel.textContent = "Business Name";
+        input.placeholder = "e.g. Client One";
+      }
+    }
 
-      if (!businessId) {
+    function generateScript() {
+      const identifierValue = identifierType.value === "agent_id"
+        ? input.value.trim()
+        : buildBusinessId(input.value);
+      const identifierAttribute = identifierType.value === "agent_id"
+        ? "data-agent-id"
+        : "data-agent-key";
+
+      if (!identifierValue) {
         output.value = "";
         successMessage.textContent = "Enter a business name first.";
         return;
       }
 
-      output.value = `<script src="https://ai-shop-assistant-1.onrender.com/embed.js" data-business-id="${businessId}"><\/script>`;
+      output.value = `<script src="https://ai-shop-assistant-1.onrender.com/embed.js" ${identifierAttribute}="${identifierValue}"><\/script>`;
       successMessage.textContent = "";
     }
 
@@ -179,6 +204,8 @@
 
     document.getElementById("generate-button").addEventListener("click", generateScript);
     document.getElementById("copy-button").addEventListener("click", copyScript);
+    identifierType.addEventListener("change", syncInputMode);
+    syncInputMode();
   </script>
 </body>
 </html>

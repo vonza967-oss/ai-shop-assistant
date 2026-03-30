@@ -1,4 +1,4 @@
-import { ensureBusinessRecord } from "../business/businessResolution.js";
+import { resolveAgentContext } from "../agents/agentService.js";
 import {
   extractBusinessWebsiteContent,
   getStoredWebsiteContent,
@@ -27,12 +27,14 @@ export async function handleChatRequest({
   console.log("FULL BODY:", body);
 
   const message = body.message;
+  const agentId = body.agent_id || body.agentId;
+  const agentKey = body.agent_key || body.agentKey;
   const businessId = body.business_id || body.businessId;
   const websiteUrl = cleanText(body.website_url || body.websiteUrl || "");
   const history = sanitizeChatHistory(body.history);
   const effectiveUserText = buildEffectiveUserText(message || "", history);
   const conversationHistory = formatConversationHistory(history);
-  const language = detectResponseLanguage(effectiveUserText || message || "");
+  let language = detectResponseLanguage(effectiveUserText || message || "");
   const conversationGuidance = buildConversationGuidance(message, history);
 
   console.log("USER MESSAGE:", message);
@@ -45,16 +47,25 @@ export async function handleChatRequest({
     throw error;
   }
 
-  if (!businessId && !websiteUrl) {
-    const error = new Error("business_id or website_url is required");
+  if (!agentId && !agentKey && !businessId && !websiteUrl) {
+    const error = new Error(
+      "agent_id, agent_key, business_id, or website_url is required"
+    );
     error.statusCode = 400;
     throw error;
   }
 
-  const business = await ensureBusinessRecord(supabase, {
+  const { agent, business, widgetConfig } = await resolveAgentContext(supabase, {
+    agentId,
+    agentKey,
     businessId,
     websiteUrl,
+    businessName: body.name,
   });
+
+  if (agent.language && agent.language.toLowerCase() !== "auto") {
+    language = agent.language;
+  }
 
   let websiteContent = await getStoredWebsiteContent(supabase, business.id);
   if (!websiteContent) {
@@ -71,7 +82,7 @@ export async function handleChatRequest({
 
   console.log("CHAT BUSINESS CONTEXT:", businessContext);
 
-  const systemPrompt = buildChatSystemPrompt(language);
+  const systemPrompt = buildChatSystemPrompt(language, agent);
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -126,6 +137,12 @@ export async function handleChatRequest({
 
   return {
     reply: finalReply,
+    agentId: agent.id,
+    agentKey: agent.publicAgentKey,
     businessId: websiteContent.businessId,
+    widgetConfig: {
+      ...widgetConfig,
+      assistantName: agent.name || widgetConfig.assistantName,
+    },
   };
 }

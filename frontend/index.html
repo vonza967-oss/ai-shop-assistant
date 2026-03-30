@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Vonza AI</title>
+  <title id="page-title">Vonza AI</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Vonza AI">
+  <meta name="apple-mobile-web-app-title" content="Vonza AI" id="apple-app-title">
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/icon-192.svg">
   <script>
@@ -29,11 +29,11 @@
       <header class="chat-header">
         <div class="brand">
           <div class="brand-mark" aria-label="Vonza AI logo">
-            <span class="brand-mark-v">V</span>
+            <span class="brand-mark-v" id="brand-mark-v">V</span>
           </div>
           <div>
-            <p class="eyebrow">YOUR PERSONAL ASSISTANT</p>
-            <h1>Vonza AI</h1>
+            <p class="eyebrow" id="launcher-text">YOUR PERSONAL ASSISTANT</p>
+            <h1 id="assistant-name">Vonza AI</h1>
           </div>
         </div>
         <div class="status-pill">
@@ -44,10 +44,10 @@
 
       <section id="chat" class="chat-feed">
         <div class="message bot intro">
-          <div class="avatar">V</div>
+          <div class="avatar" id="intro-avatar">V</div>
           <div class="bubble">
             <p class="message-label">Assistant</p>
-            <p>How may I be of your service today?</p>
+            <p id="welcome-message">How may I be of your service today?</p>
           </div>
         </div>
       </section>
@@ -58,7 +58,7 @@
           <button id="send-button" onclick="sendMessage()">Send</button>
         </div>
         <p class="composer-hint">Press Enter to send. Answers are generated from the live website content.</p>
-        <p class="powered-by">Powered by Vonza AI</p>
+        <p class="powered-by" id="powered-by">Powered by Vonza AI</p>
       </div>
     </main>
   </div>
