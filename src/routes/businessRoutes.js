@@ -5,6 +5,7 @@ import {
   extractBusinessWebsiteContent,
   scrapeAllBusinesses,
 } from "../services/scraping/websiteContentService.js";
+import { requireAdminToken } from "../utils/httpGuards.js";
 
 export function createBusinessRouter() {
   const router = express.Router();
@@ -24,7 +25,7 @@ export function createBusinessRouter() {
     }
   });
 
-  router.post("/businesses/scrape", async (req, res) => {
+  router.post("/businesses/scrape", requireAdminToken, async (req, res) => {
     try {
       const result = await extractBusinessWebsiteContent(getSupabaseClient(), {
         businessId: req.body.business_id || req.body.businessId,
@@ -41,7 +42,7 @@ export function createBusinessRouter() {
     }
   });
 
-  router.post("/businesses/scrape-all", async (_req, res) => {
+  router.post("/businesses/scrape-all", requireAdminToken, async (_req, res) => {
     try {
       const result = await scrapeAllBusinesses(getSupabaseClient());
 

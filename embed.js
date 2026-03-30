@@ -40,10 +40,12 @@
       ? new URL(currentScript.src, window.location.href)
       : new URL(window.location.href);
     const scriptConfig = window.VonzaWidgetConfig || {};
+    const publicAppUrl = cleanBaseUrl(window.VONZA_PUBLIC_APP_URL || "");
 
     const baseUrl = (
       currentScript?.dataset.baseUrl ||
       scriptConfig.baseUrl ||
+      publicAppUrl ||
       fallbackUrl.origin
     ).replace(/\/$/, "");
 
@@ -72,7 +74,11 @@
       debug:
         currentScript?.dataset.debug === "true" ||
         scriptConfig.debug === true,
-    };
+      };
+  }
+
+  function cleanBaseUrl(value) {
+    return String(value || "").replace(/\/$/, "");
   }
 
   function buildWidgetUrl(baseUrl, config) {

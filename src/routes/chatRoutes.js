@@ -3,11 +3,12 @@ import express from "express";
 import { getOpenAIClient } from "../clients/openaiClient.js";
 import { getSupabaseClient } from "../clients/supabaseClient.js";
 import { handleChatRequest } from "../services/chat/chatService.js";
+import { enforceChatRateLimit } from "../utils/httpGuards.js";
 
 export function createChatRouter() {
   const router = express.Router();
 
-  router.post("/chat", async (req, res) => {
+  router.post("/chat", enforceChatRateLimit, async (req, res) => {
     try {
       const result = await handleChatRequest({
         supabase: getSupabaseClient(),

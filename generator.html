@@ -122,6 +122,38 @@
       color: #6ee7b7;
       font-size: 0.92rem;
     }
+
+    .output-block {
+      margin-top: 18px;
+    }
+
+    .output-label {
+      margin: 0 0 10px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .test-link {
+      display: block;
+      width: 100%;
+      padding: 15px 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(15, 23, 42, 0.9);
+      color: #93c5fd;
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    .preview-frame {
+      width: 100%;
+      height: 420px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      background: white;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -135,55 +167,146 @@
     <label for="identifier-type">Identifier Type</label>
     <select id="identifier-type">
       <option value="agent_key" selected>Agent Key</option>
-      <option value="agent_id">Agent ID</option>
     </select>
 
     <div class="row">
       <button id="generate-button" class="primary" type="button">Generate Script</button>
       <button id="copy-button" class="secondary" type="button">Copy</button>
+      <button id="open-test-button" class="secondary" type="button">Open Test</button>
     </div>
 
-    <textarea id="output" readonly placeholder="Your script tag will appear here"></textarea>
+    <div class="output-block">
+      <p class="output-label">Install this on your website</p>
+      <textarea id="output" readonly placeholder="Your script tag will appear here"></textarea>
+    </div>
+
+    <div class="output-block">
+      <p class="output-label">Test your assistant</p>
+      <a id="test-link" class="test-link" href="#" target="_blank" rel="noreferrer">Your direct test link will appear here</a>
+    </div>
+
+    <div class="output-block">
+      <p class="output-label">Live preview</p>
+      <iframe
+        id="preview-frame"
+        class="preview-frame"
+        title="Widget preview"
+        srcdoc="<!DOCTYPE html><html><body style='margin:0;display:grid;place-items:center;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:#f8fafc;color:#0f172a;'><div><h2 style='margin:0 0 8px;'>Preview site</h2><p style='margin:0;color:#475569;'>Generate an assistant to see the live widget here.</p></div></body></html>"
+      ></iframe>
+    </div>
+
     <div id="success-message" class="success"></div>
   </main>
 
+  <script src="/public-config.js"></script>
+  <script src="/public-config.js"></script>
   <script>
     const input = document.getElementById("business-name");
     const identifierType = document.getElementById("identifier-type");
     const inputLabel = document.getElementById("business-name-label");
     const output = document.getElementById("output");
+    const testLink = document.getElementById("test-link");
+    const previewFrame = document.getElementById("preview-frame");
     const successMessage = document.getElementById("success-message");
+    const generateButton = document.getElementById("generate-button");
+    const openTestButton = document.getElementById("open-test-button");
+
+    function getPublicAppUrl() {
+      return (window.VONZA_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, "");
+    }
 
     function buildBusinessId(value) {
       return value.trim().toLowerCase().replace(/\s+/g, "_");
     }
 
     function syncInputMode() {
-      if (identifierType.value === "agent_id") {
-        inputLabel.textContent = "Agent ID";
-        input.placeholder = "e.g. 11111111-2222-3333-4444-555555555555";
-      } else {
-        inputLabel.textContent = "Business Name";
-        input.placeholder = "e.g. Client One";
-      }
+      inputLabel.textContent = "Business Name";
+      input.placeholder = "e.g. Client One";
     }
 
-    function generateScript() {
-      const identifierValue = identifierType.value === "agent_id"
-        ? input.value.trim()
-        : buildBusinessId(input.value);
-      const identifierAttribute = identifierType.value === "agent_id"
-        ? "data-agent-id"
-        : "data-agent-key";
+    function setGeneratedOutputs(agentKey) {
+      const publicAppUrl = getPublicAppUrl();
+      const scriptTag = `<script src="${publicAppUrl}/embed.js" data-agent-key="${agentKey}"><\/script>`;
+      const widgetUrl = `${publicAppUrl}/widget?agent_key=${encodeURIComponent(agentKey)}`;
+      const previewScriptTag = `<script src="${publicAppUrl}/embed.js" data-agent-key="${agentKey}"><\/script>`;
+      const previewMarkup = `<!DOCTYPE html>
+<html>
+  <body style="margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:linear-gradient(180deg,#f8fafc 0%,#e2e8f0 100%);color:#0f172a;">
+    <main style="padding:32px;">
+      <h2 style="margin:0 0 8px;">Preview site</h2>
+      <p style="margin:0;max-width:520px;color:#475569;line-height:1.6;">This simulates how the assistant appears when installed on a real website.</p>
+    </main>
+    ${previewScriptTag}
+  </body>
+</html>`;
 
-      if (!identifierValue) {
+      output.value = scriptTag;
+      testLink.href = widgetUrl;
+      testLink.textContent = widgetUrl;
+      previewFrame.srcdoc = previewMarkup;
+    }
+
+    async function generateScript() {
+      const businessName = input.value.trim();
+
+      if (!businessName) {
         output.value = "";
         successMessage.textContent = "Enter a business name first.";
         return;
       }
 
-      output.value = `<script src="https://ai-shop-assistant-1.onrender.com/embed.js" ${identifierAttribute}="${identifierValue}"><\/script>`;
-      successMessage.textContent = "";
+      generateButton.disabled = true;
+      successMessage.textContent = "Creating agent...";
+
+      try {
+        const response = await fetch("/agents/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            business_name: businessName
+          })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Agent creation failed.");
+        }
+
+        window.localStorage.setItem("vonza_agent_key", data.agent_key);
+
+        successMessage.textContent = "Importing website content...";
+
+        const importResponse = await fetch("/knowledge/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            agent_key: data.agent_key
+          })
+        });
+        const importData = await importResponse.json();
+
+        if (!importResponse.ok) {
+          setGeneratedOutputs(data.agent_key);
+          successMessage.textContent =
+            "Agent created, but website content is limited. The assistant may give general answers.";
+          return;
+        }
+
+        setGeneratedOutputs(data.agent_key);
+        successMessage.textContent = "Your assistant is ready";
+      } catch (error) {
+        output.value = "";
+        testLink.href = "#";
+        testLink.textContent = "Your direct test link will appear here";
+        previewFrame.srcdoc = "<!DOCTYPE html><html><body style='margin:0;display:grid;place-items:center;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:#f8fafc;color:#0f172a;'><div><h2 style='margin:0 0 8px;'>Preview site</h2><p style='margin:0;color:#475569;'>Generate an assistant to see the live widget here.</p></div></body></html>";
+        successMessage.textContent = error.message || "Agent creation failed.";
+      } finally {
+        generateButton.disabled = false;
+      }
     }
 
     async function copyScript() {
@@ -204,6 +327,13 @@
 
     document.getElementById("generate-button").addEventListener("click", generateScript);
     document.getElementById("copy-button").addEventListener("click", copyScript);
+    openTestButton.addEventListener("click", () => {
+      if (testLink.href && testLink.href !== "#") {
+        window.open(testLink.href, "_blank", "noopener,noreferrer");
+      } else {
+        successMessage.textContent = "Generate a script first.";
+      }
+    });
     identifierType.addEventListener("change", syncInputMode);
     syncInputMode();
   </script>

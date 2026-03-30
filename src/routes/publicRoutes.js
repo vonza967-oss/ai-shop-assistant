@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import { getPublicAppUrl } from "../config/env.js";
 
 export function createPublicRouter({ rootDir }) {
   const router = express.Router();
@@ -19,7 +20,28 @@ export function createPublicRouter({ rootDir }) {
   });
 
   router.get("/generator", (_req, res) => {
-    res.sendFile(path.join(rootDir, "generator.html"));
+    res.redirect("/dashboard");
+  });
+
+  router.get("/dashboard", (_req, res) => {
+    res.sendFile(path.join(rootDir, "dashboard.html"));
+  });
+
+  router.get("/public-config.js", (_req, res) => {
+    res.type("application/javascript");
+    res.send(`window.VONZA_PUBLIC_APP_URL = ${JSON.stringify(getPublicAppUrl())};`);
+  });
+
+  router.get("/admin", (req, res) => {
+    const configuredToken = process.env.ADMIN_TOKEN;
+    const providedToken = req.query.token;
+
+    if (!configuredToken || !providedToken || providedToken !== configuredToken) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+
+    res.sendFile(path.join(rootDir, "admin.html"));
   });
 
   router.get("/manifest.json", (_req, res) => {

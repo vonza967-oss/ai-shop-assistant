@@ -1,11 +1,13 @@
 const searchParams = new URLSearchParams(window.location.search);
 const EMBEDDED_MODE = searchParams.get("embedded") === "1";
+const STORED_AGENT_KEY = window.localStorage.getItem("vonza_agent_key") || "";
 const AGENT_ID =
   searchParams.get("agent_id") ||
   window.VonzaWidgetConfig?.agentId ||
   "";
 const AGENT_KEY =
   searchParams.get("agent_key") ||
+  STORED_AGENT_KEY ||
   window.VonzaWidgetConfig?.agentKey ||
   "";
 const BUSINESS_ID =
@@ -51,6 +53,10 @@ function getAssistantMark(name = widgetConfig.assistantName) {
   return (name || "V").trim().charAt(0).toUpperCase() || "V";
 }
 
+function hasAssistantConfig() {
+  return Boolean(AGENT_ID || AGENT_KEY || BUSINESS_ID || WEBSITE_URL);
+}
+
 function applyWidgetConfig(config = {}) {
   widgetConfig = {
     ...DEFAULT_WIDGET_CONFIG,
@@ -65,7 +71,7 @@ function applyWidgetConfig(config = {}) {
   document.getElementById("welcome-message").textContent = widgetConfig.welcomeMessage;
   document.getElementById("intro-avatar").textContent = getAssistantMark();
   document.getElementById("brand-mark-v").textContent = getAssistantMark();
-  document.getElementById("send-button").textContent = "Send";
+  document.getElementById("send-button").textContent = widgetConfig.buttonLabel;
   document.getElementById("powered-by").textContent = `Powered by ${widgetConfig.assistantName}`;
   document
     .querySelector('meta[name="apple-mobile-web-app-title"]')
@@ -73,7 +79,11 @@ function applyWidgetConfig(config = {}) {
 }
 
 async function loadWidgetBootstrap() {
-  if (!AGENT_ID && !AGENT_KEY && !BUSINESS_ID && !WEBSITE_URL) {
+  if (!hasAssistantConfig()) {
+    applyWidgetConfig({
+      ...DEFAULT_WIDGET_CONFIG,
+      welcomeMessage: "No assistant configured yet. Please create one first.",
+    });
     return;
   }
 
@@ -132,14 +142,14 @@ async function sendMessage() {
 
   if (!message) return;
 
-  if (!AGENT_ID && !AGENT_KEY && !BUSINESS_ID && !WEBSITE_URL) {
+  if (!hasAssistantConfig()) {
     console.error(
       "Vonza assistant configuration error: missing agent_id, agent_key, business_id, and website_url"
     );
     appendMessage(
       chat,
       "bot",
-      "This assistant is not configured yet. Please add a valid agent ID, agent key, business ID, or website URL to the embed script."
+      "No assistant configured yet. Please create one first."
     );
     return;
   }

@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vonza Dashboard</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    input, button, textarea, select {
+      font: inherit;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+    }
+
+    input[type="color"] {
+      padding: 4px;
+      min-height: 42px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: white;
+      cursor: pointer;
+    }
+
+    .row, .agent {
+      margin-top: 16px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .row input {
+      flex: 1;
+    }
+
+    .agent {
+      padding: 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: white;
+    }
+
+    .muted {
+      color: #475569;
+      font-size: 14px;
+    }
+
+    #status {
+      min-height: 20px;
+      margin-top: 12px;
+    }
+
+    .agent-actions,
+    .edit-form {
+      margin-top: 12px;
+    }
+
+    .edit-form[hidden] {
+      display: none;
+    }
+
+    .edit-form label {
+      display: block;
+      margin-top: 10px;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+
+    .agent-status {
+      margin-top: 10px;
+    }
+
+    .agent-title {
+      margin: 0 0 6px;
+      font-size: 22px;
+    }
+
+    .agent-meta {
+      margin: 4px 0;
+    }
+
+    .script-shell {
+      margin-top: 12px;
+    }
+
+    .script-shell summary {
+      cursor: pointer;
+      color: #475569;
+      font-size: 14px;
+    }
+
+    .output-block {
+      margin-top: 16px;
+    }
+
+    .output-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .test-link {
+      display: block;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      color: #2563eb;
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    .preview-frame {
+      width: 100%;
+      height: 360px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: white;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1 id="page-title">Your Assistant</h1>
+    <p id="status" class="muted"></p>
+    <div id="create-state">
+      <div class="row">
+        <input id="business-name" type="text" placeholder="Business name">
+        <input id="website-url" type="text" placeholder="Website URL">
+        <button id="create-button" type="button">Create new agent</button>
+      </div>
+      <div class="agent">
+        <h2>Create assistant</h2>
+        <p class="muted">Create your assistant once, then manage it from this page.</p>
+      </div>
+    </div>
+    <div id="agent-state" hidden>
+      <div class="agent">
+        <h2>Your assistant</h2>
+        <p class="muted">This page is focused on your current assistant only.</p>
+      </div>
+      <div class="agent">
+      <h2>Create assistant</h2>
+      <div class="output-block">
+        <label class="output-label" for="output">Install this on your website</label>
+        <textarea id="output" readonly placeholder="The install script will appear here"></textarea>
+      </div>
+      <div class="output-block">
+        <label class="output-label" for="test-link">Test your assistant</label>
+        <a id="test-link" class="test-link" href="#" target="_blank" rel="noreferrer">The test link will appear here</a>
+      </div>
+      <div class="output-block">
+        <label class="output-label" for="preview-frame">Live preview</label>
+        <iframe
+          id="preview-frame"
+          class="preview-frame"
+          title="Widget preview"
+          srcdoc="<!DOCTYPE html><html><body style='margin:0;display:grid;place-items:center;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:#f8fafc;color:#0f172a;'><div><h2 style='margin:0 0 8px;'>Preview site</h2><p style='margin:0;color:#475569;'>Create an assistant to preview it here.</p></div></body></html>"
+        ></iframe>
+      </div>
+      </div>
+      <div id="agent-list"></div>
+      <div class="agent">
+        <h2>Recent messages</h2>
+        <div id="messages-panel" class="muted">Recent messages for your assistant will appear here.</div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/public-config.js"></script>
+  <script>
+    const businessNameInput = document.getElementById("business-name");
+    const websiteUrlInput = document.getElementById("website-url");
+    const createButton = document.getElementById("create-button");
+    const pageTitle = document.getElementById("page-title");
+    const createState = document.getElementById("create-state");
+    const agentState = document.getElementById("agent-state");
+    const statusEl = document.getElementById("status");
+    const output = document.getElementById("output");
+    const testLink = document.getElementById("test-link");
+    const previewFrame = document.getElementById("preview-frame");
+    const agentListEl = document.getElementById("agent-list");
+    const messagesPanel = document.getElementById("messages-panel");
+    const CLIENT_ID_STORAGE_KEY = "vonza_client_id";
+
+    function getPublicAppUrl() {
+      return (window.VONZA_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, "");
+    }
+
+    function getClientId() {
+      let clientId = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+
+      if (!clientId) {
+        clientId = window.crypto?.randomUUID?.() || `client_${Date.now()}`;
+        window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+      }
+
+      return clientId;
+    }
+
+    function buildScript(agentKey) {
+      return `<script src="${getPublicAppUrl()}/embed.js" data-agent-key="${agentKey}"><\/script>`;
+    }
+
+    function setDashboardState(hasAgent) {
+      createState.hidden = hasAgent;
+      agentState.hidden = !hasAgent;
+      pageTitle.textContent = hasAgent ? "Your Assistant" : "Create Your Assistant";
+    }
+
+    function setGeneratedOutputs(agentKey) {
+      const publicAppUrl = getPublicAppUrl();
+      const widgetUrl = `${publicAppUrl}/widget?agent_key=${encodeURIComponent(agentKey)}`;
+      const previewScriptTag = `<script src="${publicAppUrl}/embed.js" data-agent-key="${agentKey}"><\/script>`;
+
+      output.value = buildScript(agentKey);
+      testLink.href = widgetUrl;
+      testLink.textContent = widgetUrl;
+      previewFrame.srcdoc = `<!DOCTYPE html>
+<html>
+  <body style="margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:linear-gradient(180deg,#f8fafc 0%,#e2e8f0 100%);color:#0f172a;">
+    <main style="padding:32px;">
+      <h2 style="margin:0 0 8px;">Preview site</h2>
+      <p style="margin:0;max-width:520px;color:#475569;line-height:1.6;">This simulates how the assistant appears when installed on a real website.</p>
+    </main>
+    ${previewScriptTag}
+  </body>
+</html>`;
+    }
+
+    function renderMessages(messages) {
+      if (!messages.length) {
+        messagesPanel.innerHTML = '<p class="muted">No messages yet.</p>';
+        return;
+      }
+
+      messagesPanel.innerHTML = messages.map((message) => `
+        <p><strong>${message.role}</strong>: ${message.content}</p>
+      `).join("");
+    }
+
+    async function loadAgentMessages(agentId) {
+      messagesPanel.innerHTML = '<p class="muted">Loading messages...</p>';
+
+      try {
+        const url = new URL(`/agents/messages`, window.location.origin);
+        url.searchParams.set("agent_id", agentId);
+        url.searchParams.set("client_id", getClientId());
+        const response = await fetch(url.toString());
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to load messages.");
+        }
+
+        renderMessages(data.messages || []);
+      } catch (error) {
+        messagesPanel.innerHTML = `<p class="muted">${error.message || "Failed to load messages."}</p>`;
+      }
+    }
+
+    function renderAgents(agents) {
+      if (!agents.length) {
+        setDashboardState(false);
+        agentListEl.innerHTML = "";
+        messagesPanel.innerHTML = '<p class="muted">No messages yet.</p>';
+        return;
+      }
+
+      setDashboardState(true);
+      const agent = agents[0];
+      setGeneratedOutputs(agent.publicAgentKey);
+      loadAgentMessages(agent.id);
+
+      agentListEl.innerHTML = `
+        <section class="agent" data-agent-id="${agent.id}" data-agent-key="${agent.publicAgentKey}">
+          <h2 class="agent-title">${agent.assistantName || agent.name}</h2>
+          <p class="muted agent-meta">${agent.websiteUrl || "No website connected yet"}</p>
+          <p class="muted agent-meta">Connected to: ${agent.websiteUrl || "No website connected yet"}</p>
+          <p class="muted agent-meta">agent_key: ${agent.publicAgentKey}</p>
+          <details class="script-shell">
+            <summary>Show install script</summary>
+            <textarea readonly>${buildScript(agent.publicAgentKey)}</textarea>
+          </details>
+          <div class="agent-actions">
+            <button type="button" data-edit-agent="${agent.id}">Edit</button>
+          </div>
+          <form class="edit-form" data-agent-form="${agent.id}" hidden>
+            <label for="assistant-name-${agent.id}">Assistant name</label>
+            <input id="assistant-name-${agent.id}" name="assistant_name" type="text" value="${agent.assistantName || agent.name}">
+
+            <label for="tone-${agent.id}">Tone</label>
+            <select id="tone-${agent.id}" name="tone">
+              <option value="friendly" ${agent.tone === "friendly" ? "selected" : ""}>friendly</option>
+              <option value="professional" ${agent.tone === "professional" ? "selected" : ""}>professional</option>
+              <option value="sales" ${agent.tone === "sales" ? "selected" : ""}>sales</option>
+              <option value="support" ${agent.tone === "support" ? "selected" : ""}>support</option>
+            </select>
+
+            <label for="instructions-${agent.id}">Custom instructions</label>
+            <textarea id="instructions-${agent.id}" name="system_prompt">${agent.systemPrompt || ""}</textarea>
+
+            <label for="welcome-${agent.id}">Welcome message</label>
+            <textarea id="welcome-${agent.id}" name="welcome_message">${agent.welcomeMessage}</textarea>
+
+            <label for="button-${agent.id}">Button label</label>
+            <input id="button-${agent.id}" name="button_label" type="text" value="${agent.buttonLabel}">
+
+            <label for="primary-${agent.id}">Primary color</label>
+            <input id="primary-${agent.id}" name="primary_color" type="color" value="${agent.primaryColor || "#10a37f"}">
+
+            <label for="secondary-${agent.id}">Secondary color</label>
+            <input id="secondary-${agent.id}" name="secondary_color" type="color" value="${agent.secondaryColor || "#0c7f75"}">
+
+            <label for="website-${agent.id}">Website URL</label>
+            <input id="website-${agent.id}" name="website_url" type="text" value="${agent.websiteUrl || ""}">
+
+            <div class="agent-actions">
+              <button type="submit">Save</button>
+              <button type="button" data-delete-agent="${agent.id}">Delete</button>
+            </div>
+            <p class="muted agent-status" data-agent-status="${agent.id}"></p>
+          </form>
+        </section>
+      `;
+
+      agentListEl.querySelectorAll("[data-edit-agent]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const form = agentListEl.querySelector(`[data-agent-form="${button.dataset.editAgent}"]`);
+          form.hidden = !form.hidden;
+        });
+      });
+
+      agentListEl.querySelectorAll("[data-agent-form]").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const agentId = form.dataset.agentForm;
+          const formData = new FormData(form);
+          const saveButton = form.querySelector('button[type="submit"]');
+          const agentStatus = form.querySelector(`[data-agent-status="${agentId}"]`);
+
+          statusEl.textContent = "Saving agent settings...";
+          if (saveButton) {
+            saveButton.disabled = true;
+          }
+          if (agentStatus) {
+            agentStatus.textContent = "";
+          }
+
+          try {
+            const response = await fetch("/agents/update", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                client_id: getClientId(),
+                agent_id: agentId,
+                assistant_name: formData.get("assistant_name"),
+                tone: formData.get("tone"),
+                system_prompt: formData.get("system_prompt"),
+                welcome_message: formData.get("welcome_message"),
+                button_label: formData.get("button_label"),
+                website_url: formData.get("website_url"),
+                primary_color: formData.get("primary_color"),
+                secondary_color: formData.get("secondary_color"),
+              })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to update agent.");
+            }
+
+            if (agentStatus) {
+              agentStatus.textContent = "Importing website content...";
+            }
+
+            const importResponse = await fetch("/knowledge/import", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                agent_key: data.agent?.publicAgentKey || form.closest(".agent")?.dataset.agentKey,
+              })
+            });
+            const importData = await importResponse.json();
+
+            if (!importResponse.ok) {
+              throw new Error(importData.error || "Import failed. The assistant may have limited knowledge.");
+            }
+
+            statusEl.textContent = "Website content ready";
+            await loadAgents();
+          } catch (error) {
+            statusEl.textContent = "Import failed. The assistant may have limited knowledge.";
+            if (agentStatus) {
+              agentStatus.textContent = "Import failed. The assistant may have limited knowledge.";
+            }
+          }
+          finally {
+            if (saveButton) {
+              saveButton.disabled = false;
+            }
+          }
+        });
+      });
+
+      agentListEl.querySelectorAll("[data-delete-agent]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const agentId = button.dataset.deleteAgent;
+
+          if (!window.confirm("Delete this agent?")) {
+            return;
+          }
+
+          button.disabled = true;
+          statusEl.textContent = "Deleting agent...";
+
+          try {
+            const response = await fetch("/agents/delete", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                client_id: getClientId(),
+                agent_id: agentId,
+              })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to delete agent.");
+            }
+
+            statusEl.textContent = "Agent deleted.";
+            await loadAgents();
+          } catch (error) {
+            statusEl.textContent = error.message || "Failed to delete agent.";
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    }
+
+    async function loadAgents() {
+      const url = new URL("/agents/list", window.location.origin);
+      url.searchParams.set("client_id", getClientId());
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load agents.");
+      }
+
+      renderAgents(data.agents || []);
+    }
+
+    async function createAgent() {
+      const businessName = businessNameInput.value.trim();
+      const websiteUrl = websiteUrlInput.value.trim();
+
+      if (!businessName) {
+        statusEl.textContent = "Enter a business name first.";
+        return;
+      }
+
+      createButton.disabled = true;
+      statusEl.textContent = "Creating agent...";
+
+      try {
+        const response = await fetch("/agents/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            client_id: getClientId(),
+            business_name: businessName,
+            website_url: websiteUrl,
+          })
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to create agent.");
+        }
+
+        window.localStorage.setItem("vonza_agent_key", data.agent_key);
+        setGeneratedOutputs(data.agent_key);
+
+        statusEl.textContent = "Importing website content...";
+
+        const importResponse = await fetch("/knowledge/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            agent_key: data.agent_key,
+          })
+        });
+        const importData = await importResponse.json();
+
+        if (!importResponse.ok) {
+          throw new Error(importData.error || "Import failed. The assistant may have limited knowledge.");
+        }
+
+        businessNameInput.value = "";
+        websiteUrlInput.value = "";
+        statusEl.textContent = "Website content ready";
+        await loadAgents();
+      } catch (error) {
+        statusEl.textContent = error.message || "Import failed. The assistant may have limited knowledge.";
+      } finally {
+        createButton.disabled = false;
+      }
+    }
+
+    createButton.addEventListener("click", createAgent);
+    loadAgents().catch((error) => {
+      statusEl.textContent = error.message || "Failed to load agents.";
+      renderAgents([]);
+    });
+  </script>
+</body>
+</html>

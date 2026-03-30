@@ -79,6 +79,10 @@ ${purpose ? `- primary assistant purpose: ${purpose}` : ""}
 How to behave:
 - Always reply in ${language}
 - Use the latest user message and the recent conversation together
+- When the content supports it, start by clearly summarizing what the business does in 1-2 sentences
+- When the content supports it, mention exactly 2-3 concrete services, offers, or deliverables from the scraped content
+- Prioritize concrete facts from the content over general advice
+- Prefer specific details from headings, titles, descriptions, and clearly stated service sections before giving a broader summary
 - If the user follows up, continue from the last relevant point instead of restarting
 - If the user is vague, narrow the decision with 2-3 tailored options
 - If the user is leaning toward one direction, explain that direction more specifically
@@ -87,8 +91,12 @@ How to behave:
 - If the user asks about price, explain what affects the price and what option seems closest, but do not invent numbers
 - If the user asks about price before choosing a service, narrow the scope first instead of pushing a consultation immediately
 - If the user asks how the business can help, answer with specific ways that fit the user's situation
+- Match the answer shape to the user's intent: clear summary for general questions, concrete offerings for service questions, pricing factors for pricing questions, and practical next steps for contact questions
+- If image URLs are present in the provided business content and the user asks for visuals, naturally mention what the image likely shows based on the surrounding content
+- When image URLs are available, do not claim that you cannot show images
 - Mention the business only as a possible solution, not as the center of the answer
 - Use the business information as factual ground truth, but do not copy its wording
+- Avoid vague wording like "they may offer", "it seems like", or "probably"
 
 Style:
 - natural, human, and helpful
@@ -97,6 +105,9 @@ Style:
 - no fluff
 - no robotic repetition
 - no generic marketing language
+- sound like a person explaining something clearly, not a template
+- vary sentence openings and rhythm so answers do not all feel the same
+- do not force the same structure in every reply
 ${tone ? `- preferred tone: ${tone}` : ""}
 
 Hard rules:
@@ -104,16 +115,82 @@ Hard rules:
 - Do not speak as "we" or as the company
 - Do not sound like a scripted chatbot or advertisement
 - Avoid sounding like you are trying to close the sale too early
+- If specific information exists in the content, use it directly instead of generalizing
+- Do not skip obvious facts that are clearly present in the content
+- If image URLs are included after the main answer, treat them as part of the reply rather than rejecting them
 - End with one clear next-step question that moves the conversation forward
 
 ${customPrompt ? `Additional agent instructions:\n${customPrompt}` : ""}`;
+}
+
+export function detectUserIntent(message, history) {
+  const combinedUserText = buildEffectiveUserText(message, history).toLowerCase();
+
+  if (
+    /(mennyi|mennyibe|kerul|kerül|kerulne|kerülne|ár|árak|price|cost|pricing|quote|budget|ajánlat)/i.test(
+      combinedUserText
+    )
+  ) {
+    return "pricing";
+  }
+
+  if (
+    /(kapcsolat|contact|elérhetőség|elerhetoseg|reach|email|phone|call|next step|következő lépés|kovetkezo lepes|inquiry|enquiry)/i.test(
+      combinedUserText
+    )
+  ) {
+    return "contact";
+  }
+
+  if (
+    /(szolgáltatás|szolgaltatas|services|offer|offering|what do they offer|mit kínál|mit kinal|mivel tud segíteni|mivel tud segiteni)/i.test(
+      combinedUserText
+    )
+  ) {
+    return "services";
+  }
+
+  if (
+    /(what does.*do|what is.*business|what is.*company|mivel foglalkoz|mit csinál|mit csinal|what do you do|what does this business do)/i.test(
+      combinedUserText
+    )
+  ) {
+    return "general";
+  }
+
+  return "general";
 }
 
 export function buildConversationGuidance(message, history) {
   const normalizedMessage = message.toLowerCase();
   const combinedUserText = buildEffectiveUserText(message, history).toLowerCase();
   const topics = detectMessageTopics(combinedUserText);
+  const intent = detectUserIntent(message, history);
   const guidance = [];
+
+  if (intent === "services") {
+    guidance.push(
+      "The user wants to know the actual services or offerings. Focus on concrete offerings from the content instead of a broad company overview."
+    );
+  }
+
+  if (intent === "general") {
+    guidance.push(
+      "The user wants a clear overview. Start with a direct explanation of what the business does, then mention only the most relevant concrete examples."
+    );
+  }
+
+  if (intent === "pricing") {
+    guidance.push(
+      "The user is asking about pricing. Explain what factors affect the price, connect those factors to the available services, and do not invent numbers."
+    );
+  }
+
+  if (intent === "contact") {
+    guidance.push(
+      "The user wants contact or next-step guidance. Use any concrete contact details in the content and guide them toward the most practical next action."
+    );
+  }
 
   if (isGreetingMessage(message) && history.length === 0) {
     guidance.push(
@@ -199,6 +276,9 @@ export async function repairAssistantReply(
 - Use the recent conversation for continuity
 - End with one clear next-step question
 - Do not sound like a company or advertisement
+- Vary the phrasing so it feels conversational and not formulaic
+- Avoid rigid patterns that make the answer sound like a template
+- If the reply includes image URLs, keep them and make the text before them feel natural and visually helpful
 
 Return only the improved reply.`,
       },

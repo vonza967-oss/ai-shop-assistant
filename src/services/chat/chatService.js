@@ -1,7 +1,8 @@
 import { resolveAgentContext } from "../agents/agentService.js";
 import {
-  extractBusinessWebsiteContent,
   getStoredWebsiteContent,
+  hasVisualIntent,
+  selectRelevantImageUrls,
 } from "../scraping/websiteContentService.js";
 import {
   buildBusinessContextForChat,
@@ -10,6 +11,7 @@ import {
   getReplyRepairIssues,
   repairAssistantReply,
 } from "./prompting.js";
+import { storeAgentMessages } from "./messageService.js";
 import {
   buildEffectiveUserText,
   cleanText,
@@ -18,6 +20,71 @@ import {
   normalizeAssistantReply,
   sanitizeChatHistory,
 } from "../../utils/text.js";
+
+function hasLimitedKnowledge(websiteContent) {
+  return (websiteContent?.content || "").includes(
+    "Limited content available. This assistant may give general answers."
+  );
+}
+
+function appendImageLines(reply, websiteContent, userMessage) {
+  if (!hasVisualIntent(userMessage)) {
+    return reply;
+  }
+
+  const imageUrls = selectRelevantImageUrls(websiteContent, userMessage);
+
+  if (!imageUrls.length) {
+    return reply;
+  }
+
+  return `${reply}\n\n${imageUrls.map((url) => `Image: ${url}`).join("\n")}`;
+}
+
+function buildLimitedKnowledgeReply(language, agentName, websiteContent) {
+  const name = cleanText(agentName || websiteContent?.pageTitle || "This assistant");
+  const rawMetaDescription = cleanText(websiteContent?.metaDescription || "");
+  const metaDescription =
+    rawMetaDescription === "Limited content available. This assistant may give general answers."
+      ? ""
+      : rawMetaDescription;
+  const siteLabel = cleanText(
+    websiteContent?.pageTitle ||
+      websiteContent?.websiteUrl ||
+      agentName ||
+      "the business"
+  );
+
+  if (language === "Hungarian") {
+    const summary = metaDescription
+      ? `${name} kapcsán jelenleg ennyi biztos látszik: ${metaDescription}`
+      : `${name} kapcsán jelenleg csak korlátozott weboldal-információ érhető el, ezért részletes céges adatokat nem tudok biztosan megmondani.`;
+    return `${summary} Abban viszont tudok segíteni, hogy gyorsan leszűkítsük, mit keresel ezzel a szolgáltatóval kapcsolatban, és mi legyen a következő lépés. Pontosan miben szeretnél segítséget: szolgáltatás választásban, árajánlat irányban, vagy annak tisztázásában, hogy ${siteLabel} valóban neked való-e?`;
+  }
+
+  const summary = metaDescription
+      ? `${name} can at least be described this way from the available website data: ${metaDescription}`
+      : `${name} currently has only limited website information available, so I should not guess detailed facts about the business.`;
+  return `${summary} I can still help you narrow down what you need and point you toward the most useful next step. What are you looking for specifically: help choosing a service, understanding pricing direction, or deciding whether ${siteLabel} is the right fit for what you need?`;
+}
+
+async function buildChatResponse({ supabase, agent, businessId, widgetConfig, userMessage, reply }) {
+  await storeAgentMessages(supabase, agent.id, [
+    { role: "user", content: userMessage },
+    { role: "assistant", content: reply },
+  ]);
+
+  return {
+    reply,
+    agentId: agent.id,
+    agentKey: agent.publicAgentKey,
+    businessId,
+    widgetConfig: {
+      ...widgetConfig,
+      assistantName: agent.name || widgetConfig.assistantName,
+    },
+  };
+}
 
 export async function handleChatRequest({
   supabase,
@@ -34,7 +101,8 @@ export async function handleChatRequest({
   const history = sanitizeChatHistory(body.history);
   const effectiveUserText = buildEffectiveUserText(message || "", history);
   const conversationHistory = formatConversationHistory(history);
-  let language = detectResponseLanguage(effectiveUserText || message || "");
+  const normalizedMessage = cleanText(message || "");
+  const language = detectResponseLanguage(normalizedMessage);
   const conversationGuidance = buildConversationGuidance(message, history);
 
   console.log("USER MESSAGE:", message);
@@ -42,14 +110,14 @@ export async function handleChatRequest({
   console.log("CONVERSATION GUIDANCE:", conversationGuidance);
 
   if (!message || !String(message).trim()) {
-    const error = new Error("No message provided");
+    const error = new Error("Message cannot be empty.");
     error.statusCode = 400;
     throw error;
   }
 
-  if (!agentId && !agentKey && !businessId && !websiteUrl) {
+  if (!agentKey && !businessId) {
     const error = new Error(
-      "agent_id, agent_key, business_id, or website_url is required"
+      "agent_key or business_id is required."
     );
     error.statusCode = 400;
     throw error;
@@ -63,15 +131,40 @@ export async function handleChatRequest({
     businessName: body.name,
   });
 
-  if (agent.language && agent.language.toLowerCase() !== "auto") {
-    language = agent.language;
+  const websiteContent = await getStoredWebsiteContent(supabase, business.id);
+
+  if (!websiteContent) {
+    const fallbackReply =
+      language === "Hungarian"
+        ? "Ez az asszisztens még nincs teljesen felkészítve, mert a weboldal tartalma még nincs betöltve. Kérlek próbáld újra később, vagy kérd meg az adminisztrátort, hogy futtassa a tartalom importálását."
+        : "This assistant is not ready yet because the website content has not been imported. Please try again later or ask an admin to run the content import.";
+
+    return buildChatResponse({
+      supabase,
+      agent,
+      businessId: business.id,
+      widgetConfig,
+      userMessage: message,
+      reply: fallbackReply,
+    });
   }
 
-  let websiteContent = await getStoredWebsiteContent(supabase, business.id);
-  if (!websiteContent) {
-    websiteContent = await extractBusinessWebsiteContent(supabase, {
-      businessId: business.id,
-      websiteUrl: business.website_url,
+  if (hasLimitedKnowledge(websiteContent)) {
+    return buildChatResponse({
+      supabase,
+      agent,
+      businessId: websiteContent.businessId,
+      widgetConfig,
+      userMessage: message,
+      reply: appendImageLines(
+        buildLimitedKnowledgeReply(
+          language,
+          agent.name || widgetConfig.assistantName,
+          websiteContent
+        ),
+        websiteContent,
+        message
+      ),
     });
   }
 
@@ -135,14 +228,12 @@ export async function handleChatRequest({
 
   console.log("FINAL REPLY:", finalReply);
 
-  return {
-    reply: finalReply,
-    agentId: agent.id,
-    agentKey: agent.publicAgentKey,
+  return buildChatResponse({
+    supabase,
+    agent,
     businessId: websiteContent.businessId,
-    widgetConfig: {
-      ...widgetConfig,
-      assistantName: agent.name || widgetConfig.assistantName,
-    },
-  };
+    widgetConfig,
+    userMessage: message,
+    reply: appendImageLines(finalReply, websiteContent, message),
+  });
 }
