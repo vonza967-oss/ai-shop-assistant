@@ -163,6 +163,8 @@ function createAgentTestDeps(state) {
     }),
     createAgentForBusinessName: async (_supabase, businessName, websiteUrl, clientId, ownerUserId) => {
       assert.equal(ownerUserId, "owner-1", "owner context should flow into createAgentForBusinessName");
+      state.hasAgent = true;
+      state.businessName = businessName;
       return {
         business: {
           id: "business-1",
@@ -182,6 +184,13 @@ function createAgentTestDeps(state) {
     },
     listAgents: async (_supabase, options) => {
       assert.equal(options.ownerUserId, "owner-1", "owner context should flow into listAgents");
+      if (state.hasAgent === false) {
+        return {
+          agents: [],
+          bridgeAgent: null,
+        };
+      }
+
       return {
         agents: [
           {
@@ -234,6 +243,7 @@ function createAgentTestDeps(state) {
     },
     updateAgentSettings: async (_supabase, payload) => ({
       id: payload.agentId,
+      assistantName: payload.assistantName,
       updated: true,
     }),
     deleteAgent: async (_supabase, agentId) => ({
@@ -253,6 +263,10 @@ function createAgentTestDeps(state) {
       ok: true,
       pageCount: 1,
       content: "Imported website content",
+    }),
+    createHostedCheckoutSession: async ({ user, email }) => ({
+      id: "cs_test_checkout",
+      url: `https://checkout.stripe.test/session?owner=${encodeURIComponent(user.id)}&email=${encodeURIComponent(email || user.email || "")}`,
     }),
   };
 }
@@ -372,6 +386,33 @@ test("public dashboard/auth surface loads without broken routes", { concurrency:
 
         const adminBlocked = await getText(server.baseUrl, "/admin?token=wrong-token");
         assert.equal(adminBlocked.status, 403);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("dashboard bundle exposes the canonical purchase-first flow and paid workspace tabs", { concurrency: false }, async () => {
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      SUPABASE_URL: "https://example.supabase.co",
+      SUPABASE_ANON_KEY: "anon-key-present",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp());
+
+      try {
+        const dashboardScript = await getText(server.baseUrl, "/dashboard.js");
+        assert.equal(dashboardScript.status, 200);
+        assert.match(dashboardScript.text, /Unlock Vonza to open your setup workspace/);
+        assert.match(dashboardScript.text, /Continue with email/);
+        assert.match(dashboardScript.text, /Overview/);
+        assert.match(dashboardScript.text, /Customize/);
+        assert.match(dashboardScript.text, /Analytics/);
       } finally {
         await server.close();
       }
@@ -618,6 +659,41 @@ test("first-time owner assistant creation stays allowed before payment and retur
         assert.equal(created.json.agent_id, "agent-1");
         assert.equal(created.json.agent_key, "agent-key");
         assert.equal(created.json.access_status, "pending");
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("checkout creation quietly seeds a draft assistant for signed-in unpaid owners with no agent yet", { concurrency: false }, async () => {
+  const state = { accessStatus: "pending", hasAgent: false, businessName: null };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+      try {
+        const checkout = await getJson(server.baseUrl, "/create-checkout-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: "owner@example.com",
+          }),
+        });
+
+        assert.equal(checkout.status, 200);
+        assert.equal(checkout.json.ok, true);
+        assert.equal(checkout.json.session_id, "cs_test_checkout");
+        assert.match(checkout.json.url, /checkout\.stripe\.test/);
+        assert.equal(state.hasAgent, true);
+        assert.match(state.businessName, /Vonza setup/);
       } finally {
         await server.close();
       }

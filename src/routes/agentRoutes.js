@@ -42,10 +42,18 @@ export function createAgentRouter(deps = {}) {
   const resolveAgentContextImpl = deps.resolveAgentContext || resolveAgentContext;
   const extractBusinessWebsiteContentImpl = deps.extractBusinessWebsiteContent || extractBusinessWebsiteContent;
   const updateOwnedAccessStatusImpl = deps.updateOwnedAccessStatus || updateOwnedAccessStatus;
+  const createHostedCheckoutSessionImpl =
+    deps.createHostedCheckoutSession || createHostedCheckoutSession;
   const constructStripeWebhookEventImpl = deps.constructStripeWebhookEvent || constructStripeWebhookEvent;
   const getPaidOwnerIdFromCheckoutSessionImpl =
     deps.getPaidOwnerIdFromCheckoutSession || getPaidOwnerIdFromCheckoutSession;
   const getAdminToken = (req) => req.query.token || req.headers["x-admin-token"];
+
+  function getCheckoutDraftBusinessName(user) {
+    const ownerUserId = String(user?.id || "").trim();
+    const suffix = ownerUserId ? ownerUserId.slice(0, 8) : "owner";
+    return `Vonza setup ${suffix}`;
+  }
 
   function ensureAdminAccess(req) {
     const configuredToken = process.env.ADMIN_TOKEN;
@@ -395,7 +403,27 @@ export function createAgentRouter(deps = {}) {
         return;
       }
 
-      const session = await createHostedCheckoutSession({
+      const existing = await listAgentsImpl(supabase, {
+        ownerUserId: user.id,
+        includeBridgeAgent: false,
+      });
+
+      if (!existing.agents?.length) {
+        const draft = await createAgentForBusinessNameImpl(
+          supabase,
+          getCheckoutDraftBusinessName(user),
+          "",
+          "",
+          user.id
+        );
+
+        await updateAgentSettingsImpl(supabase, {
+          agentId: draft.agent.id,
+          assistantName: "Your assistant",
+        });
+      }
+
+      const session = await createHostedCheckoutSessionImpl({
         user,
         email: req.body.email,
       });

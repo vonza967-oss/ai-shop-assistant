@@ -432,6 +432,30 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.workspace-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.workspace-tab {
+  width: 100%;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--soft);
+  box-shadow: none;
+}
+
+.workspace-tab.active {
+  border-color: rgba(20, 184, 166, 0.3);
+  background: rgba(20, 184, 166, 0.1);
+  color: white;
+}
+
 .workspace-utility-grid {
   display: grid;
   grid-template-columns: 1.25fr 0.75fr;
@@ -572,6 +596,11 @@ button:disabled {
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
     var(--card);
   box-shadow: var(--shadow);
+}
+
+.workspace-panel-overview {
+  display: grid;
+  gap: 24px;
 }
 
 .workspace-panel-header {
@@ -1750,6 +1779,7 @@ button:disabled {
   .launch-layout,
   .state-grid,
   .workspace-utility-grid,
+  .workspace-tabs,
   .overview-grid,
   .studio-layout,
   .form-grid.two-col,

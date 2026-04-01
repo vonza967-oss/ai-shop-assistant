@@ -35,7 +35,7 @@ const LAUNCH_STEPS = [
   }
 ];
 const trackedEventKeys = new Set();
-const SHELL_SECTIONS = ["appearance", "configuration", "analytics", "calendar"];
+const SHELL_SECTIONS = ["overview", "customize", "analytics"];
 let authClient = null;
 let authSession = null;
 let authUser = null;
@@ -313,7 +313,7 @@ function getActiveShellSection(setup) {
     return storedSection;
   }
 
-  return setup?.isReady ? "appearance" : "configuration";
+  return "overview";
 }
 
 function setActiveShellSection(section) {
@@ -456,6 +456,14 @@ function normalizeAccessStatus(value) {
 }
 
 function getAccessCopy(agent) {
+  if (!agent?.id) {
+    return {
+      eyebrow: "Purchase step",
+      headline: "Unlock Vonza to open your setup workspace.",
+      copy: "Start with secure checkout. Right after payment, Vonza will take you into the workspace where you customize your assistant, connect your website, and add it to your business.",
+    };
+  }
+
   const accessStatus = normalizeAccessStatus(agent?.accessStatus);
 
   if (accessStatus === "active") {
@@ -487,8 +495,53 @@ function renderAccessLocked(agent) {
   const accessStatus = normalizeAccessStatus(agent?.accessStatus);
   const unlockLabel = accessStatus === "suspended" ? "Restore access" : "Unlock Vonza";
   const showDevTools = isDevFakeBillingEnabled();
+  const hasAssistant = Boolean(agent?.id);
+  const arrival = getArrivalContext();
+  const handoffMarkup = !hasAssistant && arrival.showHandoff
+    ? `
+      <section class="handoff-card">
+        <span class="handoff-step">${arrival.arrivedFromSite ? "Step 2 of 3" : "Welcome to your workspace"}</span>
+        <h2 class="handoff-title">The next step is simple: unlock Vonza, then set everything up in one place.</h2>
+        <p class="handoff-copy">You do not need to fully customize anything before payment. Once checkout is complete, you will land straight in your setup workspace with Overview, Customize, and Analytics ready to use.</p>
+      </section>
+    `
+    : "";
+  const detailsMarkup = hasAssistant
+    ? `
+      <div class="overview-grid" style="margin-top:24px;">
+        <div class="overview-card">
+          <p class="overview-label">Assistant</p>
+          <p class="overview-value">${escapeHtml(agent.assistantName || agent.name || "Your assistant")}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Website</p>
+          <p class="overview-value">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Access status</p>
+          <p class="overview-value">${escapeHtml(accessStatus)}</p>
+        </div>
+      </div>
+    `
+    : `
+      <div class="overview-grid" style="margin-top:24px;">
+        <div class="overview-card">
+          <p class="overview-label">1. Purchase</p>
+          <p class="overview-card-copy">Use hosted Stripe Checkout to unlock Vonza securely.</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">2. Setup workspace</p>
+          <p class="overview-card-copy">Customize the assistant, connect your website, and review install progress.</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">3. Add to website</p>
+          <p class="overview-card-copy">Copy the install code and place Vonza on the live site when you are ready.</p>
+        </div>
+      </div>
+    `;
 
   rootEl.innerHTML = `
+    ${handoffMarkup}
     <section class="access-card">
       <span class="eyebrow">${escapeHtml(access.eyebrow)}</span>
       <h1 class="headline">${escapeHtml(access.headline)}</h1>
@@ -513,25 +566,15 @@ function renderAccessLocked(agent) {
           <button id="locked-signout-button" class="ghost-button" type="button">Sign out</button>
         </div>
       </div>
-
-      <div class="overview-grid" style="margin-top:24px;">
-        <div class="overview-card">
-          <p class="overview-label">Assistant</p>
-          <p class="overview-value">${escapeHtml(agent.assistantName || agent.name || "Your assistant")}</p>
-        </div>
-        <div class="overview-card">
-          <p class="overview-label">Website</p>
-          <p class="overview-value">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
-        </div>
-        <div class="overview-card">
-          <p class="overview-label">Access status</p>
-          <p class="overview-value">${escapeHtml(accessStatus)}</p>
-        </div>
-      </div>
-      <p class="auth-note">Once payment completes successfully, Vonza will unlock this workspace and bring you straight back into your assistant dashboard.</p>
+      ${detailsMarkup}
+      <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the setup workspace.</p>
       ${showDevTools ? '<div id="setup-doctor-results" class="auth-note" style="margin-top:16px;"></div>' : ""}
     </section>
   `;
+
+  if (!hasAssistant && arrival.showHandoff) {
+    markHandoffSeen();
+  }
 
   document.getElementById("unlock-vonza-button")?.addEventListener("click", async () => {
     try {
@@ -617,6 +660,24 @@ function renderAccessLocked(agent) {
   });
 }
 
+function renderErrorState(title, copy) {
+  renderTopbarMeta();
+  rootEl.innerHTML = `
+    <section class="auth-card">
+      <span class="eyebrow">Workspace issue</span>
+      <h1 class="headline">${escapeHtml(title || "We couldn't open your workspace.")}</h1>
+      <p class="auth-copy">${escapeHtml(copy || "Please refresh and try again. If the issue continues, your existing setup and payment state are still safe.")}</p>
+      <div class="auth-actions">
+        <button id="workspace-retry-button" class="primary-button" type="button">Try again</button>
+      </div>
+    </section>
+  `;
+
+  document.getElementById("workspace-retry-button")?.addEventListener("click", () => {
+    window.location.reload();
+  });
+}
+
 async function confirmPaymentReturn() {
   const paymentState = getPaymentState();
 
@@ -663,19 +724,20 @@ async function waitForActiveAccessAfterPayment() {
 // Entry states and shell rendering
 function renderAuthEntry() {
   renderTopbarMeta();
+  const arrival = getArrivalContext();
   rootEl.innerHTML = `
     <section class="auth-card">
-      <span class="eyebrow">Client access</span>
-      <h1 class="headline">Open your assistant workspace</h1>
-      <p class="auth-copy">Sign in with your email and Vonza will send you a secure magic link so you can come back to your assistant from any browser or device.</p>
+      <span class="eyebrow">${arrival.arrivedFromSite ? "Step 1 of 3" : "Client access"}</span>
+      <h1 class="headline">Sign in to continue into Vonza</h1>
+      <p class="auth-copy">Use your email to sign up or sign back in. Vonza will send a secure magic link, then bring you into the app where you can unlock the product and set up your assistant.</p>
       <form id="auth-form" class="auth-form">
         <div class="field">
           <label for="auth-email">Email address</label>
           <input id="auth-email" name="email" type="email" placeholder="you@yourbusiness.com" autocomplete="email">
         </div>
         <div class="auth-actions">
-          <button id="auth-submit" class="primary-button" type="submit">Send login link</button>
-          <span class="auth-note">One owner account is enough for this stage of Vonza.</span>
+          <button id="auth-submit" class="primary-button" type="submit">Continue with email</button>
+          <span class="auth-note">You can use the same email to return to this workspace later.</span>
         </div>
       </form>
     </section>
@@ -703,10 +765,15 @@ function renderAuthEntry() {
     setStatus("Sending your login link...");
 
     try {
+      const redirectUrl = new URL("/dashboard", window.location.origin);
+      if (arrival.from) {
+        redirectUrl.searchParams.set("from", arrival.from);
+      }
+
       const { error } = await authClient.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
+          emailRedirectTo: redirectUrl.toString(),
         },
       });
 
@@ -954,30 +1021,166 @@ function renderLaunchSuccess(agent, options = {}) {
   }
 }
 
-function buildSidebar(activeSection, setup) {
+function buildWorkspaceTabs(activeSection, setup) {
   return `
-    <aside class="sidebar-shell">
-      <h2 class="sidebar-title">Vonza workspace</h2>
-      <p class="sidebar-copy">${setup.isReady ? "Manage the assistant your customers already meet on your website." : "Finish shaping your assistant so it is ready to represent your business."}</p>
-      <nav class="sidebar-nav">
-        <button class="nav-button ${activeSection === "appearance" ? "active" : ""}" type="button" data-shell-target="appearance">
-          <span class="nav-label">Appearance</span>
-          <span class="nav-note">Name, greeting, button, colors</span>
-        </button>
-        <button class="nav-button ${activeSection === "configuration" ? "active" : ""}" type="button" data-shell-target="configuration">
-          <span class="nav-label">Configuration</span>
-          <span class="nav-note">Website, tone, guidance</span>
-        </button>
-        <button class="nav-button ${activeSection === "analytics" ? "active" : ""}" type="button" data-shell-target="analytics">
-          <span class="nav-label">Analytics</span>
-          <span class="nav-note">Messages, installs, recent activity</span>
-        </button>
-        <button class="nav-button disabled ${activeSection === "calendar" ? "active" : ""}" type="button" data-shell-target="calendar">
-          <span class="nav-label">Calendar</span>
-          <span class="nav-note">Coming later</span>
-        </button>
-      </nav>
-    </aside>
+    <nav class="workspace-tabs" aria-label="Workspace sections">
+      <button class="workspace-tab ${activeSection === "overview" ? "active" : ""}" type="button" data-shell-target="overview">
+        <span class="nav-label">Overview</span>
+        <span class="nav-note">${setup.isReady ? "Install, preview, and next steps" : "See progress and what comes next"}</span>
+      </button>
+      <button class="workspace-tab ${activeSection === "customize" ? "active" : ""}" type="button" data-shell-target="customize">
+        <span class="nav-label">Customize</span>
+        <span class="nav-note">Name, website, welcome message, colors, behavior</span>
+      </button>
+      <button class="workspace-tab ${activeSection === "analytics" ? "active" : ""}" type="button" data-shell-target="analytics">
+        <span class="nav-label">Analytics</span>
+        <span class="nav-note">Usage, common questions, and empty-state insights</span>
+      </button>
+    </nav>
+  `;
+}
+
+function buildOverviewPanel(agent, messages, setup) {
+  return `
+    <section class="workspace-panel workspace-panel-overview" data-shell-section="overview">
+      ${buildOverviewSection(agent, messages, setup)}
+      <div class="workspace-utility-grid">
+        <section class="preview-card">
+          ${buildPreviewSection(agent, setup)}
+        </section>
+
+        <section class="install-card">
+          <div class="workspace-panel-header">
+            <h2 class="workspace-panel-title">Install</h2>
+            <p class="workspace-panel-copy">When you are ready to go live, use this embed script to add Vonza to the website.</p>
+          </div>
+          ${buildInstallSection(agent, { upcoming: !setup.isReady })}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function buildCustomizePanel(agent, setup) {
+  const knowledgeActionLabel = setup.knowledgeState === "limited" ? "Retry website import" : "Import website knowledge";
+  const behaviorSummary = buildBehaviorSummary(agent.tone, agent.systemPrompt);
+
+  return `
+    <section class="workspace-panel" data-shell-section="customize" hidden>
+      <div class="workspace-panel-header">
+        <h2 class="workspace-panel-title">Customize</h2>
+        <p class="workspace-panel-copy">Shape how Vonza looks, sounds, and connects to the business before you add it to the live site.</p>
+      </div>
+      <form data-settings-form data-form-kind="customize">
+        <div class="studio-layout">
+          <div class="studio-groups">
+            <section class="studio-group">
+              <p class="studio-kicker">Assistant basics</p>
+              <h3 class="studio-group-title">Set the identity your customers will meet.</h3>
+              <p class="studio-group-copy">Use these core settings to make the assistant feel like part of the business from the very first interaction.</p>
+              <div class="form-grid two-col">
+                <div class="field">
+                  <label for="assistant-name">Assistant name</label>
+                  <input id="assistant-name" name="assistant_name" type="text" value="${escapeHtml(agent.assistantName || agent.name)}">
+                </div>
+                <div class="field">
+                  <label for="assistant-tone">Conversation tone</label>
+                  <select id="assistant-tone" name="tone">
+                    <option value="friendly" ${agent.tone === "friendly" ? "selected" : ""}>friendly</option>
+                    <option value="professional" ${agent.tone === "professional" ? "selected" : ""}>professional</option>
+                    <option value="sales" ${agent.tone === "sales" ? "selected" : ""}>sales</option>
+                    <option value="support" ${agent.tone === "support" ? "selected" : ""}>support</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="assistant-button-label">Launcher text</label>
+                  <input id="assistant-button-label" name="button_label" type="text" value="${escapeHtml(agent.buttonLabel || "")}">
+                </div>
+                <div class="field">
+                  <label for="assistant-website">Website URL</label>
+                  <input id="assistant-website" name="website_url" type="text" value="${escapeHtml(agent.websiteUrl || "")}">
+                  <p class="field-help">This should be the main website Vonza learns from and represents.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="assistant-welcome">Welcome message</label>
+                  <textarea id="assistant-welcome" name="welcome_message">${escapeHtml(agent.welcomeMessage || "")}</textarea>
+                </div>
+              </div>
+            </section>
+
+            <section class="studio-group">
+              <h3 class="studio-group-title">Brand colors</h3>
+              <p class="studio-group-copy">Keep the assistant aligned with the brand your customers already know.</p>
+              <div class="form-grid two-col">
+                <div class="field">
+                  <label for="assistant-primary-color">Primary color</label>
+                  <input id="assistant-primary-color" name="primary_color" type="color" value="${escapeHtml(agent.primaryColor || "#14b8a6")}">
+                </div>
+                <div class="field">
+                  <label for="assistant-secondary-color">Secondary color</label>
+                  <input id="assistant-secondary-color" name="secondary_color" type="color" value="${escapeHtml(agent.secondaryColor || "#0f766e")}">
+                </div>
+              </div>
+            </section>
+
+            <section class="studio-group">
+              <h3 class="studio-group-title">Website knowledge</h3>
+              <p class="studio-group-copy">Run an import after adding or changing your website so Vonza can answer with the right context.</p>
+              <div class="inline-actions">
+                <button class="ghost-button" type="button" data-action="import-knowledge">${knowledgeActionLabel}</button>
+              </div>
+              <p class="section-note">${escapeHtml(setup.knowledgeDescription)}</p>
+            </section>
+
+            <section class="studio-group secondary">
+              <h3 class="studio-group-title">Advanced guidance</h3>
+              <p class="studio-group-copy">Optional guidance for emphasis, tone, and edge cases. Keep it focused on how the assistant should represent the business.</p>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="assistant-instructions">Advanced guidance</label>
+                  <textarea id="assistant-instructions" name="system_prompt">${escapeHtml(agent.systemPrompt || "")}</textarea>
+                </div>
+              </div>
+            </section>
+
+            <div class="studio-save-row">
+              <button class="primary-button" type="submit">Save changes</button>
+              <span data-save-state class="save-state">No changes yet.</span>
+            </div>
+          </div>
+
+          <aside class="studio-summary">
+            <p class="studio-summary-label">Live summary</p>
+            <h3 id="studio-summary-name" class="studio-summary-name">${escapeHtml(agent.assistantName || agent.name)}</h3>
+            <p id="studio-summary-copy" class="studio-summary-copy">${escapeHtml(agent.welcomeMessage || "Your assistant is ready to greet visitors with a clear, helpful first message.")}</p>
+            <div class="studio-summary-badge-row">
+              <span id="studio-summary-tone" class="badge success">${escapeHtml(agent.tone || "friendly")}</span>
+              <span id="studio-summary-button" class="pill">${escapeHtml(agent.buttonLabel || "Chat")}</span>
+            </div>
+            <div class="studio-swatch-row">
+              <div id="studio-swatch-primary" class="studio-swatch" style="--swatch-color:${escapeHtml(agent.primaryColor || "#14b8a6")}">Primary</div>
+              <div id="studio-swatch-secondary" class="studio-swatch" style="--swatch-color:${escapeHtml(agent.secondaryColor || "#0f766e")}">Secondary</div>
+            </div>
+            <div class="overview-list">
+              <div class="overview-list-item">
+                <p class="overview-list-title">Current website</p>
+                <p class="overview-list-copy">${escapeHtml(agent.websiteUrl || "Add your website to import real business knowledge.")}</p>
+              </div>
+              <div class="overview-list-item">
+                <p class="overview-list-title">Install status</p>
+                <p class="overview-list-copy">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</p>
+              </div>
+              <div class="overview-list-item">
+                <p id="behavior-summary-title" class="overview-list-title">${escapeHtml(behaviorSummary.title)}</p>
+                <p id="behavior-summary-copy" class="overview-list-copy">${escapeHtml(behaviorSummary.copy)}</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </form>
+    </section>
   `;
 }
 
@@ -1332,17 +1535,17 @@ function buildOverviewState(agent, messages, setup) {
         value: "analytics",
       });
       nextActions.push({
-        label: "Refine behavior",
+        label: "Refine setup",
         type: "section",
-        value: "configuration",
+        value: "customize",
       });
     } else {
       title = "Your assistant is live";
       copy = `Vonza has been detected on ${installStatus.host || "your site"} and is ready for customer questions, even if activity is still early.`;
       nextActions.push({
-        label: "Improve welcome and launcher",
+        label: "Improve setup",
         type: "section",
-        value: "appearance",
+        value: "customize",
       });
       nextActions.push({
         label: "Try your assistant",
@@ -1511,7 +1714,7 @@ function buildOverviewSection(agent, messages, setup) {
             overview.installStatus.state !== "live"
               ? "Your strongest next step is getting the assistant onto the live site so Vonza can start detecting real usage."
               : overview.messageCount === 0
-                ? "Your assistant is live. Now the goal is making the first interaction strong enough that visitors actually use it."
+              ? "Your assistant is live. Now the goal is making the first interaction strong enough that visitors actually use it."
                 : "Your assistant is live and active. The best next move is refining what visitors see and how Vonza responds to the most common questions."
           )}</p>
           <div class="overview-list">
@@ -1528,7 +1731,7 @@ function buildOverviewSection(agent, messages, setup) {
                   ? "Copy the install code, place it on the live site, and let Vonza detect the real host automatically."
                   : overview.messageCount === 0
                     ? "Strengthen the welcome message and launcher text, then test common customer questions in preview."
-                    : "Check Analytics for top customer questions, then update Appearance or Configuration if you want the assistant to feel sharper."
+                    : "Check Analytics for top customer questions, then use Customize to sharpen the assistant if you want it to feel stronger."
               )}</p>
             </div>
             ${!setup.knowledgeReady ? `
@@ -1774,60 +1977,46 @@ function buildCalendarPanel() {
 function renderAssistantShell(agent, messages, setup) {
   renderTopbarMeta();
   const activeSection = getActiveShellSection(setup);
-  const shellStatus = setup.isReady ? "Ready" : "Setup incomplete";
+  const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
+  const primaryAction = setup.isReady
+    ? `<button class="primary-button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>Add to website</button>`
+    : `<button class="primary-button" type="button" data-shell-target="customize">Continue setup</button>`;
+  const secondaryAction = trimText(agent.publicAgentKey)
+    ? `<a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">Try assistant</a>`
+    : "";
 
   rootEl.innerHTML = `
-    <div class="app-shell">
-      ${buildSidebar(activeSection, setup)}
-
-      <div class="workspace-shell">
-        <section class="workspace-header">
-          <div class="workspace-header-top">
-            <div>
-              <span class="eyebrow">${setup.isReady ? "Assistant Home" : "Client workspace"}</span>
-              <h1 class="workspace-title">${escapeHtml(agent.assistantName || agent.name)}</h1>
-              <p class="workspace-subtitle">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
-              <div class="workspace-badge-row">
-                <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
-                <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
-                <span class="${getBadgeClass(agent.installStatus?.state === "live" ? "Ready" : agent.installStatus?.state === "test" ? "Limited" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</span>
-              </div>
-            </div>
-            <div class="workspace-actions">
-              <a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">Try assistant</a>
-              <button class="primary-button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>Copy install code</button>
-              ${!setup.knowledgeReady ? `<button class="ghost-button" data-action="import-knowledge">Retry website import</button>` : ""}
+    <div class="workspace-shell">
+      <section class="workspace-header">
+        <div class="workspace-header-top">
+          <div>
+            <span class="eyebrow">${setup.isReady ? "Workspace" : "Post-purchase setup"}</span>
+            <h1 class="workspace-title">${escapeHtml(agent.assistantName || agent.name)}</h1>
+            <p class="workspace-subtitle">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
+            <div class="workspace-badge-row">
+              <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
+              <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
+              <span class="${getBadgeClass(agent.installStatus?.state === "live" ? "Ready" : agent.installStatus?.state === "test" ? "Limited" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</span>
             </div>
           </div>
-        </section>
-
-        ${!setup.isReady ? `
-          <div class="shell-status-banner">
-            Your assistant workspace is ready, but a few things still need attention before launch. Finish the website knowledge and configuration steps, then use preview and install to go live with confidence.
+          <div class="workspace-actions">
+            ${secondaryAction}
+            ${primaryAction}
+            ${!setup.knowledgeReady ? `<button class="ghost-button" data-action="import-knowledge">Retry website import</button>` : ""}
           </div>
-        ` : ""}
-
-        ${buildOverviewSection(agent, messages, setup)}
-
-        <div class="workspace-utility-grid">
-          <section class="preview-card">
-            ${buildPreviewSection(agent, setup)}
-          </section>
-
-          <section class="install-card">
-            <div class="workspace-panel-header">
-              <h2 class="workspace-panel-title">Install</h2>
-              <p class="workspace-panel-copy">Keep installation truth and copy actions close, without turning this into a technical tools page.</p>
-            </div>
-            ${buildInstallSection(agent, { upcoming: !setup.isReady })}
-          </section>
         </div>
+        ${buildWorkspaceTabs(activeSection, setup)}
+      </section>
 
-        ${buildAppearanceStudio(agent)}
-        ${buildConfigurationStudio(agent, setup)}
-        ${buildAnalyticsPanel(agent, messages, setup)}
-        ${buildCalendarPanel()}
-      </div>
+      ${!setup.isReady ? `
+        <div class="shell-status-banner">
+          Your assistant is unlocked and this is now your setup workspace. Finish the key details in Customize, then use Overview to preview and add Vonza to the website.
+        </div>
+      ` : ""}
+
+      ${buildOverviewPanel(agent, messages, setup)}
+      ${buildCustomizePanel(agent, setup)}
+      ${buildAnalyticsPanel(agent, messages, setup)}
     </div>
   `;
 
@@ -2296,6 +2485,7 @@ async function saveAssistant(event, agent) {
   const saveState = form.querySelector("[data-save-state]");
   const formData = new FormData(form);
   const nextWebsiteUrl = trimText(formData.get("website_url"));
+  const websiteChanged = Boolean(nextWebsiteUrl && nextWebsiteUrl !== trimText(agent.websiteUrl));
 
   const getNextValue = (fieldName, fallbackValue = "") => {
     if (formData.has(fieldName)) {
@@ -2332,7 +2522,7 @@ async function saveAssistant(event, agent) {
       })
     });
 
-    if (nextWebsiteUrl) {
+    if (websiteChanged) {
       await runKnowledgeImport({
         id: agent.id,
         publicAgentKey: updateData.agent?.publicAgentKey || agent.publicAgentKey,
@@ -2479,7 +2669,7 @@ async function sendPromptToPreview(agent, prompt) {
 }
 
 function updateStudioSummary(
-  form = document.querySelector('form[data-form-kind="appearance"]'),
+  form = document.querySelector('form[data-form-kind="customize"]'),
   fallbackAgent = {}
 ) {
   const nameEl = document.getElementById("studio-summary-name");
@@ -2907,19 +3097,19 @@ function bindSharedDashboardEvents(agent, messages, setup) {
     const focusMap = {
       preview: ".preview-card",
       install: ".install-card",
-      setup: '[data-shell-section="configuration"]',
+      setup: '[data-shell-section="customize"]',
     };
     const selector = focusMap[focusTarget];
     const target = selector ? document.querySelector(selector) : null;
 
     if (target) {
       if (focusTarget === "setup") {
-        setActiveShellSection("configuration");
+        setActiveShellSection("customize");
         document.querySelectorAll("[data-shell-target]").forEach((navButton) => {
-          navButton.classList.toggle("active", navButton.dataset.shellTarget === "configuration");
+          navButton.classList.toggle("active", navButton.dataset.shellTarget === "customize");
         });
         document.querySelectorAll("[data-shell-section]").forEach((section) => {
-          section.hidden = section.dataset.shellSection !== "configuration";
+          section.hidden = section.dataset.shellSection !== "customize";
         });
       }
 
@@ -3007,7 +3197,8 @@ async function boot() {
         clearLaunchState();
         setStatus("Setup was interrupted before your assistant was created. You can start again whenever you're ready.");
       }
-      renderOnboarding();
+      setStatus("Sign in complete. Unlock Vonza to open your setup workspace.");
+      renderAccessLocked(null);
       return;
     }
 
@@ -3018,7 +3209,7 @@ async function boot() {
       clearLaunchState();
       setStatus(accessStatus === "suspended"
         ? "Workspace access is currently paused."
-        : "Workspace access is not active yet."
+        : "Finish payment to open your Vonza setup workspace."
       );
       renderAccessLocked(agent);
       return;
@@ -3037,8 +3228,11 @@ async function boot() {
     renderSetupState(agent, messages, setup);
   } catch (error) {
     clearLaunchState();
-    setStatus(error.message || "Failed to load your assistant.");
-    renderOnboarding();
+    setStatus(error.message || "We couldn't load your Vonza workspace right now.");
+    renderErrorState(
+      "We couldn't load your Vonza workspace.",
+      error.message || "Please refresh and try again. If the issue continues, your account and payment state are still safe."
+    );
   }
 }
 
