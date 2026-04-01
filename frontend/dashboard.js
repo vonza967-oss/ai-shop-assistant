@@ -1522,18 +1522,33 @@ function buildOverviewState(agent, messages, setup) {
     .sort((left, right) => right[1] - left[1])[0];
 
   const nextActions = [];
+  let primaryAction = null;
   let title = "Your assistant workspace";
   let copy = "Your assistant is set up in Vonza and ready for the next step.";
 
-  if (installStatus.state === "live") {
+  if (!setup.isReady) {
+    title = "Your workspace is open. The next step is finishing setup.";
+    copy = "Use Customize to shape the assistant, confirm the website, and make sure everything feels right before you install it.";
+    primaryAction = {
+      label: "Continue setup",
+      type: "section",
+      value: "customize",
+    };
+    if (trimText(agent.publicAgentKey)) {
+      nextActions.push({
+        label: "Try your assistant",
+        type: "preview",
+      });
+    }
+  } else if (installStatus.state === "live") {
     if (messageCount > 0) {
       title = "Your assistant is live and already working";
       copy = `Vonza is live on ${installStatus.host || "your site"} and has already started handling real customer questions.`;
-      nextActions.push({
+      primaryAction = {
         label: "Review analytics",
         type: "section",
         value: "analytics",
-      });
+      };
       nextActions.push({
         label: "Refine setup",
         type: "section",
@@ -1542,6 +1557,10 @@ function buildOverviewState(agent, messages, setup) {
     } else {
       title = "Your assistant is live";
       copy = `Vonza has been detected on ${installStatus.host || "your site"} and is ready for customer questions, even if activity is still early.`;
+      primaryAction = {
+        label: "Try your assistant",
+        type: "preview",
+      };
       nextActions.push({
         label: "Improve setup",
         type: "section",
@@ -1555,11 +1574,11 @@ function buildOverviewState(agent, messages, setup) {
   } else if (installStatus.state === "test") {
     title = "Your assistant is ready for a live launch";
     copy = "Vonza has been seen in preview or test environments. The next step is placing it on your live site so customers can actually use it.";
-    nextActions.push({
-      label: "Go to install",
+    primaryAction = {
+      label: "Add to website",
       type: "focus",
       value: "install",
-    });
+    };
     nextActions.push({
       label: "Copy install code",
       type: "install",
@@ -1567,11 +1586,11 @@ function buildOverviewState(agent, messages, setup) {
   } else {
     title = "Your assistant is almost ready to go live";
     copy = "The setup is in place, and the next step is getting the widget onto your live site so Vonza can start helping visitors.";
-    nextActions.push({
-      label: "Go to install",
+    primaryAction = {
+      label: "Add to website",
       type: "focus",
       value: "install",
-    });
+    };
     nextActions.push({
       label: "Copy install code",
       type: "install",
@@ -1584,6 +1603,28 @@ function buildOverviewState(agent, messages, setup) {
       type: "import",
     });
   }
+
+  const progressItems = [
+    {
+      title: "Workspace unlocked",
+      copy: "You are inside the paid Vonza workspace.",
+      done: true,
+    },
+    {
+      title: "Assistant setup",
+      copy: setup.isReady
+        ? "The assistant has the core details it needs."
+        : "The assistant still needs a few setup details before launch.",
+      done: setup.isReady,
+    },
+    {
+      title: "Website install",
+      copy: installStatus.state === "live"
+        ? "Vonza has already been detected on the live site."
+        : "The next milestone is getting Vonza onto the live website.",
+      done: installStatus.state === "live",
+    },
+  ];
 
   const cards = [];
 
@@ -1632,7 +1673,9 @@ function buildOverviewState(agent, messages, setup) {
     lastActivity,
     activity,
     cards,
-    nextActions: nextActions.slice(0, 3),
+    primaryAction,
+    nextActions: nextActions.slice(0, 2),
+    progressItems,
     title,
     copy,
   };
@@ -1641,25 +1684,27 @@ function buildOverviewState(agent, messages, setup) {
 function buildOverviewSection(agent, messages, setup) {
   const overview = buildOverviewState(agent, messages, setup);
 
-  const renderAction = (action) => {
+  const renderAction = (action, options = {}) => {
+    const buttonClass = options.primary ? "primary-button" : "ghost-button";
+
     if (action.type === "section") {
-      return `<button class="ghost-button" type="button" data-overview-target="${action.value}">${action.label}</button>`;
+      return `<button class="${buttonClass}" type="button" data-overview-target="${action.value}">${action.label}</button>`;
     }
 
     if (action.type === "focus") {
-      return `<button class="ghost-button" type="button" data-overview-focus="${action.value}">${action.label}</button>`;
+      return `<button class="${buttonClass}" type="button" data-overview-focus="${action.value}">${action.label}</button>`;
     }
 
     if (action.type === "import") {
-      return `<button class="ghost-button" type="button" data-action="import-knowledge">${action.label}</button>`;
+      return `<button class="${buttonClass}" type="button" data-action="import-knowledge">${action.label}</button>`;
     }
 
     if (action.type === "install") {
-      return `<button class="primary-button" type="button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>${action.label}</button>`;
+      return `<button class="${options.primary ? "primary-button" : "ghost-button"}" type="button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>${action.label}</button>`;
     }
 
     if (action.type === "preview") {
-      return `<a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">${action.label}</a>`;
+      return `<a class="${options.primary ? "primary-button" : "test-link"}" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">${action.label}</a>`;
     }
 
     return "";
@@ -1690,7 +1735,16 @@ function buildOverviewSection(agent, messages, setup) {
           </div>
         </div>
         <div class="overview-action-row">
-          ${overview.nextActions.map(renderAction).join("")}
+          ${overview.primaryAction ? renderAction(overview.primaryAction, { primary: true }) : ""}
+          ${overview.nextActions.map((action) => renderAction(action)).join("")}
+        </div>
+        <div class="overview-progress-row">
+          ${overview.progressItems.map((item) => `
+            <div class="progress-card ${item.done ? "done" : ""}">
+              <p class="progress-label">${escapeHtml(item.title)}</p>
+              <p class="progress-copy">${escapeHtml(item.copy)}</p>
+            </div>
+          `).join("")}
         </div>
       </section>
 

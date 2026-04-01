@@ -560,6 +560,39 @@ button:disabled {
   margin-top: 18px;
 }
 
+.overview-progress-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.progress-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.progress-card.done {
+  border-color: rgba(20, 184, 166, 0.28);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.progress-label {
+  margin: 0 0 8px;
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.progress-copy {
+  margin: 0;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .overview-list {
   display: grid;
   gap: 12px;
@@ -1781,6 +1814,7 @@ button:disabled {
   .workspace-utility-grid,
   .workspace-tabs,
   .overview-grid,
+  .overview-progress-row,
   .studio-layout,
   .form-grid.two-col,
   .check-grid,

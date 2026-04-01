@@ -423,6 +423,8 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
         assert.match(dashboardScript.text, /Overview/);
         assert.match(dashboardScript.text, /Customize/);
         assert.match(dashboardScript.text, /Analytics/);
+        assert.match(dashboardScript.text, /Continue setup/);
+        assert.match(dashboardScript.text, /Add to website/);
       } finally {
         await server.close();
       }
