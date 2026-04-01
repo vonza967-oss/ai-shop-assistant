@@ -161,6 +161,25 @@ function createAgentTestDeps(state) {
       id: "owner-1",
       email: "owner@example.com",
     }),
+    createAgentForBusinessName: async (_supabase, businessName, websiteUrl, clientId, ownerUserId) => {
+      assert.equal(ownerUserId, "owner-1", "owner context should flow into createAgentForBusinessName");
+      return {
+        business: {
+          id: "business-1",
+          name: businessName,
+          website_url: websiteUrl,
+        },
+        agent: {
+          id: "agent-1",
+          businessId: "business-1",
+          clientId: clientId || "client-1",
+          ownerUserId,
+          accessStatus: state.accessStatus,
+          publicAgentKey: "agent-key",
+          name: businessName,
+        },
+      };
+    },
     listAgents: async (_supabase, options) => {
       assert.equal(options.ownerUserId, "owner-1", "owner context should flow into listAgents");
       return {
@@ -563,6 +582,42 @@ test("knowledge import still supports the unauthenticated client bridge during o
         });
         assert.equal(imported.status, 200);
         assert.equal(imported.json.ok, true);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("first-time owner assistant creation stays allowed before payment and returns pending access state", { concurrency: false }, async () => {
+  const state = { accessStatus: "pending" };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+      try {
+        const created = await getJson(server.baseUrl, "/agents/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            client_id: "client-1",
+            business_name: "Vonza Studio",
+            website_url: "https://example.com",
+            assistant_name: "Vonza Studio",
+          }),
+        });
+
+        assert.equal(created.status, 200);
+        assert.equal(created.json.agent_id, "agent-1");
+        assert.equal(created.json.agent_key, "agent-key");
+        assert.equal(created.json.access_status, "pending");
       } finally {
         await server.close();
       }

@@ -33,6 +33,7 @@ export function createAgentRouter(deps = {}) {
   const getSupabase = deps.getSupabaseClient || getSupabaseClient;
   const authenticateUser = deps.getAuthenticatedUser || getAuthenticatedUser;
   const listAgentsImpl = deps.listAgents || listAgents;
+  const createAgentForBusinessNameImpl = deps.createAgentForBusinessName || createAgentForBusinessName;
   const requireAgentAccessImpl = deps.requireAgentAccess || requireAgentAccess;
   const requireActiveAgentAccessImpl = deps.requireActiveAgentAccess || requireActiveAgentAccess;
   const listAgentMessagesImpl = deps.listAgentMessages || listAgentMessages;
@@ -122,7 +123,7 @@ export function createAgentRouter(deps = {}) {
         }
         throw error;
       });
-      const result = await createAgentForBusinessName(
+      const result = await createAgentForBusinessNameImpl(
         supabase,
         req.body.business_name,
         req.body.website_url || req.body.websiteUrl,
@@ -160,6 +161,7 @@ export function createAgentRouter(deps = {}) {
         agent_id: result.agent.id,
         agent_key: result.agent.publicAgentKey,
         business_id: result.business.id,
+        access_status: result.agent.accessStatus,
       });
     } catch (err) {
       console.error(err);

@@ -906,11 +906,19 @@ function renderLaunchSequence(launchState = {}) {
 
 function renderLaunchSuccess(agent, options = {}) {
   renderTopbarMeta();
+  const accessStatus = normalizeAccessStatus(options.accessStatus);
   const ready = options.nextState === "ready";
-  const actionLabel = ready ? "Try your assistant" : "Finish setup";
-  const copy = ready
-    ? "Your assistant is ready to answer customer questions and show what your business offers."
-    : "Your assistant is created and close to ready. One more website knowledge pass can make the experience even stronger.";
+  const isLocked = accessStatus !== "active";
+  const actionLabel = isLocked
+    ? "Continue"
+    : ready
+      ? "Try your assistant"
+      : "Finish setup";
+  const copy = isLocked
+    ? "Your assistant has been created successfully. The next screen will show your workspace access and what to do next."
+    : ready
+      ? "Your assistant is ready to answer customer questions and show what your business offers."
+      : "Your assistant is created and close to ready. One more website knowledge pass can make the experience even stronger.";
 
   rootEl.innerHTML = `
     <section class="launch-card">
@@ -941,7 +949,9 @@ function renderLaunchSuccess(agent, options = {}) {
   };
 
   document.getElementById("launch-success-button")?.addEventListener("click", goNext);
-  window.setTimeout(goNext, 1300);
+  if (!isLocked) {
+    window.setTimeout(goNext, 1300);
+  }
 }
 
 function buildSidebar(activeSection, setup) {
@@ -2267,6 +2277,7 @@ async function createAssistant(event) {
     };
 
     renderLaunchSuccess(successAgent, {
+      accessStatus: createData.access_status,
       nextState: nextSetup.knowledgeState === "ready" ? "ready" : "setup",
     });
   } catch (error) {
