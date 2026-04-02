@@ -626,7 +626,12 @@ function createAgentTestDeps(state) {
     state.followUps = new Map();
   }
 
+  if (!state.knowledgeFixes) {
+    state.knowledgeFixes = new Map();
+  }
+
   let followUpCounter = state.followUpCounter || 0;
+  let knowledgeFixCounter = state.knowledgeFixCounter || 0;
 
   const nextFollowUpId = () => {
     followUpCounter += 1;
@@ -634,7 +639,33 @@ function createAgentTestDeps(state) {
     return `follow-up-${followUpCounter}`;
   };
 
+  const nextKnowledgeFixId = () => {
+    knowledgeFixCounter += 1;
+    state.knowledgeFixCounter = knowledgeFixCounter;
+    return `knowledge-fix-${knowledgeFixCounter}`;
+  };
+
   const dedupeActionKeys = (values = []) => [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+  const buildKnowledgeFixIssueKey = (item) => {
+    const normalized = String(item.question || item.snippet || item.key || "")
+      .trim()
+      .toLowerCase();
+
+    if (/(opening|open|hours|hour|closed)/i.test(normalized)) {
+      return "hours";
+    }
+
+    if (/(price|pricing|cost|quote|package)/i.test(normalized)) {
+      return "pricing";
+    }
+
+    return normalized
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .split("-")
+      .slice(0, 4)
+      .join("-") || "gap";
+  };
 
   const syncQueueStateFromFollowUp = (followUp) => {
     const nextStatus = followUp.status === "sent"
@@ -651,6 +682,25 @@ function createAgentTestDeps(state) {
         status: nextStatus.status,
         followUpNeeded: nextStatus.followUpNeeded,
         followUpCompleted: nextStatus.followUpCompleted,
+      });
+    });
+
+    return nextStatus;
+  };
+
+  const syncQueueStateFromKnowledgeFix = (knowledgeFix) => {
+    const nextStatus = knowledgeFix.status === "applied"
+      ? { status: "done" }
+      : knowledgeFix.status === "dismissed"
+        ? { status: "dismissed" }
+        : { status: "reviewed" };
+    const actionKeys = dedupeActionKeys([knowledgeFix.sourceActionKey, ...(knowledgeFix.linkedActionKeys || [])]);
+
+    actionKeys.forEach((actionKey) => {
+      const previous = state.actionQueueStatuses.get(actionKey) || {};
+      state.actionQueueStatuses.set(actionKey, {
+        ...previous,
+        status: nextStatus.status,
       });
     });
 
@@ -736,6 +786,62 @@ function createAgentTestDeps(state) {
     return nextFollowUp;
   };
 
+  const buildKnowledgeFixForItem = (item) => {
+    const actionType = String(item.actionType || "").trim();
+
+    if (!["knowledge_gap", "unanswered_question"].includes(actionType)) {
+      return null;
+    }
+
+    const dedupeKey = `${actionType}:${buildKnowledgeFixIssueKey(item)}`;
+    const existing = [...state.knowledgeFixes.values()].find((knowledgeFix) => knowledgeFix.dedupeKey === dedupeKey);
+    const proposedGuidance = actionType === "unanswered_question"
+      ? "When the website does not answer the question, say that clearly and give one practical next step instead of leaving the visitor without a usable reply."
+      : "Answer this topic with the clearest matching website detail first, then say exactly what is still missing instead of replying vaguely.";
+    const linkedActionKeys = dedupeActionKeys([
+      ...(existing?.linkedActionKeys || []),
+      item.key,
+      ...(item.relatedActionKeys || []),
+    ]);
+    const nextKnowledgeFix = {
+      id: existing?.id || nextKnowledgeFixId(),
+      agentId: "agent-1",
+      ownerUserId: "owner-1",
+      dedupeKey,
+      sourceActionKey: existing?.sourceActionKey || item.key,
+      linkedActionKeys,
+      actionType,
+      status: existing?.status && ["applied", "dismissed"].includes(existing.status)
+        ? existing.status
+        : existing?.status || "draft",
+      targetType: "system_prompt",
+      targetLabel: "Advanced guidance / system prompt",
+      topic: item.question || item.label || "Knowledge gap",
+      issueSummary: actionType === "unanswered_question"
+        ? `Vonza did not produce a usable answer for "${item.question || item.label}".`
+        : `Vonza answered "${item.question || item.label}" weakly or uncertainly.`,
+      mattersSummary: "This came from a real visitor question, so fixing it improves the next similar conversation instead of repeating the same gap.",
+      proposedGuidance: existing?.draftEditedManually ? existing.proposedGuidance : proposedGuidance,
+      lastGeneratedGuidance: proposedGuidance,
+      draftEditedManually: existing?.draftEditedManually === true,
+      occurrenceCount: linkedActionKeys.length,
+      evidence: {
+        question: item.question || "",
+        currentResponse: item.reply || "",
+        conversationExcerpt: item.snippet || "",
+        relevantContent: state.websiteContent?.content || "",
+        currentSystemPrompt: state.systemPrompt || "",
+        websiteUrl: "https://example.com",
+        knowledgeState: state.knowledgeState || "ready",
+      },
+      lastError: existing?.lastError || "",
+    };
+
+    state.knowledgeFixes.set(nextKnowledgeFix.id, nextKnowledgeFix);
+    syncQueueStateFromKnowledgeFix(nextKnowledgeFix);
+    return nextKnowledgeFix;
+  };
+
   return {
     getSupabaseClient: () => ({ test: true }),
     getAuthenticatedUser: async () => ({
@@ -776,9 +882,14 @@ function createAgentTestDeps(state) {
         agents: [
           {
             id: "agent-1",
+            businessId: "business-1",
             name: "Vonza Assistant",
             assistantName: "Vonza Assistant",
             websiteUrl: "https://example.com",
+            systemPrompt: state.systemPrompt || "",
+            knowledge: {
+              state: state.knowledgeState || "ready",
+            },
             accessStatus: state.accessStatus,
           },
         ],
@@ -868,6 +979,18 @@ function createAgentTestDeps(state) {
         persistenceAvailable: true,
       };
     },
+    syncKnowledgeFixWorkflows: async (_supabase, { queueItems }) => {
+      (queueItems || [])
+        .filter((item) => item.knowledgeFixSupported === true)
+        .forEach((item) => {
+          buildKnowledgeFixForItem(item);
+        });
+
+      return {
+        records: [...state.knowledgeFixes.values()],
+        persistenceAvailable: true,
+      };
+    },
     updateFollowUpWorkflow: async (_supabase, { followUpId, status, subject, draftContent }) => {
       const existing = state.followUps.get(followUpId);
       assert.ok(existing, "follow-up should exist before update");
@@ -886,6 +1009,40 @@ function createAgentTestDeps(state) {
       return {
         followUp: nextFollowUp,
         queueSync,
+        persistenceAvailable: true,
+      };
+    },
+    updateKnowledgeFixWorkflow: async (_supabase, { knowledgeFixId, status, proposedGuidance }) => {
+      const existing = state.knowledgeFixes.get(knowledgeFixId);
+      assert.ok(existing, "knowledge fix should exist before update");
+      const nextKnowledgeFix = {
+        ...existing,
+        status: status || existing.status,
+        proposedGuidance: proposedGuidance ?? existing.proposedGuidance,
+        draftEditedManually: proposedGuidance !== undefined
+          ? true
+          : existing.draftEditedManually === true,
+        appliedGuidance: status === "applied"
+          ? (proposedGuidance ?? existing.proposedGuidance)
+          : existing.appliedGuidance,
+      };
+
+      if (status === "applied") {
+        state.systemPrompt = `${state.systemPrompt || ""}\n\n[VONZA_KNOWLEDGE_FIX ${nextKnowledgeFix.dedupeKey}]\n${nextKnowledgeFix.proposedGuidance}\n[/VONZA_KNOWLEDGE_FIX]`.trim();
+      }
+
+      state.knowledgeFixes.set(knowledgeFixId, nextKnowledgeFix);
+      const queueSync = syncQueueStateFromKnowledgeFix(nextKnowledgeFix);
+
+      return {
+        knowledgeFix: nextKnowledgeFix,
+        queueSync,
+        updatedAgent: status === "applied"
+          ? {
+              id: "agent-1",
+              systemPrompt: state.systemPrompt,
+            }
+          : null,
         persistenceAvailable: true,
       };
     },
@@ -937,6 +1094,12 @@ function createAgentTestDeps(state) {
         lastImportedAt: new Date().toISOString(),
       },
     }),
+    getStoredWebsiteContent: async () => state.websiteContent || {
+      businessId: "business-1",
+      websiteUrl: "https://example.com",
+      content: "Imported website content",
+      pageCount: 1,
+    },
     createHostedCheckoutSession: async ({ user, email }) => ({
       id: "cs_test_checkout",
       url: `https://checkout.stripe.test/session?owner=${encodeURIComponent(user.id)}&email=${encodeURIComponent(email || user.email || "")}`,
@@ -2772,6 +2935,226 @@ test("missing contact creates a safe missing-contact follow-up state", { concurr
   );
 });
 
+test("unanswered question queue item prepares a draft knowledge fix", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "knowledge-message-1",
+        role: "user",
+        content: "What are your opening hours on Saturday?",
+        createdAt: "2026-04-01T10:22:00.000Z",
+      },
+    ],
+    systemPrompt: "Stay grounded in the website.",
+    knowledgeState: "ready",
+    websiteContent: {
+      businessId: "business-1",
+      websiteUrl: "https://example.com",
+      content: "Title: Example\nBody:\nContact us for details.",
+      pageCount: 1,
+    },
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        const item = result.json.items.find((entry) => entry.actionType === "unanswered_question");
+        assert.ok(item);
+        assert.equal(item.knowledgeFix.status, "draft");
+        assert.equal(item.knowledgeFix.targetType, "system_prompt");
+        assert.match(item.knowledgeFix.issueSummary, /did not produce a usable answer/i);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("repeated similar knowledge gaps update one draft instead of spawning duplicates", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "gap-message-1",
+        role: "user",
+        content: "What are your opening hours on Saturday?",
+        createdAt: "2026-04-01T10:23:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "I am not sure.",
+        createdAt: "2026-04-01T10:23:05.000Z",
+      },
+      {
+        id: "gap-message-2",
+        role: "user",
+        content: "When are you open on Saturday?",
+        createdAt: "2026-04-01T10:28:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "I could not find that on the website.",
+        createdAt: "2026-04-01T10:28:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        const gapItems = result.json.items.filter((item) => item.actionType === "knowledge_gap");
+        assert.ok(gapItems.length >= 2);
+        assert.equal(new Set(gapItems.map((item) => item.knowledgeFix?.id)).size, 1);
+        assert.equal(gapItems[0].knowledgeFix.occurrenceCount, 2);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("applying a knowledge fix updates queue state and the stored advanced guidance", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    systemPrompt: "Stay grounded in the website.",
+    messages: [
+      {
+        id: "apply-knowledge-fix-1",
+        role: "user",
+        content: "What are your opening hours on Saturday?",
+        createdAt: "2026-04-01T10:29:00.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const initial = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const item = initial.json.items.find((entry) => entry.knowledgeFix?.id);
+        assert.ok(item);
+
+        const updated = await getJson(server.baseUrl, "/agents/knowledge-fixes/update", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            knowledge_fix_id: item.knowledgeFix.id,
+            status: "applied",
+          }),
+        });
+
+        assert.equal(updated.status, 200);
+        assert.equal(updated.json.knowledgeFix.status, "applied");
+        assert.match(updated.json.updatedAgent.systemPrompt, /VONZA_KNOWLEDGE_FIX/i);
+
+        const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const refreshedItem = refreshed.json.items.find((entry) => entry.key === item.key);
+        assert.equal(refreshedItem.knowledgeFix.status, "applied");
+        assert.equal(refreshedItem.status, "done");
+        assert.ok(refreshed.json.summary.resolved >= 1);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("dismissed knowledge fix stays in history and survives reload plus knowledge re-import", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "dismiss-knowledge-fix-1",
+        role: "user",
+        content: "What are your opening hours on Saturday?",
+        createdAt: "2026-04-01T10:31:00.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const first = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const knowledgeFix = first.json.items.find((item) => item.knowledgeFix?.id)?.knowledgeFix;
+        assert.ok(knowledgeFix);
+
+        const dismissed = await getJson(server.baseUrl, "/agents/knowledge-fixes/update", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            knowledge_fix_id: knowledgeFix.id,
+            status: "dismissed",
+          }),
+        });
+
+        assert.equal(dismissed.status, 200);
+        assert.equal(dismissed.json.knowledgeFix.status, "dismissed");
+
+        const importResult = await getJson(server.baseUrl, "/knowledge/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            agent_key: "agent-key",
+          }),
+        });
+
+        assert.equal(importResult.status, 200);
+
+        const reloaded = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const reloadedFix = reloaded.json.items.find((item) => item.knowledgeFix?.id)?.knowledgeFix;
+        assert.equal(reloadedFix.id, knowledgeFix.id);
+        assert.equal(reloadedFix.status, "dismissed");
+        assert.equal(reloaded.json.summary.attentionNeeded, 0);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
 test("marking a prepared follow-up sent updates queue state and summary counts", { concurrency: false }, async () => {
   const state = {
     accessStatus: "active",
@@ -2933,6 +3316,58 @@ test("follow-up updates still enforce active owner access and scoping", { concur
             agent_id: "agent-1",
             follow_up_id: "follow-up-1",
             status: "sent",
+          }),
+        });
+
+        assert.equal(result.status, 403);
+      } finally {
+        await server.close();
+      }
+    })
+  );
+});
+
+test("knowledge-fix updates still enforce active owner access and scoping", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "scoping-knowledge-fix-1",
+        role: "user",
+        content: "What are your opening hours on Saturday?",
+        createdAt: "2026-04-01T10:36:00.000Z",
+      },
+    ],
+  };
+
+  const deps = {
+    ...createAgentTestDeps(state),
+    requireActiveAgentAccess: async () => {
+      const error = new Error("Forbidden");
+      error.statusCode = 403;
+      throw error;
+    },
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    () => withMutedConsoleError(async () => {
+      const server = await startServer(createTestApp(deps));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/knowledge-fixes/update", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            knowledge_fix_id: "knowledge-fix-1",
+            status: "applied",
           }),
         });
 

@@ -2143,6 +2143,8 @@ function createEmptyActionQueue() {
     migrationRequired: false,
     followUpWorkflowAvailable: true,
     followUpWorkflowMigrationRequired: false,
+    knowledgeFixWorkflowAvailable: true,
+    knowledgeFixWorkflowMigrationRequired: false,
   };
 }
 
@@ -2439,6 +2441,61 @@ function getFollowUpStatusBadgeClass(value) {
   return "badge pending";
 }
 
+function getKnowledgeFixStatusLabel(value) {
+  const normalized = trimText(value).toLowerCase();
+
+  switch (normalized) {
+    case "draft":
+      return "Draft";
+    case "ready":
+      return "Ready";
+    case "applied":
+      return "Applied";
+    case "dismissed":
+      return "Dismissed";
+    case "failed":
+      return "Failed";
+    default:
+      return "Not prepared";
+  }
+}
+
+function getKnowledgeFixStatusBadgeClass(value) {
+  const normalized = trimText(value).toLowerCase();
+
+  if (normalized === "applied") {
+    return "badge success";
+  }
+
+  if (normalized === "dismissed") {
+    return "pill";
+  }
+
+  if (normalized === "ready") {
+    return "badge warning";
+  }
+
+  return "badge pending";
+}
+
+function formatKnowledgeState(value) {
+  const normalized = trimText(value).toLowerCase();
+
+  if (normalized === "ready") {
+    return "Ready";
+  }
+
+  if (normalized === "limited") {
+    return "Limited";
+  }
+
+  if (normalized === "missing") {
+    return "Missing";
+  }
+
+  return "Unknown";
+}
+
 function formatFollowUpChannel(value) {
   const normalized = trimText(value).toLowerCase();
 
@@ -2626,6 +2683,8 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
   const migrationRequired = actionQueue.migrationRequired === true;
   const followUpWorkflowAvailable = actionQueue.followUpWorkflowAvailable !== false;
   const followUpWorkflowMigrationRequired = actionQueue.followUpWorkflowMigrationRequired === true;
+  const knowledgeFixWorkflowAvailable = actionQueue.knowledgeFixWorkflowAvailable !== false;
+  const knowledgeFixWorkflowMigrationRequired = actionQueue.knowledgeFixWorkflowMigrationRequired === true;
   const compact = Boolean(options.compact);
   const allowStatusUpdates = options.allowStatusUpdates !== false && persistenceAvailable;
   const visibleItems = compact ? items.slice(0, 3) : items;
@@ -2729,6 +2788,92 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
         ` : `<div class="placeholder-card">Vonza will prepare a follow-up workflow for this queue item as soon as the server bridge syncs it.</div>`}
       `
       : "";
+    const knowledgeFix = item.knowledgeFix && typeof item.knowledgeFix === "object" ? item.knowledgeFix : null;
+    const knowledgeFixStatus = trimText(knowledgeFix?.status).toLowerCase();
+    const knowledgeFixSupported = item.knowledgeFixSupported === true;
+    const knowledgeFixActionsDisabled = !allowStatusUpdates || !knowledgeFixWorkflowAvailable || !knowledgeFix?.id;
+    const knowledgeFixReadOnly = knowledgeFixStatus === "applied" || knowledgeFixStatus === "dismissed";
+    const knowledgeFixSummary = knowledgeFixSupported
+      ? `
+        ${knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge fixes are read-only until the workflow migration is applied. Run db/agent_knowledge_fix_workflows.sql before using this live.</div>` : ""}
+        ${knowledgeFix ? `
+          <form class="action-queue-knowledge-fix-form" data-knowledge-fix-form data-knowledge-fix-id="${escapeHtml(knowledgeFix.id || "")}" data-action-key="${escapeHtml(item.key || "")}">
+            <div class="action-queue-handoff-summary">
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Operator action</span>
+                <strong class="action-queue-detail-value">${escapeHtml(getOperatorActionTypeLabel(item))}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Fix status</span>
+                <strong class="action-queue-detail-value">${escapeHtml(getKnowledgeFixStatusLabel(knowledgeFix.status))}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Fix target</span>
+                <strong class="action-queue-detail-value">${escapeHtml(knowledgeFix.targetLabel || "Advanced guidance / system prompt")}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Occurrences</span>
+                <strong class="action-queue-detail-value">${escapeHtml(String(knowledgeFix.occurrenceCount || 1))}</strong>
+              </div>
+            </div>
+            <div class="action-queue-secondary-action">
+              ${item.messageId ? `<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(item.messageId)}">Open related conversation</button>` : ""}
+              <button class="ghost-button" type="button" data-overview-target="customize">Open Customize</button>
+            </div>
+            <div class="action-queue-details">
+              <div class="action-queue-detail">
+                <span class="action-queue-detail-label">What the visitor asked</span>
+                <strong class="action-queue-detail-value">${escapeHtml(knowledgeFix.evidence?.question || item.question || "No visitor question stored yet.")}</strong>
+              </div>
+              <div class="action-queue-detail">
+                <span class="action-queue-detail-label">What was missing or weak</span>
+                <strong class="action-queue-detail-value">${escapeHtml(knowledgeFix.issueSummary || "No issue summary yet.")}</strong>
+              </div>
+              <div class="action-queue-detail">
+                <span class="action-queue-detail-label">Why it matters</span>
+                <strong class="action-queue-detail-value">${escapeHtml(knowledgeFix.mattersSummary || "No impact summary yet.")}</strong>
+              </div>
+              <div class="action-queue-detail">
+                <span class="action-queue-detail-label">Imported knowledge state</span>
+                <strong class="action-queue-detail-value">${escapeHtml(formatKnowledgeState(knowledgeFix.evidence?.knowledgeState))}</strong>
+                <p class="action-queue-copy">${escapeHtml(knowledgeFix.evidence?.websiteUrl || "No website URL stored.")}</p>
+              </div>
+            </div>
+            <div class="form-grid two-col">
+              <div class="field">
+                <label for="knowledge-fix-response-${escapeHtml(item.key || "")}">Current assistant response</label>
+                <textarea id="knowledge-fix-response-${escapeHtml(item.key || "")}" disabled>${escapeHtml(knowledgeFix.evidence?.currentResponse || "No usable assistant response was captured.")}</textarea>
+              </div>
+              <div class="field">
+                <label for="knowledge-fix-system-prompt-${escapeHtml(item.key || "")}">Current advanced guidance</label>
+                <textarea id="knowledge-fix-system-prompt-${escapeHtml(item.key || "")}" disabled>${escapeHtml(knowledgeFix.evidence?.currentSystemPrompt || "No advanced guidance is set yet.")}</textarea>
+              </div>
+            </div>
+            <div class="field">
+              <label for="knowledge-fix-evidence-${escapeHtml(item.key || "")}">Conversation evidence</label>
+              <textarea id="knowledge-fix-evidence-${escapeHtml(item.key || "")}" disabled>${escapeHtml(knowledgeFix.evidence?.conversationExcerpt || item.snippet || "")}</textarea>
+            </div>
+            <div class="field">
+              <label for="knowledge-fix-content-${escapeHtml(item.key || "")}">Relevant imported website content</label>
+              <textarea id="knowledge-fix-content-${escapeHtml(item.key || "")}" disabled>${escapeHtml(knowledgeFix.evidence?.relevantContent || "No relevant imported website content was available for this question.")}</textarea>
+            </div>
+            <div class="field">
+              <label for="knowledge-fix-guidance-${escapeHtml(item.key || "")}">Drafted guidance to add</label>
+              <textarea id="knowledge-fix-guidance-${escapeHtml(item.key || "")}" name="proposed_guidance" ${knowledgeFixActionsDisabled || knowledgeFixReadOnly ? "disabled" : ""}>${escapeHtml(knowledgeFix.proposedGuidance || "")}</textarea>
+              <p class="field-help">${escapeHtml(knowledgeFixStatus === "applied" ? "This fix is already in the assistant guidance. Reopen only by drafting a new fix if the issue comes back." : "Keep the first version tight and deterministic. The safest direct apply target is advanced guidance.")}</p>
+            </div>
+            ${knowledgeFix.lastError ? `<p class="action-queue-copy">${escapeHtml(`Last failure: ${knowledgeFix.lastError}`)}</p>` : ""}
+            <div class="action-queue-form-actions">
+              <button class="primary-button" type="submit" ${knowledgeFixActionsDisabled || knowledgeFixReadOnly ? "disabled" : ""}>Save draft</button>
+              <button class="ghost-button" type="button" data-knowledge-fix-status-action data-next-status="ready" ${knowledgeFixActionsDisabled || knowledgeFixReadOnly ? "disabled" : ""}>Mark ready</button>
+              <button class="ghost-button" type="button" data-knowledge-fix-status-action data-next-status="applied" ${knowledgeFixActionsDisabled || !trimText(knowledgeFix.proposedGuidance) || knowledgeFixReadOnly ? "disabled" : ""}>Apply fix</button>
+              <button class="ghost-button" type="button" data-knowledge-fix-status-action data-next-status="dismissed" ${knowledgeFixActionsDisabled || knowledgeFixStatus === "applied" ? "disabled" : ""}>Dismiss</button>
+              <span class="action-queue-meta-inline">${escapeHtml(knowledgeFix.targetLabel || "Applies to advanced guidance / system prompt.")}</span>
+            </div>
+          </form>
+        ` : `<div class="placeholder-card">Vonza will prepare a knowledge-fix workflow for this queue item as soon as the server bridge syncs it.</div>`}
+      `
+      : "";
 
     return `
     <article
@@ -2745,6 +2890,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             <span class="${getActionQueueStatusBadgeClass(item.status)}">${escapeHtml(getActionQueueStatusLabel(item.status))}</span>
             <span class="${getActionQueueOwnerWorkflowBadgeClass(item)}">${escapeHtml(workflow.label)}</span>
             ${followUp ? `<span class="${getFollowUpStatusBadgeClass(followUp.status)}">${escapeHtml(getFollowUpStatusLabel(followUp.status))}</span>` : ""}
+            ${knowledgeFix ? `<span class="${getKnowledgeFixStatusBadgeClass(knowledgeFix.status)}">${escapeHtml(getKnowledgeFixStatusLabel(knowledgeFix.status))}</span>` : ""}
             <span class="pill">${escapeHtml(`${item.count || 0} conversation${item.count === 1 ? "" : "s"}`)}</span>
             ${personThreadLabel ? `<span class="pill">${escapeHtml(personThreadLabel)}</span>` : ""}
           </div>
@@ -2806,6 +2952,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       ${compact ? "" : `
         <div class="action-queue-handoff">
           ${followUpSummary}
+          ${knowledgeFixSummary}
           <div class="action-queue-handoff-summary">
             <div class="action-queue-handoff-item">
               <span class="action-queue-detail-label">Owner note</span>
@@ -2912,6 +3059,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       </div>
       ${migrationRequired ? `<div class="placeholder-card">Action queue follow-up is currently read-only because the database migration for persistent queue fields is not applied yet. Apply db/action_queue_statuses.sql before using this operational handoff live.</div>` : ""}
       ${!migrationRequired && followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up workflows are read-only because the workflow migration is not applied yet. Apply db/agent_follow_up_workflows.sql before using outbound follow-up from the queue.</div>` : ""}
+      ${!migrationRequired && knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge-fix workflows are read-only because the workflow migration is not applied yet. Apply db/agent_knowledge_fix_workflows.sql before using inline knowledge improvement from the queue.</div>` : ""}
       ${visibleItems.length ? `
         ${compact ? `
           <div class="action-queue-secondary-action">
@@ -2994,7 +3142,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     }
   } else if (installStatus.state === "live") {
     if (queueSummary.attentionNeeded > 0) {
-      title = `Your assistant is live and ${queueSummary.attentionNeeded} follow-up item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
+      title = `Your assistant is live and ${queueSummary.attentionNeeded} action item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
       copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations that deserve owner follow-up or a stronger answer path.`;
       primaryAction = {
         label: "Review action queue",
@@ -3926,6 +4074,8 @@ async function loadActionQueue(agentId) {
       migrationRequired: data.migrationRequired === true,
       followUpWorkflowAvailable: data.followUpWorkflowAvailable !== false,
       followUpWorkflowMigrationRequired: data.followUpWorkflowMigrationRequired === true,
+      knowledgeFixWorkflowAvailable: data.knowledgeFixWorkflowAvailable !== false,
+      knowledgeFixWorkflowMigrationRequired: data.knowledgeFixWorkflowMigrationRequired === true,
     };
   } catch (error) {
     console.warn("[action queue] Could not load the action queue:", error.message);
@@ -4614,6 +4764,8 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
   const actionQueueToggleButtons = document.querySelectorAll("[data-action-queue-toggle]");
   const followUpForms = document.querySelectorAll("[data-follow-up-form]");
   const followUpStatusButtons = document.querySelectorAll("[data-follow-up-status-action]");
+  const knowledgeFixForms = document.querySelectorAll("[data-knowledge-fix-form]");
+  const knowledgeFixStatusButtons = document.querySelectorAll("[data-knowledge-fix-status-action]");
   const openConversationButtons = document.querySelectorAll("[data-open-conversation]");
   const copyFollowUpButtons = document.querySelectorAll("[data-copy-follow-up]");
 
@@ -4667,6 +4819,46 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       await boot();
     } catch (error) {
       setStatus(error.message || "We couldn't update that follow-up.");
+    } finally {
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
+    }
+  };
+
+  const saveKnowledgeFix = async (form, nextStatus = "") => {
+    const formData = new FormData(form);
+    const knowledgeFixId = form.dataset.knowledgeFixId;
+    const submitButton = form.querySelector('button[type="submit"]');
+
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+
+    setStatus(nextStatus
+      ? `Updating knowledge fix to ${getKnowledgeFixStatusLabel(nextStatus).toLowerCase()}...`
+      : "Saving knowledge fix draft...");
+
+    try {
+      const result = await fetchJson("/agents/knowledge-fixes/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          knowledge_fix_id: knowledgeFixId,
+          status: nextStatus || undefined,
+          proposed_guidance: trimText(formData.get("proposed_guidance")),
+        }),
+      });
+
+      setDashboardFocus("action-queue");
+      setStatus(result.message || "Knowledge fix updated.");
+      await boot();
+    } catch (error) {
+      setStatus(error.message || "We couldn't update that knowledge fix.");
     } finally {
       if (submitButton) {
         submitButton.disabled = false;
@@ -4883,6 +5075,25 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       }
 
       await saveFollowUp(form, button.dataset.nextStatus || "");
+    });
+  });
+
+  knowledgeFixForms.forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveKnowledgeFix(form);
+    });
+  });
+
+  knowledgeFixStatusButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const form = button.closest("[data-knowledge-fix-form]");
+
+      if (!form) {
+        return;
+      }
+
+      await saveKnowledgeFix(form, button.dataset.nextStatus || "");
     });
   });
 
