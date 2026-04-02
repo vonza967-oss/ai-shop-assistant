@@ -37,9 +37,19 @@ const LAUNCH_STEPS = [
 const trackedEventKeys = new Set();
 const SHELL_SECTIONS = ["overview", "customize", "analytics"];
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
+const AUTH_VIEW_MODES = {
+  SIGN_IN: "sign-in",
+  SIGN_UP: "sign-up",
+  RESET: "reset",
+  MAGIC: "magic",
+  UPDATE_PASSWORD: "update-password",
+};
 let authClient = null;
 let authSession = null;
 let authUser = null;
+let authViewMode = AUTH_VIEW_MODES.SIGN_UP;
+let authFeedback = null;
+let authStateListenerBound = false;
 
 function isDevFakeBillingEnabled() {
   return Boolean(window.VONZA_DEV_FAKE_BILLING);
@@ -81,6 +91,8 @@ function renderTopbarMeta() {
       await authClient.auth.signOut();
       authSession = null;
       authUser = null;
+      clearAuthFlowStateFromUrl();
+      setAuthFeedback(null, "");
       setStatus("Signed out.");
       await boot();
     });
@@ -105,6 +117,21 @@ async function ensureAuthClient() {
       },
     }
   );
+
+  if (!authStateListenerBound) {
+    authClient.auth.onAuthStateChange((event, session) => {
+      authSession = session || null;
+      authUser = authSession?.user || null;
+      renderTopbarMeta();
+
+      if (event === "PASSWORD_RECOVERY") {
+        authViewMode = AUTH_VIEW_MODES.UPDATE_PASSWORD;
+        setAuthFeedback("info", "Choose a new password for your Vonza account.");
+        renderAuthEntry();
+      }
+    });
+    authStateListenerBound = true;
+  }
 
   const { data } = await authClient.auth.getSession();
   authSession = data.session || null;
@@ -154,6 +181,177 @@ function clearPaymentStateFromUrl() {
   if (changed) {
     window.history.replaceState({}, "", url.toString());
   }
+}
+
+function getAuthFlowType() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return trimText(searchParams.get("type") || hashParams.get("type")).toLowerCase();
+}
+
+function clearAuthFlowStateFromUrl() {
+  const url = new URL(window.location.href);
+  let changed = false;
+
+  if (url.searchParams.has("type")) {
+    url.searchParams.delete("type");
+    changed = true;
+  }
+
+  if (url.hash) {
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+
+    if (hashParams.has("type") || hashParams.has("access_token") || hashParams.has("refresh_token")) {
+      url.hash = "";
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    window.history.replaceState({}, "", url.toString());
+  }
+}
+
+function setAuthFeedback(type, message) {
+  authFeedback = message
+    ? {
+      type,
+      message,
+    }
+    : null;
+}
+
+function getAuthFeedbackMarkup() {
+  if (!authFeedback?.message) {
+    return "";
+  }
+
+  return `
+    <div class="auth-feedback ${escapeHtml(authFeedback.type || "info")}">
+      ${escapeHtml(authFeedback.message)}
+    </div>
+  `;
+}
+
+function getAuthRedirectUrl() {
+  const redirectUrl = new URL("/dashboard", window.location.origin);
+  const arrival = getArrivalContext();
+
+  if (arrival.from) {
+    redirectUrl.searchParams.set("from", arrival.from);
+  }
+
+  return redirectUrl.toString();
+}
+
+function getAuthModeConfig(mode, arrival) {
+  const configs = {
+    [AUTH_VIEW_MODES.SIGN_UP]: {
+      eyebrow: arrival.arrivedFromSite ? "Step 1 of 3" : "Create your Vonza account",
+      headline: "Create your Vonza account",
+      copy: "Use email and password to open your Vonza account, then continue straight into the app flow where checkout and workspace setup already live.",
+      submitLabel: "Create account",
+      note: "You can sign back in with the same email and password whenever you return.",
+    },
+    [AUTH_VIEW_MODES.SIGN_IN]: {
+      eyebrow: arrival.arrivedFromSite ? "Step 1 of 3" : "Sign in to Vonza",
+      headline: "Sign in to continue into Vonza",
+      copy: "Use your email and password to return to Vonza. After sign-in, unpaid accounts go to checkout and paid accounts go straight into the workspace.",
+      submitLabel: "Sign in",
+      note: "Use the same email and password you created for this workspace.",
+    },
+    [AUTH_VIEW_MODES.RESET]: {
+      eyebrow: "Reset your password",
+      headline: "Send a password reset email",
+      copy: "Enter your account email and we’ll send a reset link that brings you back into Vonza so you can choose a new password cleanly.",
+      submitLabel: "Send reset link",
+      note: "The reset link opens a secure password update flow inside Vonza.",
+    },
+    [AUTH_VIEW_MODES.MAGIC]: {
+      eyebrow: "Email link fallback",
+      headline: "Use a magic link instead",
+      copy: "If you do not want to use your password right now, Vonza can still send a one-time email link as a secondary sign-in option.",
+      submitLabel: "Send magic link",
+      note: "This keeps the old auth path available without making it the main flow.",
+    },
+    [AUTH_VIEW_MODES.UPDATE_PASSWORD]: {
+      eyebrow: "Secure password update",
+      headline: "Choose your new password",
+      copy: "Set a new password for your Vonza account, then we’ll bring you back into the app immediately.",
+      submitLabel: "Update password",
+      note: "Use a strong password you can return with later.",
+    },
+  };
+
+  return configs[mode] || configs[AUTH_VIEW_MODES.SIGN_IN];
+}
+
+function renderAuthFields(mode) {
+  if (mode === AUTH_VIEW_MODES.UPDATE_PASSWORD) {
+    return `
+      <div class="field">
+        <label for="auth-password">New password</label>
+        <input id="auth-password" name="password" type="password" placeholder="Create a strong password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="auth-password-confirm">Confirm new password</label>
+        <input id="auth-password-confirm" name="confirm_password" type="password" placeholder="Repeat your new password" autocomplete="new-password">
+      </div>
+    `;
+  }
+
+  const needsPassword = mode === AUTH_VIEW_MODES.SIGN_IN || mode === AUTH_VIEW_MODES.SIGN_UP;
+  const needsConfirmation = mode === AUTH_VIEW_MODES.SIGN_UP;
+
+  return `
+    <div class="field">
+      <label for="auth-email">Email address</label>
+      <input id="auth-email" name="email" type="email" placeholder="you@yourbusiness.com" autocomplete="email">
+    </div>
+    ${needsPassword ? `
+      <div class="field">
+        <label for="auth-password">Password</label>
+        <input id="auth-password" name="password" type="password" placeholder="${mode === AUTH_VIEW_MODES.SIGN_UP ? "Create a password" : "Enter your password"}" autocomplete="${mode === AUTH_VIEW_MODES.SIGN_UP ? "new-password" : "current-password"}">
+      </div>
+    ` : ""}
+    ${needsConfirmation ? `
+      <div class="field">
+        <label for="auth-password-confirm">Confirm password</label>
+        <input id="auth-password-confirm" name="confirm_password" type="password" placeholder="Repeat your password" autocomplete="new-password">
+      </div>
+    ` : ""}
+  `;
+}
+
+function renderAuthSecondaryLinks(mode) {
+  if (mode === AUTH_VIEW_MODES.UPDATE_PASSWORD) {
+    return "";
+  }
+
+  if (mode === AUTH_VIEW_MODES.SIGN_UP) {
+    return `
+      <div class="auth-links-row">
+        <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.SIGN_IN}">Already have an account? Sign in</button>
+        <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.MAGIC}">Use email link instead</button>
+      </div>
+    `;
+  }
+
+  if (mode === AUTH_VIEW_MODES.SIGN_IN) {
+    return `
+      <div class="auth-links-row">
+        <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.RESET}">Forgot password?</button>
+        <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.MAGIC}">Use email link instead</button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="auth-links-row">
+      <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.SIGN_IN}">Back to password sign in</button>
+      <button class="auth-text-button" type="button" data-auth-mode="${AUTH_VIEW_MODES.SIGN_UP}">Create account instead</button>
+    </div>
+  `;
 }
 
 function wait(ms) {
@@ -656,6 +854,8 @@ function renderAccessLocked(agent) {
     await authClient.auth.signOut();
     authSession = null;
     authUser = null;
+    clearAuthFlowStateFromUrl();
+    setAuthFeedback(null, "");
     setStatus("Signed out.");
     await boot();
   });
@@ -726,23 +926,45 @@ async function waitForActiveAccessAfterPayment() {
 function renderAuthEntry() {
   renderTopbarMeta();
   const arrival = getArrivalContext();
+  const mode = getAuthFlowType() === "recovery"
+    ? AUTH_VIEW_MODES.UPDATE_PASSWORD
+    : authViewMode;
+  const config = getAuthModeConfig(mode, arrival);
+  const showModeTabs = mode !== AUTH_VIEW_MODES.UPDATE_PASSWORD;
+
   rootEl.innerHTML = `
     <section class="auth-card">
-      <span class="eyebrow">${arrival.arrivedFromSite ? "Step 1 of 3" : "Client access"}</span>
-      <h1 class="headline">Sign in to continue into Vonza</h1>
-      <p class="auth-copy">Use your email to sign up or sign back in. Vonza will send a secure magic link, then bring you into the app where you can unlock the product and set up your assistant.</p>
+      <span class="eyebrow">${escapeHtml(config.eyebrow)}</span>
+      <h1 class="headline">${escapeHtml(config.headline)}</h1>
+      <p class="auth-copy">${escapeHtml(config.copy)}</p>
+      ${showModeTabs ? `
+        <div class="auth-mode-tabs" role="tablist" aria-label="Account access modes">
+          <button class="auth-mode-tab ${mode === AUTH_VIEW_MODES.SIGN_UP ? "active" : ""}" type="button" data-auth-mode="${AUTH_VIEW_MODES.SIGN_UP}">Create account</button>
+          <button class="auth-mode-tab ${mode === AUTH_VIEW_MODES.SIGN_IN ? "active" : ""}" type="button" data-auth-mode="${AUTH_VIEW_MODES.SIGN_IN}">Sign in</button>
+        </div>
+      ` : ""}
+      ${getAuthFeedbackMarkup()}
       <form id="auth-form" class="auth-form">
-        <div class="field">
-          <label for="auth-email">Email address</label>
-          <input id="auth-email" name="email" type="email" placeholder="you@yourbusiness.com" autocomplete="email">
-        </div>
+        ${renderAuthFields(mode)}
         <div class="auth-actions">
-          <button id="auth-submit" class="primary-button" type="submit">Continue with email</button>
-          <span class="auth-note">You can use the same email to return to this workspace later.</span>
+          <button id="auth-submit" class="primary-button" type="submit">${escapeHtml(config.submitLabel)}</button>
+          <span class="auth-note">${escapeHtml(config.note)}</span>
         </div>
+        ${renderAuthSecondaryLinks(mode)}
       </form>
     </section>
   `;
+
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      authViewMode = button.dataset.authMode || AUTH_VIEW_MODES.SIGN_IN;
+      if (authViewMode !== AUTH_VIEW_MODES.UPDATE_PASSWORD) {
+        clearAuthFlowStateFromUrl();
+      }
+      setAuthFeedback(null, "");
+      renderAuthEntry();
+    });
+  });
 
   document.getElementById("auth-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -755,36 +977,134 @@ function renderAuthEntry() {
     const form = event.currentTarget;
     const formData = new FormData(form);
     const email = trimText(formData.get("email"));
+    const password = trimText(formData.get("password"));
+    const confirmPassword = trimText(formData.get("confirm_password"));
     const submitButton = document.getElementById("auth-submit");
 
-    if (!email) {
+    if (mode !== AUTH_VIEW_MODES.UPDATE_PASSWORD && !email) {
       setStatus("Enter your email first.");
       return;
     }
 
+    if ((mode === AUTH_VIEW_MODES.SIGN_IN || mode === AUTH_VIEW_MODES.SIGN_UP || mode === AUTH_VIEW_MODES.UPDATE_PASSWORD) && password.length < 8) {
+      setAuthFeedback("error", "Use a password with at least 8 characters.");
+      renderAuthEntry();
+      setStatus("Use a password with at least 8 characters.");
+      return;
+    }
+
+    if ((mode === AUTH_VIEW_MODES.SIGN_UP || mode === AUTH_VIEW_MODES.UPDATE_PASSWORD) && password !== confirmPassword) {
+      setAuthFeedback("error", "Your password confirmation does not match.");
+      renderAuthEntry();
+      setStatus("Your password confirmation does not match.");
+      return;
+    }
+
     submitButton.disabled = true;
-    setStatus("Sending your login link...");
+    setAuthFeedback(null, "");
 
     try {
-      const redirectUrl = new URL("/dashboard", window.location.origin);
-      if (arrival.from) {
-        redirectUrl.searchParams.set("from", arrival.from);
+      if (mode === AUTH_VIEW_MODES.SIGN_UP) {
+        setStatus("Creating your account...");
+        const { data, error } = await authClient.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: getAuthRedirectUrl(),
+          },
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        if (data?.session?.user) {
+          authSession = data.session;
+          authUser = data.session.user;
+          setStatus("Account created. Opening your Vonza app...");
+          await boot();
+          return;
+        }
+
+        authViewMode = AUTH_VIEW_MODES.SIGN_IN;
+        setAuthFeedback("success", "Account created. Check your email to confirm your address, then sign in with your password.");
+        renderAuthEntry();
+        setStatus("Check your email to confirm your account.");
+        return;
       }
 
-      const { error } = await authClient.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: redirectUrl.toString(),
-        },
-      });
+      if (mode === AUTH_VIEW_MODES.SIGN_IN) {
+        setStatus("Signing you in...");
+        const { data, error } = await authClient.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-      if (error) {
-        throw error;
+        if (error) {
+          throw error;
+        }
+
+        authSession = data.session || null;
+        authUser = data.user || data.session?.user || null;
+        setStatus("Signed in. Opening your Vonza app...");
+        await boot();
+        return;
       }
 
-      setStatus("Magic link sent. Open it from your email to access your assistant workspace.");
+      if (mode === AUTH_VIEW_MODES.RESET) {
+        setStatus("Sending your reset link...");
+        const { error } = await authClient.auth.resetPasswordForEmail(email, {
+          redirectTo: getAuthRedirectUrl(),
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        setAuthFeedback("success", "Password reset email sent. Use the link in your inbox to choose a new password.");
+        renderAuthEntry();
+        setStatus("Password reset email sent.");
+        return;
+      }
+
+      if (mode === AUTH_VIEW_MODES.MAGIC) {
+        setStatus("Sending your magic link...");
+        const { error } = await authClient.auth.signInWithOtp({
+          email,
+          options: {
+            emailRedirectTo: getAuthRedirectUrl(),
+          },
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        setAuthFeedback("success", "Magic link sent. Open the email from this device to continue into Vonza.");
+        renderAuthEntry();
+        setStatus("Magic link sent.");
+        return;
+      }
+
+      if (mode === AUTH_VIEW_MODES.UPDATE_PASSWORD) {
+        setStatus("Updating your password...");
+        const { error } = await authClient.auth.updateUser({
+          password,
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        clearAuthFlowStateFromUrl();
+        setAuthFeedback(null, "");
+        setStatus("Password updated. Opening your Vonza app...");
+        await boot();
+      }
     } catch (error) {
-      setStatus(error.message || "We could not send the login link just yet.");
+      setAuthFeedback("error", error.message || "We could not complete authentication just yet.");
+      renderAuthEntry();
+      setStatus(error.message || "We could not complete authentication just yet.");
     } finally {
       submitButton.disabled = false;
     }
@@ -4458,6 +4778,14 @@ async function boot() {
     renderAuthEntry();
     return;
   }
+
+  if (getAuthFlowType() === "recovery") {
+    authViewMode = AUTH_VIEW_MODES.UPDATE_PASSWORD;
+    renderAuthEntry();
+    return;
+  }
+
+  setAuthFeedback(null, "");
 
   const paymentState = getPaymentState();
 
