@@ -736,6 +736,49 @@ button:disabled {
   line-height: 1.6;
 }
 
+.action-queue-handoff {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.action-queue-handoff-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.action-queue-handoff-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.action-queue-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.action-queue-form textarea {
+  min-height: 92px;
+}
+
+.action-queue-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
 .action-queue-filter-empty {
   margin-top: 0;
 }
@@ -1942,7 +1985,8 @@ button:disabled {
   .analytics-grid,
   .intent-grid,
   .overview-metric-grid,
-  .action-queue-details {
+  .action-queue-details,
+  .action-queue-handoff-summary {
     grid-template-columns: 1fr;
   }
 
@@ -1973,7 +2017,8 @@ button:disabled {
 
   .action-queue-filter-row,
   .action-queue-header,
-  .action-queue-item-top {
+  .action-queue-item-top,
+  .action-queue-form-actions {
     flex-direction: column;
     align-items: stretch;
   }

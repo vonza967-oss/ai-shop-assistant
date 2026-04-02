@@ -336,7 +336,16 @@ export function createAgentRouter(deps = {}) {
         }),
       ]);
 
-      res.json(buildActionQueueImpl(messages, statuses));
+      const persistedRecords = Array.isArray(statuses) ? statuses : statuses?.records || [];
+      const persistenceAvailable = Array.isArray(statuses)
+        ? true
+        : statuses?.persistenceAvailable !== false;
+
+      res.json(
+        buildActionQueueImpl(messages, persistedRecords, {
+          persistenceAvailable,
+        })
+      );
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({
@@ -367,11 +376,22 @@ export function createAgentRouter(deps = {}) {
         ownerUserId: user?.id || null,
         actionKey: req.body.action_key || req.body.actionKey,
         status: req.body.status,
+        note: req.body.note,
+        outcome: req.body.outcome,
+        nextStep: req.body.next_step || req.body.nextStep,
+        followUpNeeded: req.body.follow_up_needed ?? req.body.followUpNeeded,
+        followUpCompleted: req.body.follow_up_completed ?? req.body.followUpCompleted,
+        contactStatus: req.body.contact_status || req.body.contactStatus,
       });
+
+      const item = result?.item || result;
+      const persistenceAvailable = result?.persistenceAvailable !== false;
 
       res.json({
         ok: true,
-        item: result,
+        item,
+        persistenceAvailable,
+        migrationRequired: !persistenceAvailable,
       });
     } catch (err) {
       console.error(err);

@@ -243,20 +243,40 @@ function createAgentTestDeps(state) {
         },
       ],
     listActionQueueStatuses: async () =>
-      [...state.actionQueueStatuses.entries()].map(([actionKey, status]) => ({
-        agentId: "agent-1",
-        ownerUserId: "owner-1",
-        actionKey,
-        status,
-      })),
-    updateActionQueueStatus: async (_supabase, { agentId, ownerUserId, actionKey, status }) => {
-      state.actionQueueStatuses.set(actionKey, status);
+      ({
+        records: [...state.actionQueueStatuses.entries()].map(([actionKey, item]) => ({
+          agentId: "agent-1",
+          ownerUserId: "owner-1",
+          actionKey,
+          ...item,
+        })),
+        persistenceAvailable: true,
+      }),
+    updateActionQueueStatus: async (
+      _supabase,
+      { agentId, ownerUserId, actionKey, status, note, outcome, nextStep, followUpNeeded, followUpCompleted, contactStatus }
+    ) => {
+      const previous = state.actionQueueStatuses.get(actionKey) || {};
+      const nextItem = {
+        ...previous,
+        status: status ?? previous.status ?? "new",
+        note: note ?? previous.note ?? "",
+        outcome: outcome ?? previous.outcome ?? "",
+        nextStep: nextStep ?? previous.nextStep ?? "",
+        followUpNeeded: followUpNeeded ?? previous.followUpNeeded ?? null,
+        followUpCompleted: followUpCompleted ?? previous.followUpCompleted ?? null,
+        contactStatus: contactStatus ?? previous.contactStatus ?? "",
+      };
+      state.actionQueueStatuses.set(actionKey, nextItem);
       return {
-        agentId,
-        ownerUserId,
-        actionKey,
-        status,
-        updatedAt: new Date().toISOString(),
+        item: {
+          agentId,
+          ownerUserId,
+          actionKey,
+          ...nextItem,
+          updatedAt: new Date().toISOString(),
+        },
+        persistenceAvailable: true,
       };
     },
     updateOwnedAccessStatus: async (_supabase, { ownerUserId, accessStatus }) => {
@@ -457,6 +477,10 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
         assert.match(dashboardScript.text, /Action queue/);
         assert.match(dashboardScript.text, /No actionable items yet/);
         assert.match(dashboardScript.text, /Reviewed/);
+        assert.match(dashboardScript.text, /Follow-up needed/);
+        assert.match(dashboardScript.text, /Resolved items/);
+        assert.match(dashboardScript.text, /Open follow-up/);
+        assert.match(dashboardScript.text, /Save follow-up/);
         assert.match(dashboardScript.text, /No weak-answer signal yet/);
       } finally {
         await server.close();
@@ -800,17 +824,84 @@ test("action queue status changes persist cleanly through the lightweight owner 
             agent_id: "agent-1",
             action_key: "intent:contact",
             status: "reviewed",
+            note: "Owner reviewed the lead and wants a follow-up tomorrow.",
+            outcome: "Asked the team to reach out with package details.",
+            next_step: "Call the lead tomorrow morning.",
+            follow_up_needed: true,
+            follow_up_completed: false,
+            contact_status: "attempted",
           }),
         });
 
         assert.equal(updated.status, 200);
         assert.equal(updated.json.ok, true);
         assert.equal(updated.json.item.status, "reviewed");
+        assert.equal(updated.json.item.note, "Owner reviewed the lead and wants a follow-up tomorrow.");
+        assert.equal(updated.json.item.outcome, "Asked the team to reach out with package details.");
+        assert.equal(updated.json.item.nextStep, "Call the lead tomorrow morning.");
+        assert.equal(updated.json.item.followUpNeeded, true);
+        assert.equal(updated.json.item.followUpCompleted, false);
+        assert.equal(updated.json.item.contactStatus, "attempted");
+        assert.equal(updated.json.persistenceAvailable, true);
 
         const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
         assert.equal(refreshed.status, 200);
         const contactItem = refreshed.json.items.find((item) => item.key === "intent:contact");
         assert.equal(contactItem.status, "reviewed");
+        assert.equal(contactItem.note, "Owner reviewed the lead and wants a follow-up tomorrow.");
+        assert.equal(contactItem.outcome, "Asked the team to reach out with package details.");
+        assert.equal(contactItem.nextStep, "Call the lead tomorrow morning.");
+        assert.equal(contactItem.followUpNeeded, true);
+        assert.equal(contactItem.followUpCompleted, false);
+        assert.equal(contactItem.contactStatus, "attempted");
+        assert.ok(refreshed.json.summary.followUpNeeded >= 1);
+        assert.ok(refreshed.json.summary.attentionNeeded >= 1);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("action queue surfaces migration-required state instead of silently pretending follow-up is persistent", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        role: "user",
+        content: "Can someone email me at hello@example.com about the best option?",
+        createdAt: "2026-04-01T10:03:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please reach out directly.",
+        createdAt: "2026-04-01T10:03:05.000Z",
+      },
+    ],
+  };
+
+  const deps = {
+    ...createAgentTestDeps(state),
+    listActionQueueStatuses: async () => ({
+      records: [],
+      persistenceAvailable: false,
+    }),
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(deps));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        assert.equal(result.json.persistenceAvailable, false);
+        assert.equal(result.json.migrationRequired, true);
       } finally {
         await server.close();
       }

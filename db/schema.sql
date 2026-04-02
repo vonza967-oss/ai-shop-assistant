@@ -86,6 +86,12 @@ create table if not exists public.agent_action_queue_statuses (
   owner_user_id uuid,
   action_key text not null,
   status text default 'new',
+  note text,
+  outcome text,
+  next_step text,
+  follow_up_needed boolean,
+  follow_up_completed boolean,
+  contact_status text,
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now()
 );

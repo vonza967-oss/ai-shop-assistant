@@ -2,6 +2,15 @@ import { ACTION_QUEUE_STATUS_TABLE } from "../../config/constants.js";
 import { cleanText } from "../../utils/text.js";
 
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
+const CONTACT_STATUSES = ["not_contacted", "attempted", "contacted", "qualified"];
+const ACTION_QUEUE_PERSISTENCE_COLUMNS = [
+  "note",
+  "outcome",
+  "next_step",
+  "follow_up_needed",
+  "follow_up_completed",
+  "contact_status",
+];
 
 function isMissingRelationError(error, relationName) {
   const message = cleanText(error?.message || "");
@@ -16,6 +25,75 @@ function isMissingRelationError(error, relationName) {
 function normalizeStatus(value) {
   const normalized = cleanText(value).toLowerCase();
   return ACTION_QUEUE_STATUSES.includes(normalized) ? normalized : "new";
+}
+
+function isMissingPersistenceColumnError(error) {
+  const message = cleanText(error?.message || "").toLowerCase();
+
+  return (
+    error?.code === "PGRST204" ||
+    error?.code === "42703" ||
+    ACTION_QUEUE_PERSISTENCE_COLUMNS.some((columnName) => message.includes(columnName))
+  );
+}
+
+function isUnavailablePersistenceError(error) {
+  return isMissingRelationError(error, ACTION_QUEUE_STATUS_TABLE) || isMissingPersistenceColumnError(error);
+}
+
+function normalizeBooleanFlag(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+
+  const normalized = cleanText(value).toLowerCase();
+
+  if (["true", "yes", "1"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "no", "0"].includes(normalized)) {
+    return false;
+  }
+
+  return null;
+}
+
+function normalizeContactStatus(value) {
+  const normalized = cleanText(value).toLowerCase();
+  return CONTACT_STATUSES.includes(normalized) ? normalized : "";
+}
+
+function normalizePersistedItem(item = {}) {
+  return {
+    agentId: cleanText(item.agentId || item.agent_id),
+    ownerUserId: cleanText(item.ownerUserId || item.owner_user_id),
+    actionKey: cleanText(item.actionKey || item.action_key),
+    status: normalizeStatus(item.status),
+    note: cleanText(item.note),
+    outcome: cleanText(item.outcome),
+    nextStep: cleanText(item.nextStep || item.next_step),
+    followUpNeeded: normalizeBooleanFlag(item.followUpNeeded ?? item.follow_up_needed),
+    followUpCompleted: normalizeBooleanFlag(item.followUpCompleted ?? item.follow_up_completed),
+    contactStatus: normalizeContactStatus(item.contactStatus || item.contact_status),
+    updatedAt: item.updatedAt || item.updated_at || null,
+  };
+}
+
+function isFollowUpNeeded(item = {}) {
+  if (item.followUpCompleted === true || normalizeStatus(item.status) === "done" || normalizeStatus(item.status) === "dismissed") {
+    return false;
+  }
+
+  if (item.followUpNeeded === true || item.followUpNeeded === false) {
+    return item.followUpNeeded;
+  }
+
+  return normalizeStatus(item.status) !== "dismissed";
+}
+
+function isResolved(item = {}) {
+  return item.followUpCompleted === true || normalizeStatus(item.status) === "done";
 }
 
 function normalizeQuestion(message) {
@@ -220,22 +298,42 @@ function buildStatusSummary(items = []) {
     reviewed: 0,
     done: 0,
     dismissed: 0,
+    followUpNeeded: 0,
+    followUpCompleted: 0,
+    resolved: 0,
+    attentionNeeded: 0,
   };
 
   items.forEach((item) => {
     const status = normalizeStatus(item.status);
     summary[status] += 1;
+
+    if (isFollowUpNeeded(item)) {
+      summary.followUpNeeded += 1;
+    }
+
+    if (item.followUpCompleted === true) {
+      summary.followUpCompleted += 1;
+    }
+
+    if (isResolved(item)) {
+      summary.resolved += 1;
+    }
+
+    if (isFollowUpNeeded(item) && !isResolved(item) && status !== "dismissed") {
+      summary.attentionNeeded += 1;
+    }
   });
 
   return summary;
 }
 
-export function buildActionQueue(messages = [], persistedStatuses = []) {
-  const statusMap = new Map(
-    (persistedStatuses || []).map((item) => [
-      cleanText(item.actionKey || item.action_key),
-      normalizeStatus(item.status),
-    ])
+export function buildActionQueue(messages = [], persistedStatuses = [], options = {}) {
+  const persistedMap = new Map(
+    (persistedStatuses || []).map((item) => {
+      const normalized = normalizePersistedItem(item);
+      return [normalized.actionKey, normalized];
+    })
   );
   const grouped = {
     contact: [],
@@ -299,16 +397,25 @@ export function buildActionQueue(messages = [], persistedStatuses = []) {
       { email: "", phone: "" }
     );
 
+    const persistedItem = persistedMap.get(key) || {};
+
     return {
       key,
       type,
       label: type === "weak_answer" ? "Weak answers" : getIntentLabel(type),
-      status: statusMap.get(key) || "new",
+      status: persistedItem.status || "new",
       count: events.length,
       snippet: latest.question,
       whyFlagged: getFlaggedReason(type, events.length),
       suggestedAction: getSuggestedAction(type),
       lastSeenAt: latest.createdAt || null,
+      note: persistedItem.note || "",
+      outcome: persistedItem.outcome || "",
+      nextStep: persistedItem.nextStep || "",
+      followUpNeeded: persistedItem.followUpNeeded,
+      followUpCompleted: persistedItem.followUpCompleted,
+      contactStatus: persistedItem.contactStatus || "",
+      updatedAt: persistedItem.updatedAt || null,
       contactCaptured: Boolean(combinedContactInfo.email || combinedContactInfo.phone),
       contactInfo: combinedContactInfo.email || combinedContactInfo.phone
         ? {
@@ -332,6 +439,8 @@ export function buildActionQueue(messages = [], persistedStatuses = []) {
   return {
     items,
     summary: buildStatusSummary(items),
+    persistenceAvailable: options.persistenceAvailable !== false,
+    migrationRequired: options.persistenceAvailable === false,
   };
 }
 
@@ -345,63 +454,15 @@ export async function listActionQueueStatuses(supabase, options = {}) {
 
   const { data, error } = await supabase
     .from(ACTION_QUEUE_STATUS_TABLE)
-    .select("agent_id, owner_user_id, action_key, status, updated_at")
+    .select("agent_id, owner_user_id, action_key, status, note, outcome, next_step, follow_up_needed, follow_up_completed, contact_status, updated_at")
     .eq("agent_id", agentId)
     .eq("owner_user_id", ownerUserId);
 
   if (error) {
-    if (isMissingRelationError(error, ACTION_QUEUE_STATUS_TABLE)) {
-      return [];
-    }
-
-    console.error(error);
-    throw error;
-  }
-
-  return (data || []).map((row) => ({
-    agentId: row.agent_id,
-    ownerUserId: row.owner_user_id,
-    actionKey: row.action_key,
-    status: normalizeStatus(row.status),
-    updatedAt: row.updated_at || null,
-  }));
-}
-
-export async function updateActionQueueStatus(supabase, options = {}) {
-  const agentId = cleanText(options.agentId);
-  const ownerUserId = cleanText(options.ownerUserId);
-  const actionKey = cleanText(options.actionKey);
-  const status = normalizeStatus(options.status);
-
-  if (!agentId || !ownerUserId || !actionKey) {
-    const error = new Error("agent_id, owner_user_id, and action_key are required");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const { data, error } = await supabase
-    .from(ACTION_QUEUE_STATUS_TABLE)
-    .upsert(
-      {
-        agent_id: agentId,
-        owner_user_id: ownerUserId,
-        action_key: actionKey,
-        status,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "agent_id,action_key" }
-    )
-    .select("agent_id, owner_user_id, action_key, status, updated_at")
-    .single();
-
-  if (error) {
-    if (isMissingRelationError(error, ACTION_QUEUE_STATUS_TABLE)) {
+    if (isUnavailablePersistenceError(error)) {
       return {
-        agentId,
-        ownerUserId,
-        actionKey,
-        status,
-        updatedAt: new Date().toISOString(),
+        records: [],
+        persistenceAvailable: false,
       };
     }
 
@@ -410,10 +471,96 @@ export async function updateActionQueueStatus(supabase, options = {}) {
   }
 
   return {
-    agentId: data.agent_id,
-    ownerUserId: data.owner_user_id,
-    actionKey: data.action_key,
-    status: normalizeStatus(data.status),
-    updatedAt: data.updated_at || null,
+    records: (data || []).map((row) => normalizePersistedItem(row)),
+    persistenceAvailable: true,
+  };
+}
+
+export async function updateActionQueueStatus(supabase, options = {}) {
+  const agentId = cleanText(options.agentId);
+  const ownerUserId = cleanText(options.ownerUserId);
+  const actionKey = cleanText(options.actionKey);
+  const status = options.status === undefined ? null : normalizeStatus(options.status);
+  const note = options.note === undefined ? undefined : cleanText(options.note);
+  const outcome = options.outcome === undefined ? undefined : cleanText(options.outcome);
+  const nextStep = options.nextStep === undefined ? undefined : cleanText(options.nextStep);
+  const followUpNeeded = options.followUpNeeded === undefined ? undefined : normalizeBooleanFlag(options.followUpNeeded);
+  const followUpCompleted = options.followUpCompleted === undefined ? undefined : normalizeBooleanFlag(options.followUpCompleted);
+  const contactStatus = options.contactStatus === undefined ? undefined : normalizeContactStatus(options.contactStatus);
+
+  if (!agentId || !ownerUserId || !actionKey) {
+    const error = new Error("agent_id, owner_user_id, and action_key are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const payload = {
+    agent_id: agentId,
+    owner_user_id: ownerUserId,
+    action_key: actionKey,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (status) {
+    payload.status = status;
+  }
+
+  if (note !== undefined) {
+    payload.note = note;
+  }
+
+  if (outcome !== undefined) {
+    payload.outcome = outcome;
+  }
+
+  if (nextStep !== undefined) {
+    payload.next_step = nextStep;
+  }
+
+  if (followUpNeeded !== undefined) {
+    payload.follow_up_needed = followUpNeeded;
+  }
+
+  if (followUpCompleted !== undefined) {
+    payload.follow_up_completed = followUpCompleted;
+  }
+
+  if (contactStatus !== undefined) {
+    payload.contact_status = contactStatus || null;
+  }
+
+  const { data, error } = await supabase
+    .from(ACTION_QUEUE_STATUS_TABLE)
+    .upsert(payload, { onConflict: "agent_id,action_key" })
+    .select("agent_id, owner_user_id, action_key, status, note, outcome, next_step, follow_up_needed, follow_up_completed, contact_status, updated_at")
+    .single();
+
+  if (error) {
+    if (isUnavailablePersistenceError(error)) {
+      return {
+        item: normalizePersistedItem({
+          agentId,
+          ownerUserId,
+          actionKey,
+          status: status || "new",
+          note,
+          outcome,
+          nextStep,
+          followUpNeeded,
+          followUpCompleted,
+          contactStatus,
+          updatedAt: new Date().toISOString(),
+        }),
+        persistenceAvailable: false,
+      };
+    }
+
+    console.error(error);
+    throw error;
+  }
+
+  return {
+    item: normalizePersistedItem(data),
+    persistenceAvailable: true,
   };
 }
