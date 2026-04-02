@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 import cors from "cors";
 import express from "express";
@@ -23,6 +25,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
+const dashboardBundlePath = path.join(repoRoot, "frontend", "dashboard.js");
 
 function withEnv(overrides, fn) {
   const previous = new Map();
@@ -156,6 +159,260 @@ async function requestWithHost(baseUrl, pathname, { method = "GET", host, header
 
     req.end();
   });
+}
+
+function createStorageMock() {
+  const store = new Map();
+
+  return {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+}
+
+function createDashboardHarness({
+  search = "?from=site",
+  session = {
+    access_token: "token-1",
+    user: {
+      id: "owner-1",
+      email: "owner@example.com",
+    },
+  },
+  agents = [],
+  checkoutResponse = {
+    status: 200,
+    body: {
+      ok: true,
+      url: "https://checkout.stripe.test/session",
+      session_id: "cs_test_checkout",
+    },
+  },
+} = {}) {
+  const script = readFileSync(dashboardBundlePath, "utf8");
+  const elements = new Map();
+  let assignedUrl = null;
+  const fetchCalls = [];
+
+  class TestElement {
+    constructor(id = "") {
+      this.id = id;
+      this.dataset = {};
+      this.style = {};
+      this.hidden = false;
+      this.disabled = false;
+      this.value = "";
+      this._innerHTML = "";
+      this._textContent = "";
+      this.listeners = new Map();
+    }
+
+    get innerHTML() {
+      return this._innerHTML;
+    }
+
+    set innerHTML(value) {
+      this._innerHTML = String(value || "");
+      const idMatches = [...this._innerHTML.matchAll(/id="([^"]+)"/g)];
+
+      idMatches.forEach((match) => {
+        if (!elements.has(match[1])) {
+          elements.set(match[1], new TestElement(match[1]));
+        }
+      });
+    }
+
+    get textContent() {
+      return this._textContent;
+    }
+
+    set textContent(value) {
+      this._textContent = String(value || "");
+    }
+
+    addEventListener(type, handler) {
+      const handlers = this.listeners.get(type) || [];
+      handlers.push(handler);
+      this.listeners.set(type, handlers);
+    }
+
+    removeEventListener(type, handler) {
+      const handlers = this.listeners.get(type) || [];
+      this.listeners.set(type, handlers.filter((entry) => entry !== handler));
+    }
+
+    async dispatch(type) {
+      const handlers = this.listeners.get(type) || [];
+
+      for (const handler of handlers) {
+        await handler({
+          type,
+          currentTarget: this,
+          preventDefault() {},
+        });
+      }
+    }
+
+    async click() {
+      await this.dispatch("click");
+    }
+  }
+
+  const document = {
+    getElementById(id) {
+      return elements.get(id) || null;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+
+  elements.set("dashboard-root", new TestElement("dashboard-root"));
+  elements.set("status-banner", new TestElement("status-banner"));
+  elements.set("topbar-meta", new TestElement("topbar-meta"));
+
+  const location = {
+    origin: "https://vonza-assistant.onrender.com",
+    pathname: "/dashboard",
+    search,
+    href: `https://vonza-assistant.onrender.com/dashboard${search}`,
+    assign(url) {
+      assignedUrl = url;
+      this.href = String(url || "");
+    },
+  };
+
+  const buildResponse = ({ status = 200, body, text } = {}) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      if (text !== undefined) {
+        return text;
+      }
+
+      return body === undefined ? "" : JSON.stringify(body);
+    },
+  });
+
+  const fetchImpl = async (input, options = {}) => {
+    const resolvedUrl = new URL(String(input), location.origin);
+    fetchCalls.push({
+      url: resolvedUrl.toString(),
+      pathname: resolvedUrl.pathname,
+      options,
+    });
+
+    if (resolvedUrl.pathname === "/product-events") {
+      return buildResponse({ status: 200, body: { ok: true } });
+    }
+
+    if (resolvedUrl.pathname === "/agents/list") {
+      return buildResponse({
+        status: 200,
+        body: {
+          agents,
+          bridgeAgent: null,
+        },
+      });
+    }
+
+    if (resolvedUrl.pathname === "/create-checkout-session") {
+      return buildResponse(checkoutResponse);
+    }
+
+    return buildResponse({ status: 404, body: { error: `Unhandled fetch path: ${resolvedUrl.pathname}` } });
+  };
+
+  const storage = createStorageMock();
+  const sessionStorage = createStorageMock();
+  const window = {
+    document,
+    location,
+    history: {
+      replaceState(_state, _title, nextUrl) {
+        const parsed = new URL(nextUrl, location.origin);
+        location.href = parsed.toString();
+        location.search = parsed.search;
+      },
+    },
+    localStorage: storage,
+    sessionStorage,
+    requestAnimationFrame(callback) {
+      callback();
+    },
+    setTimeout,
+    clearTimeout,
+    crypto: {
+      randomUUID() {
+        return "client-1";
+      },
+    },
+    VONZA_PUBLIC_APP_URL: "https://vonza-assistant.onrender.com",
+    VONZA_SUPABASE_URL: "https://example.supabase.co",
+    VONZA_SUPABASE_ANON_KEY: "anon-key",
+    VONZA_DEV_FAKE_BILLING: false,
+    supabase: {
+      createClient() {
+        return {
+          auth: {
+            async getSession() {
+              return { data: { session } };
+            },
+            async signOut() {
+              return { error: null };
+            },
+          },
+        };
+      },
+    },
+  };
+
+  const context = {
+    window,
+    document,
+    console,
+    fetch: fetchImpl,
+    URL,
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
+    globalThis: null,
+  };
+
+  context.globalThis = context;
+  window.fetch = fetchImpl;
+
+  vm.runInNewContext(script, context, { filename: "frontend/dashboard.js" });
+
+  return {
+    async settle() {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    getRootHtml() {
+      return elements.get("dashboard-root")?.innerHTML || "";
+    },
+    getElement(id) {
+      return elements.get(id) || null;
+    },
+    getStatus() {
+      return elements.get("status-banner")?.textContent || "";
+    },
+    getAssignedUrl() {
+      return assignedUrl;
+    },
+    fetchCalls,
+  };
 }
 
 function createAgentTestDeps(state) {
@@ -498,6 +755,56 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
       }
     }
   );
+});
+
+test("signed-in unpaid owners see the checkout-focused locked state", { concurrency: false }, async () => {
+  const harness = createDashboardHarness();
+  await harness.settle();
+
+  assert.match(harness.getRootHtml(), /Unlock Vonza to open your setup workspace/);
+  assert.ok(harness.getElement("unlock-vonza-button"));
+  assert.ok(harness.getElement("checkout-feedback"));
+});
+
+test("clicking Unlock Vonza from the unpaid state creates checkout and redirects", { concurrency: false }, async () => {
+  const harness = createDashboardHarness();
+  await harness.settle();
+
+  const unlockButton = harness.getElement("unlock-vonza-button");
+  assert.ok(unlockButton);
+
+  await unlockButton.click();
+  await harness.settle();
+
+  const checkoutCall = harness.fetchCalls.find((call) => call.pathname === "/create-checkout-session");
+  assert.ok(checkoutCall);
+  assert.equal(checkoutCall.options.method, "POST");
+  assert.equal(checkoutCall.options.headers.Authorization, "Bearer token-1");
+  assert.match(String(checkoutCall.options.body || ""), /owner@example\.com/);
+  assert.equal(harness.getAssignedUrl(), "https://checkout.stripe.test/session");
+  assert.equal(harness.getElement("checkout-feedback")?.textContent, "Redirecting you to secure checkout...");
+});
+
+test("checkout unlock failures surface a readable inline error instead of a silent no-op", { concurrency: false }, async () => {
+  const harness = createDashboardHarness({
+    checkoutResponse: {
+      status: 502,
+      text: "<html><body>Bad gateway</body></html>",
+    },
+  });
+  await harness.settle();
+
+  const unlockButton = harness.getElement("unlock-vonza-button");
+  assert.ok(unlockButton);
+
+  await unlockButton.click();
+  await harness.settle();
+
+  assert.equal(harness.getAssignedUrl(), null);
+  assert.equal(harness.getElement("checkout-feedback")?.dataset.state, "error");
+  assert.match(harness.getElement("checkout-feedback")?.textContent || "", /Bad gateway/i);
+  assert.doesNotMatch(harness.getElement("checkout-feedback")?.textContent || "", /Unexpected token|JSON/i);
+  assert.match(harness.getStatus(), /Bad gateway/i);
 });
 
 test("setup doctor is only available in local dev mode and never exposes values", { concurrency: false }, async () => {
@@ -1271,6 +1578,37 @@ test("checkout creation quietly seeds a draft assistant for signed-in unpaid own
         assert.match(checkout.json.url, /checkout\.stripe\.test/);
         assert.equal(state.hasAgent, true);
         assert.match(state.businessName, /Vonza setup/);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("checkout creation requires an authenticated session and returns a clear error", { concurrency: false }, async () => {
+  const state = { accessStatus: "pending", hasAgent: false };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createUnauthedBridgeDeps(state)));
+      try {
+        const checkout = await getJson(server.baseUrl, "/create-checkout-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: "owner@example.com",
+          }),
+        });
+
+        assert.equal(checkout.status, 401);
+        assert.equal(checkout.json.error, "Your sign-in session expired. Please sign in again to open checkout.");
       } finally {
         await server.close();
       }

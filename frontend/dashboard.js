@@ -329,6 +329,35 @@ function setStatus(message) {
   statusBanner.textContent = message || "";
 }
 
+function setCheckoutFeedback(message, state = "") {
+  const feedbackEl = document.getElementById("checkout-feedback");
+
+  if (!feedbackEl) {
+    return;
+  }
+
+  feedbackEl.textContent = message || "";
+  feedbackEl.dataset.state = state || "";
+}
+
+function getReadableResponseError(status, responseText) {
+  const cleanedText = trimText(String(responseText || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
+
+  if (cleanedText) {
+    return cleanedText;
+  }
+
+  if (status >= 500) {
+    return "The server could not complete that request right now. Please try again in a moment.";
+  }
+
+  if (status === 401) {
+    return "Your sign-in session expired. Please sign in again and retry.";
+  }
+
+  return `Request failed (${status}).`;
+}
+
 function buildScript(agentKey) {
   return `<script src="${getPublicAppUrl()}/embed.js" data-agent-key="${agentKey}"><\/script>`;
 }
@@ -566,6 +595,7 @@ function renderAccessLocked(agent) {
           ${showDevTools ? '<button id="setup-doctor-button" class="ghost-button" type="button">Check local setup</button>' : ""}
           <button id="locked-signout-button" class="ghost-button" type="button">Sign out</button>
         </div>
+        <p id="checkout-feedback" class="checkout-feedback" aria-live="polite"></p>
       </div>
       ${detailsMarkup}
       <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the setup workspace.</p>
@@ -577,9 +607,14 @@ function renderAccessLocked(agent) {
     markHandoffSeen();
   }
 
-  document.getElementById("unlock-vonza-button")?.addEventListener("click", async () => {
+  document.getElementById("unlock-vonza-button")?.addEventListener("click", async (event) => {
+    const unlockButton = event.currentTarget;
+    let redirectStarted = false;
+
     try {
+      unlockButton.disabled = true;
       setStatus("Opening secure checkout...");
+      setCheckoutFeedback("Opening secure checkout...", "pending");
       const result = await fetchJson("/create-checkout-session", {
         method: "POST",
         headers: {
@@ -594,9 +629,17 @@ function renderAccessLocked(agent) {
         throw new Error("Checkout is not available right now.");
       }
 
+      redirectStarted = true;
+      setCheckoutFeedback("Redirecting you to secure checkout...", "success");
       window.location.assign(result.url);
     } catch (error) {
-      setStatus(error.message || "We could not open checkout right now.");
+      const message = error.message || "We could not open checkout right now.";
+      setStatus(message);
+      setCheckoutFeedback(message, "error");
+    } finally {
+      if (!redirectStarted) {
+        unlockButton.disabled = false;
+      }
     }
   });
 
@@ -3400,10 +3443,19 @@ async function fetchJson(url, options) {
     : getAuthHeaders(options?.headers || {});
 
   const response = await fetch(url, nextOptions);
-  const data = await response.json();
+  const responseText = await response.text();
+  let data = {};
+
+  if (responseText) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (error) {
+      throw new Error(getReadableResponseError(response.status, responseText));
+    }
+  }
 
   if (!response.ok) {
-    throw new Error(data.error || "Something went wrong.");
+    throw new Error(data.error || getReadableResponseError(response.status, responseText));
   }
 
   return data;

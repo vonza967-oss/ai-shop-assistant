@@ -63,6 +63,30 @@ export function createAgentRouter(deps = {}) {
     return `Vonza setup ${suffix}`;
   }
 
+  function requireAuthenticatedCheckoutUser(user) {
+    if (user?.id) {
+      return user;
+    }
+
+    const error = new Error("Your sign-in session expired. Please sign in again to open checkout.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  async function getCheckoutUser(supabase, req) {
+    try {
+      return requireAuthenticatedCheckoutUser(await authenticateUser(supabase, req));
+    } catch (error) {
+      if (error?.statusCode === 401) {
+        const authError = new Error("Your sign-in session expired. Please sign in again to open checkout.");
+        authError.statusCode = 401;
+        throw authError;
+      }
+
+      throw error;
+    }
+  }
+
   function ensureAdminAccess(req) {
     const configuredToken = process.env.ADMIN_TOKEN;
 
@@ -463,7 +487,7 @@ export function createAgentRouter(deps = {}) {
   router.post("/create-checkout-session", async (req, res) => {
     try {
       const supabase = getSupabase();
-      const user = await authenticateUser(supabase, req);
+      const user = await getCheckoutUser(supabase, req);
       const action = req.body.action || "create";
 
       if (action === "simulate") {
