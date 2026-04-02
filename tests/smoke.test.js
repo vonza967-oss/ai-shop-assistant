@@ -66,6 +66,131 @@ function createTestApp(agentDeps = {}) {
   return app;
 }
 
+function createFakeElement(id, options = {}) {
+  const attributes = new Map(Object.entries(options.attributes || {}));
+
+  return {
+    id,
+    hidden: false,
+    textContent: options.textContent || "",
+    dataset: {},
+    setAttribute(name, value) {
+      attributes.set(name, String(value));
+    },
+    getAttribute(name) {
+      return attributes.has(name) ? attributes.get(name) : null;
+    },
+  };
+}
+
+function createMarketingHarness(options = {}) {
+  const script = readFileSync(path.join(repoRoot, "frontend", "marketing.js"), "utf8");
+  const storedSession = options.storedSession || null;
+  const session = options.session === undefined ? storedSession : options.session;
+  const storage = new Map();
+  const authLink = createFakeElement("site-auth-link", {
+    textContent: "Sign in",
+    attributes: {
+      href: "/dashboard?from=site",
+      "data-app-link": "",
+    },
+  });
+  const primaryCta = createFakeElement("site-primary-cta", {
+    textContent: "Get started",
+    attributes: {
+      href: "/dashboard?from=site",
+      "data-app-link": "",
+    },
+  });
+  const footerAppLink = createFakeElement("footer-app-link", {
+    textContent: "App",
+    attributes: {
+      href: "/dashboard?from=site",
+      "data-app-link": "",
+    },
+  });
+  let authChangeHandler = null;
+
+  if (storedSession) {
+    storage.set("sb-example-auth-token", JSON.stringify(storedSession));
+  }
+
+  const document = {
+    getElementById(id) {
+      if (id === "site-auth-link") return authLink;
+      if (id === "site-primary-cta") return primaryCta;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "[data-app-link]") {
+        return [authLink, primaryCta, footerAppLink];
+      }
+      return [];
+    },
+  };
+
+  const window = {
+    VONZA_SUPABASE_URL: "https://example.supabase.co",
+    VONZA_SUPABASE_ANON_KEY: "anon-key",
+    localStorage: {
+      getItem(key) {
+        return storage.has(key) ? storage.get(key) : null;
+      },
+      setItem(key, value) {
+        storage.set(key, String(value));
+      },
+      removeItem(key) {
+        storage.delete(key);
+      },
+    },
+    supabase: {
+      createClient() {
+        return {
+          auth: {
+            async getSession() {
+              return { data: { session } };
+            },
+            onAuthStateChange(callback) {
+              authChangeHandler = callback;
+              return {
+                data: {
+                  subscription: {
+                    unsubscribe() {},
+                  },
+                },
+              };
+            },
+          },
+        };
+      },
+    },
+  };
+
+  const context = {
+    window,
+    document,
+    console,
+    URL,
+    globalThis: null,
+  };
+  context.globalThis = context;
+
+  vm.runInNewContext(script, context, { filename: "frontend/marketing.js" });
+
+  return {
+    async settle() {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    authLink,
+    primaryCta,
+    footerAppLink,
+    triggerAuthChange(event, nextSession) {
+      authChangeHandler?.(event, nextSession);
+    },
+  };
+}
+
 async function withMutedConsoleError(fn) {
   const original = console.error;
   console.error = () => {};
@@ -830,6 +955,34 @@ test("checkout unlock failures surface a readable inline error instead of a sile
   assert.match(harness.getElement("checkout-feedback")?.textContent || "", /Bad gateway/i);
   assert.doesNotMatch(harness.getElement("checkout-feedback")?.textContent || "", /Unexpected token|JSON/i);
   assert.match(harness.getStatus(), /Bad gateway/i);
+});
+
+test("signed-out marketing header keeps the normal CTA", async () => {
+  const harness = createMarketingHarness({ storedSession: null, session: null });
+  await harness.settle();
+
+  assert.equal(harness.primaryCta.textContent, "Get started");
+  assert.equal(harness.primaryCta.getAttribute("href"), "/dashboard?from=site");
+  assert.equal(harness.authLink.hidden, false);
+  assert.equal(harness.footerAppLink.getAttribute("href"), "/dashboard?from=site");
+});
+
+test("signed-in marketing header hydrates My Account immediately from stored auth state", async () => {
+  const storedSession = {
+    access_token: "token-1",
+    refresh_token: "refresh-1",
+    user: {
+      id: "user-1",
+      email: "owner@example.com",
+    },
+  };
+  const harness = createMarketingHarness({ storedSession });
+  await harness.settle();
+
+  assert.equal(harness.primaryCta.textContent, "My Account");
+  assert.equal(harness.primaryCta.getAttribute("href"), "/dashboard");
+  assert.equal(harness.authLink.hidden, true);
+  assert.equal(harness.footerAppLink.getAttribute("href"), "/dashboard");
 });
 
 test("setup doctor is only available in local dev mode and never exposes values", { concurrency: false }, async () => {
