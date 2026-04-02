@@ -149,6 +149,44 @@ create index if not exists agent_follow_up_workflows_agent_owner_idx
 create index if not exists agent_follow_up_workflows_status_idx
   on public.agent_follow_up_workflows (status);
 
+create table if not exists public.agent_knowledge_fix_workflows (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  owner_user_id uuid,
+  dedupe_key text not null,
+  source_action_key text not null,
+  linked_action_keys text[] not null default '{}',
+  action_type text not null,
+  status text not null default 'draft',
+  target_type text not null default 'system_prompt',
+  target_label text,
+  topic text,
+  issue_key text,
+  issue_summary text,
+  matters_summary text,
+  proposed_guidance text,
+  last_generated_guidance text,
+  draft_edited_manually boolean not null default false,
+  evidence jsonb,
+  occurrence_count integer not null default 1,
+  source_hash text,
+  applied_guidance text,
+  applied_at timestamp with time zone,
+  dismissed_at timestamp with time zone,
+  last_error text,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists agent_knowledge_fix_workflows_agent_dedupe_idx
+  on public.agent_knowledge_fix_workflows (agent_id, owner_user_id, dedupe_key);
+
+create index if not exists agent_knowledge_fix_workflows_agent_owner_idx
+  on public.agent_knowledge_fix_workflows (agent_id, owner_user_id);
+
+create index if not exists agent_knowledge_fix_workflows_status_idx
+  on public.agent_knowledge_fix_workflows (status);
+
 create table if not exists public.product_events (
   id uuid primary key default gen_random_uuid(),
   client_id text not null,

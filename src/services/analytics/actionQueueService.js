@@ -10,6 +10,10 @@ const SUPPORTED_FOLLOW_UP_ACTION_TYPES = [
   "booking_intent",
   "repeat_high_intent_visitor",
 ];
+const SUPPORTED_KNOWLEDGE_FIX_ACTION_TYPES = [
+  "knowledge_gap",
+  "unanswered_question",
+];
 const ACTION_QUEUE_PERSISTENCE_COLUMNS = [
   "note",
   "outcome",
@@ -105,6 +109,10 @@ function isSupportedFollowUpActionType(value) {
   return SUPPORTED_FOLLOW_UP_ACTION_TYPES.includes(normalizeActionType(value));
 }
 
+function isSupportedKnowledgeFixActionType(value) {
+  return SUPPORTED_KNOWLEDGE_FIX_ACTION_TYPES.includes(normalizeActionType(value));
+}
+
 function buildActionType(interaction = {}) {
   switch (interaction.type) {
     case "contact":
@@ -187,6 +195,64 @@ function buildFollowUpWorkflowState(followUp = {}) {
   }
 }
 
+function buildKnowledgeFixWorkflowState(knowledgeFix = {}) {
+  const status = cleanText(knowledgeFix.status).toLowerCase();
+
+  switch (status) {
+    case "ready":
+      return {
+        key: "knowledge_fix_ready",
+        label: "Knowledge fix ready",
+        copy: cleanText(knowledgeFix.issueSummary)
+          ? `Prepared fix is ready to review: ${cleanText(knowledgeFix.issueSummary)}`
+          : "A prepared knowledge fix is ready for review.",
+        attention: true,
+        resolved: false,
+        rank: 0,
+      };
+    case "draft":
+      return {
+        key: "knowledge_fix_draft",
+        label: "Knowledge fix drafted",
+        copy: "A deterministic knowledge fix draft is waiting for owner review.",
+        attention: true,
+        resolved: false,
+        rank: 1,
+      };
+    case "failed":
+      return {
+        key: "knowledge_fix_failed",
+        label: "Knowledge fix failed",
+        copy: cleanText(knowledgeFix.lastError)
+          ? `Last failure: ${cleanText(knowledgeFix.lastError)}`
+          : "Applying this knowledge fix failed and still needs owner attention.",
+        attention: true,
+        resolved: false,
+        rank: 0,
+      };
+    case "applied":
+      return {
+        key: "knowledge_fix_applied",
+        label: "Knowledge fix applied",
+        copy: "This fix was applied to the assistant guidance and the queue item is resolved.",
+        attention: false,
+        resolved: true,
+        rank: 4,
+      };
+    case "dismissed":
+      return {
+        key: "knowledge_fix_dismissed",
+        label: "Dismissed",
+        copy: "This prepared knowledge fix was intentionally dismissed.",
+        attention: false,
+        resolved: false,
+        rank: 5,
+      };
+    default:
+      return null;
+  }
+}
+
 function hasOwnerHandoffContent(item = {}) {
   return Boolean(
     cleanText(item.note)
@@ -216,9 +282,14 @@ function isResolved(item = {}) {
 
 function buildOwnerWorkflow(item = {}) {
   const followUpWorkflow = buildFollowUpWorkflowState(item.followUp || {});
+  const knowledgeFixWorkflow = buildKnowledgeFixWorkflowState(item.knowledgeFix || {});
 
   if (followUpWorkflow) {
     return followUpWorkflow;
+  }
+
+  if (knowledgeFixWorkflow) {
+    return knowledgeFixWorkflow;
   }
 
   const status = normalizeStatus(item.status);
@@ -925,6 +996,7 @@ function buildRepeatHighIntentItems(people = [], persistedMap = new Map()) {
         type: "repeat_high_intent",
         actionType: "repeat_high_intent_visitor",
         followUpSupported: true,
+        knowledgeFixSupported: false,
         label: "Repeat high-intent visitor",
         status: persistedItem.status || "new",
         count: highIntentTimeline.length,
@@ -1292,6 +1364,7 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
         type: interaction.type,
         actionType: buildActionType(interaction),
         followUpSupported: isSupportedFollowUpActionType(buildActionType(interaction)),
+        knowledgeFixSupported: isSupportedKnowledgeFixActionType(buildActionType(interaction)),
         label: interaction.label,
         status: persistedItem.status || "new",
         count: 1,
@@ -1332,6 +1405,7 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
   const repeatHighIntentItems = buildRepeatHighIntentItems(preliminaryStitched.people, persistedMap);
   const items = [...baseItems, ...repeatHighIntentItems];
   const followUpsByActionKey = new Map();
+  const knowledgeFixesByActionKey = new Map();
 
   (Array.isArray(options.followUps) ? options.followUps : []).forEach((followUp) => {
     const linkedActionKeys = [
@@ -1348,6 +1422,21 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
     });
   });
 
+  (Array.isArray(options.knowledgeFixes) ? options.knowledgeFixes : []).forEach((knowledgeFix) => {
+    const linkedActionKeys = [
+      cleanText(knowledgeFix.sourceActionKey || knowledgeFix.source_action_key),
+      ...(Array.isArray(knowledgeFix.linkedActionKeys || knowledgeFix.linked_action_keys)
+        ? knowledgeFix.linkedActionKeys || knowledgeFix.linked_action_keys
+        : []),
+    ]
+      .map((actionKey) => cleanText(actionKey))
+      .filter(Boolean);
+
+    linkedActionKeys.forEach((actionKey) => {
+      knowledgeFixesByActionKey.set(actionKey, knowledgeFix);
+    });
+  });
+
   const sortedItems = items
     .sort((left, right) => {
       const rankDelta = (left.ownerWorkflow?.rank ?? 99) - (right.ownerWorkflow?.rank ?? 99);
@@ -1361,16 +1450,20 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
   const stitched = stitchPeople(interactions, sortedItems);
   const hydratedItems = stitched.items.map((item) => {
     const followUp = followUpsByActionKey.get(item.key) || null;
+    const knowledgeFix = knowledgeFixesByActionKey.get(item.key) || null;
     const ownerWorkflow = buildOwnerWorkflow({
       ...item,
       followUp,
+      knowledgeFix,
     });
 
     return {
       ...item,
       actionType: normalizeActionType(item.actionType) || "",
       followUpSupported: item.followUpSupported === true || isSupportedFollowUpActionType(item.actionType),
+      knowledgeFixSupported: item.knowledgeFixSupported === true || isSupportedKnowledgeFixActionType(item.actionType),
       followUp,
+      knowledgeFix,
       ownerWorkflow,
     };
   });
@@ -1384,6 +1477,8 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
     migrationRequired: options.persistenceAvailable === false,
     followUpWorkflowAvailable: options.followUpWorkflowAvailable !== false,
     followUpWorkflowMigrationRequired: options.followUpWorkflowAvailable === false,
+    knowledgeFixWorkflowAvailable: options.knowledgeFixWorkflowAvailable !== false,
+    knowledgeFixWorkflowMigrationRequired: options.knowledgeFixWorkflowAvailable === false,
   };
 }
 

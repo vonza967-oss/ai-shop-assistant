@@ -28,6 +28,10 @@ import {
   updateFollowUpWorkflow,
 } from "../services/followup/followUpService.js";
 import {
+  syncKnowledgeFixWorkflows,
+  updateKnowledgeFixWorkflow,
+} from "../services/knowledge/knowledgeFixService.js";
+import {
   createHostedCheckoutSession,
   constructStripeWebhookEvent,
   getStripeCheckoutConfigurationErrorMessage,
@@ -37,7 +41,10 @@ import {
   verifySuccessfulCheckout,
 } from "../services/billing/checkoutService.js";
 import { isLocalDevBillingRequestAllowed } from "../config/env.js";
-import { extractBusinessWebsiteContent } from "../services/scraping/websiteContentService.js";
+import {
+  extractBusinessWebsiteContent,
+  getStoredWebsiteContent,
+} from "../services/scraping/websiteContentService.js";
 
 export function createAgentRouter(deps = {}) {
   const router = express.Router();
@@ -53,10 +60,13 @@ export function createAgentRouter(deps = {}) {
   const updateActionQueueStatusImpl = deps.updateActionQueueStatus || updateActionQueueStatus;
   const syncFollowUpWorkflowsImpl = deps.syncFollowUpWorkflows || syncFollowUpWorkflows;
   const updateFollowUpWorkflowImpl = deps.updateFollowUpWorkflow || updateFollowUpWorkflow;
+  const syncKnowledgeFixWorkflowsImpl = deps.syncKnowledgeFixWorkflows || syncKnowledgeFixWorkflows;
+  const updateKnowledgeFixWorkflowImpl = deps.updateKnowledgeFixWorkflow || updateKnowledgeFixWorkflow;
   const updateAgentSettingsImpl = deps.updateAgentSettings || updateAgentSettings;
   const deleteAgentImpl = deps.deleteAgent || deleteAgent;
   const resolveAgentContextImpl = deps.resolveAgentContext || resolveAgentContext;
   const extractBusinessWebsiteContentImpl = deps.extractBusinessWebsiteContent || extractBusinessWebsiteContent;
+  const getStoredWebsiteContentImpl = deps.getStoredWebsiteContent || getStoredWebsiteContent;
   const updateOwnedAccessStatusImpl = deps.updateOwnedAccessStatus || updateOwnedAccessStatus;
   const createHostedCheckoutSessionImpl =
     deps.createHostedCheckoutSession || createHostedCheckoutSession;
@@ -366,18 +376,36 @@ export function createAgentRouter(deps = {}) {
       const preliminaryQueue = buildActionQueueImpl(messages, persistedRecords, {
         persistenceAvailable,
       });
-      const followUpSync = await syncFollowUpWorkflowsImpl(supabase, {
-        agentId,
-        ownerUserId: user?.id || null,
-        queueItems: preliminaryQueue.items || [],
-        agentProfile: {
+      const websiteContent = agentProfile?.businessId
+        ? await getStoredWebsiteContentImpl(supabase, agentProfile.businessId)
+        : null;
+      const [followUpSync, knowledgeFixSync] = await Promise.all([
+        syncFollowUpWorkflowsImpl(supabase, {
           agentId,
           ownerUserId: user?.id || null,
-          businessName: agentProfile?.name || "",
-          assistantName: agentProfile?.assistantName || agentProfile?.name || "",
-        },
-      });
-      const latestStatuses = followUpSync?.persistenceAvailable === false
+          queueItems: preliminaryQueue.items || [],
+          agentProfile: {
+            agentId,
+            ownerUserId: user?.id || null,
+            businessName: agentProfile?.name || "",
+            assistantName: agentProfile?.assistantName || agentProfile?.name || "",
+          },
+        }),
+        syncKnowledgeFixWorkflowsImpl(supabase, {
+          agentId,
+          ownerUserId: user?.id || null,
+          queueItems: preliminaryQueue.items || [],
+          agentProfile: {
+            agentId,
+            ownerUserId: user?.id || null,
+            systemPrompt: agentProfile?.systemPrompt || "",
+            websiteUrl: agentProfile?.websiteUrl || "",
+            knowledge: agentProfile?.knowledge || {},
+          },
+          websiteContent,
+        }),
+      ]);
+      const latestStatuses = followUpSync?.persistenceAvailable === false && knowledgeFixSync?.persistenceAvailable === false
         ? statuses
         : await listActionQueueStatusesImpl(supabase, {
           agentId,
@@ -392,7 +420,9 @@ export function createAgentRouter(deps = {}) {
         buildActionQueueImpl(messages, finalPersistedRecords, {
           persistenceAvailable: finalPersistenceAvailable,
           followUps: followUpSync?.records || [],
+          knowledgeFixes: knowledgeFixSync?.records || [],
           followUpWorkflowAvailable: followUpSync?.persistenceAvailable !== false,
+          knowledgeFixWorkflowAvailable: knowledgeFixSync?.persistenceAvailable !== false,
         })
       );
     } catch (err) {
@@ -492,6 +522,67 @@ export function createAgentRouter(deps = {}) {
               : result?.followUp?.status === "failed"
                 ? "Follow-up marked failed."
                 : "Follow-up saved.",
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/knowledge-fixes/update", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req).catch((error) => {
+        if (error.statusCode === 401) {
+          return null;
+        }
+        throw error;
+      });
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const agentListResult = await listAgentsImpl(supabase, {
+        ownerUserId: user?.id || null,
+        includeBridgeAgent: false,
+      });
+      const agentProfile = (agentListResult?.agents || []).find((candidate) => candidate.id === agentId) || null;
+      const result = await updateKnowledgeFixWorkflowImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        knowledgeFixId: req.body.knowledge_fix_id || req.body.knowledgeFixId,
+        status: req.body.status,
+        issueSummary: req.body.issue_summary ?? req.body.issueSummary,
+        mattersSummary: req.body.matters_summary ?? req.body.mattersSummary,
+        proposedGuidance: req.body.proposed_guidance ?? req.body.proposedGuidance,
+        errorMessage: req.body.error_message ?? req.body.errorMessage,
+        agentProfile: {
+          agentId,
+          systemPrompt: agentProfile?.systemPrompt || "",
+        },
+      });
+
+      res.json({
+        ok: true,
+        knowledgeFix: result?.knowledgeFix || null,
+        queueSync: result?.queueSync || null,
+        updatedAgent: result?.updatedAgent || null,
+        persistenceAvailable: result?.persistenceAvailable !== false,
+        message: result?.knowledgeFix?.status === "applied"
+          ? "Knowledge fix applied to advanced guidance."
+          : result?.knowledgeFix?.status === "dismissed"
+            ? "Knowledge fix dismissed."
+            : result?.knowledgeFix?.status === "ready"
+              ? "Knowledge fix marked ready."
+              : result?.knowledgeFix?.status === "failed"
+                ? "Knowledge fix marked failed."
+                : "Knowledge fix saved.",
       });
     } catch (err) {
       console.error(err);
