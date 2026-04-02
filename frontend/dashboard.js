@@ -50,9 +50,6 @@ let authUser = null;
 let authViewMode = AUTH_VIEW_MODES.SIGN_UP;
 let authFeedback = null;
 let authStateListenerBound = false;
-let activeWorkspaceState = null;
-const knowledgeImportStateByAgentId = new Map();
-const knowledgeImportPromiseByAgentId = new Map();
 
 function isDevFakeBillingEnabled() {
   return Boolean(window.VONZA_DEV_FAKE_BILLING);
@@ -531,35 +528,6 @@ function setStatus(message) {
   statusBanner.textContent = message || "";
 }
 
-function setCheckoutFeedback(message, state = "") {
-  const feedbackEl = document.getElementById("checkout-feedback");
-
-  if (!feedbackEl) {
-    return;
-  }
-
-  feedbackEl.textContent = message || "";
-  feedbackEl.dataset.state = state || "";
-}
-
-function getReadableResponseError(status, responseText) {
-  const cleanedText = trimText(String(responseText || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "));
-
-  if (cleanedText) {
-    return cleanedText;
-  }
-
-  if (status >= 500) {
-    return "The server could not complete that request right now. Please try again in a moment.";
-  }
-
-  if (status === 401) {
-    return "Your sign-in session expired. Please sign in again and retry.";
-  }
-
-  return `Request failed (${status}).`;
-}
-
 function buildScript(agentKey) {
   return `<script src="${getPublicAppUrl()}/embed.js" data-agent-key="${agentKey}"><\/script>`;
 }
@@ -595,33 +563,6 @@ function trimText(value) {
   return String(value || "").trim();
 }
 
-function normalizeComparableWebsiteUrl(value) {
-  const normalizedValue = trimText(value);
-
-  if (!normalizedValue) {
-    return "";
-  }
-
-  try {
-    const parsed = new URL(normalizedValue);
-    parsed.hash = "";
-    parsed.hostname = parsed.hostname.toLowerCase();
-
-    if (
-      (parsed.protocol === "https:" && parsed.port === "443") ||
-      (parsed.protocol === "http:" && parsed.port === "80")
-    ) {
-      parsed.port = "";
-    }
-
-    const normalizedPath = parsed.pathname.replace(/\/{2,}/g, "/");
-    parsed.pathname = normalizedPath === "/" ? "" : normalizedPath.replace(/\/+$/, "");
-    return parsed.toString();
-  } catch {
-    return normalizedValue.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
 function formatSeenAt(value) {
   if (!value) {
     return "";
@@ -642,34 +583,6 @@ function isMeaningfulWebsite(value) {
 }
 
 function classifyImportResult(result) {
-  const knowledge = result?.knowledge || result || {};
-
-  if (knowledge.state === "ready") {
-    return {
-      knowledgeState: "ready",
-      label: knowledge.label || "Ready",
-      description:
-        knowledge.description || "Your assistant has website knowledge and is ready to answer real customer questions.",
-      lastImportedUrl: knowledge.importedWebsiteUrl || result?.websiteUrl || "",
-      lastImportedAt: knowledge.updatedAt || result?.import?.lastImportedAt || null,
-      pageCount: Number(knowledge.pageCount || result?.pageCount || 0),
-      contentLength: Number(knowledge.contentLength || trimText(result?.content || "").length || 0),
-    };
-  }
-
-  if (knowledge.state === "limited") {
-    return {
-      knowledgeState: "limited",
-      label: knowledge.label || "Limited",
-      description:
-        knowledge.description || "Some website content was imported, but the assistant still needs a better knowledge pass.",
-      lastImportedUrl: knowledge.importedWebsiteUrl || result?.websiteUrl || "",
-      lastImportedAt: knowledge.updatedAt || result?.import?.lastImportedAt || null,
-      pageCount: Number(knowledge.pageCount || result?.pageCount || 0),
-      contentLength: Number(knowledge.contentLength || trimText(result?.content || "").length || 0),
-    };
-  }
-
   const content = trimText(result?.content || "");
 
   if (!content) {
@@ -677,10 +590,6 @@ function classifyImportResult(result) {
       knowledgeState: "missing",
       label: "Not ready",
       description: "Website knowledge is not available yet. Import it again once your site is live.",
-      lastImportedUrl: "",
-      lastImportedAt: null,
-      pageCount: 0,
-      contentLength: 0,
     };
   }
 
@@ -689,10 +598,6 @@ function classifyImportResult(result) {
       knowledgeState: "limited",
       label: "Limited",
       description: "Some website content was imported, but the assistant still needs a better knowledge pass.",
-      lastImportedUrl: trimText(result?.websiteUrl || ""),
-      lastImportedAt: result?.import?.lastImportedAt || null,
-      pageCount: Number(result?.pageCount || 0),
-      contentLength: content.length,
     };
   }
 
@@ -700,34 +605,7 @@ function classifyImportResult(result) {
     knowledgeState: "ready",
     label: "Ready",
     description: "Your assistant has website knowledge and is ready to answer real customer questions.",
-    lastImportedUrl: trimText(result?.websiteUrl || ""),
-    lastImportedAt: result?.import?.lastImportedAt || null,
-    pageCount: Number(result?.pageCount || 0),
-    contentLength: content.length,
   };
-}
-
-function getKnowledgeImportState(agentId) {
-  return knowledgeImportStateByAgentId.get(agentId) || null;
-}
-
-function setKnowledgeImportState(agentId, nextState) {
-  if (!agentId) {
-    return;
-  }
-
-  knowledgeImportStateByAgentId.set(agentId, {
-    ...(knowledgeImportStateByAgentId.get(agentId) || {}),
-    ...nextState,
-  });
-}
-
-function clearKnowledgeImportState(agentId) {
-  if (!agentId) {
-    return;
-  }
-
-  knowledgeImportStateByAgentId.delete(agentId);
 }
 
 function inferSetup(agent) {
@@ -736,80 +614,26 @@ function inferSetup(agent) {
     description: "Website knowledge has not been imported yet.",
     contentLength: 0,
     pageCount: 0,
-    importedWebsiteUrl: "",
-    updatedAt: null,
   };
-  const importState = getKnowledgeImportState(agent.id);
   const personalityReady = Boolean(trimText(agent.assistantName) && trimText(agent.welcomeMessage) && trimText(agent.tone));
   const hasWebsite = isMeaningfulWebsite(agent.websiteUrl);
-  const normalizedCurrentWebsite = normalizeComparableWebsiteUrl(agent.websiteUrl);
-  const normalizedImportedWebsite = normalizeComparableWebsiteUrl(knowledge.importedWebsiteUrl);
-  const hasImportedWebsite = Boolean(normalizedImportedWebsite);
-  const knowledgeStale = hasWebsite && hasImportedWebsite && normalizedImportedWebsite !== normalizedCurrentWebsite;
-  let knowledgeState = hasWebsite ? (knowledge.state || "missing") : "missing";
-  let knowledgeDescription = hasWebsite
-    ? (knowledge.description || "Website knowledge has not been imported yet.")
-    : "Add a real website to import knowledge.";
-  let knowledgeStatusLabel = knowledgeState === "ready"
-    ? "Ready"
-    : knowledgeState === "limited"
-      ? "Limited"
-      : "Not ready";
-
-  if (hasWebsite && knowledgeStale) {
-    knowledgeState = "stale";
-    knowledgeStatusLabel = "Needs refresh";
-    knowledgeDescription = "Your website URL changed. Import website knowledge again so Vonza answers from the latest site.";
-  }
-
-  if (importState?.status === "queued") {
-    knowledgeState = "queued";
-    knowledgeStatusLabel = "Queued";
-    knowledgeDescription = "Website saved. A fresh website knowledge import is queued for this URL.";
-  } else if (importState?.status === "importing") {
-    knowledgeState = "importing";
-    knowledgeStatusLabel = "Importing";
-    knowledgeDescription = "Vonza is importing website knowledge for the latest saved website URL.";
-  } else if (importState?.status === "failed") {
-    knowledgeState = "failed";
-    knowledgeStatusLabel = "Retry needed";
-    knowledgeDescription =
-      importState.errorMessage || "Website saved, but importing website knowledge failed. Retry the import when you're ready.";
-  }
-
+  const knowledgeState = hasWebsite ? (knowledge.state || "missing") : "missing";
   const previewReady = Boolean(trimText(agent.publicAgentKey));
   const installReady = previewReady;
-  const knowledgeLastImportedUrl = trimText(knowledge.importedWebsiteUrl || importState?.lastImportedUrl || "");
-  const knowledgeLastImportedAt = knowledge.updatedAt || importState?.lastImportedAt || null;
-  const knowledgeNeedsRetry = hasWebsite && ["missing", "limited", "stale", "failed"].includes(knowledgeState);
-  const knowledgeImportInProgress = knowledgeState === "queued" || knowledgeState === "importing";
 
   return {
     personalityReady,
     hasWebsite,
     websiteConnected: hasWebsite,
     knowledgeState,
-    knowledgeStatusLabel,
     knowledgeReady: knowledgeState === "ready",
     knowledgeLimited: knowledgeState === "limited",
     knowledgeMissing: knowledgeState === "missing",
-    knowledgeStale,
-    knowledgeFailed: knowledgeState === "failed",
-    knowledgeQueued: knowledgeState === "queued",
-    knowledgeImporting: knowledgeState === "importing",
-    knowledgeNeedsRetry,
-    knowledgeDescription,
+    knowledgeDescription: hasWebsite
+      ? (knowledge.description || "Website knowledge has not been imported yet.")
+      : "Add a real website to import knowledge.",
     knowledgePageCount: Number(knowledge.pageCount || 0),
     knowledgeContentLength: Number(knowledge.contentLength || 0),
-    knowledgeLastImportedUrl,
-    knowledgeLastImportedAt,
-    knowledgeImportActionLabel: knowledgeImportInProgress
-      ? "Importing website knowledge..."
-      : knowledgeNeedsRetry && (knowledgeState === "failed" || knowledgeState === "limited" || knowledgeState === "stale")
-        ? "Retry website import"
-        : "Import website knowledge",
-    showKnowledgeImportAction: hasWebsite && (knowledgeState !== "ready" || knowledgeImportInProgress),
-    disableKnowledgeImportAction: !hasWebsite || knowledgeImportInProgress,
     previewReady,
     installReady,
     isReady: personalityReady && hasWebsite && knowledgeState === "ready" && previewReady && installReady,
@@ -824,53 +648,6 @@ function getBadgeClass(type) {
     return "badge warning";
   }
   return "badge pending";
-}
-
-function getKnowledgeBadgeClass(setup) {
-  if (setup.knowledgeReady) {
-    return "badge success";
-  }
-
-  if (setup.knowledgeLimited || setup.knowledgeQueued || setup.knowledgeImporting) {
-    return "badge warning";
-  }
-
-  if (setup.knowledgeFailed || setup.knowledgeStale) {
-    return "badge pending";
-  }
-
-  return "badge pending";
-}
-
-function buildKnowledgeDetailMarkup(setup) {
-  const details = [];
-
-  details.push(`
-    <div class="overview-list-item">
-      <p class="overview-list-title">Import status</p>
-      <p class="overview-list-copy">${escapeHtml(setup.knowledgeStatusLabel)}</p>
-    </div>
-  `);
-
-  if (setup.knowledgeLastImportedUrl) {
-    details.push(`
-      <div class="overview-list-item">
-        <p class="overview-list-title">Last imported URL</p>
-        <p class="overview-list-copy">${escapeHtml(setup.knowledgeLastImportedUrl)}</p>
-      </div>
-    `);
-  }
-
-  if (setup.knowledgeLastImportedAt) {
-    details.push(`
-      <div class="overview-list-item">
-        <p class="overview-list-title">Last import time</p>
-        <p class="overview-list-copy">${escapeHtml(formatSeenAt(setup.knowledgeLastImportedAt))}</p>
-      </div>
-    `);
-  }
-
-  return details.join("");
 }
 
 function normalizeAccessStatus(value) {
@@ -988,7 +765,6 @@ function renderAccessLocked(agent) {
           ${showDevTools ? '<button id="setup-doctor-button" class="ghost-button" type="button">Check local setup</button>' : ""}
           <button id="locked-signout-button" class="ghost-button" type="button">Sign out</button>
         </div>
-        <p id="checkout-feedback" class="checkout-feedback" aria-live="polite"></p>
       </div>
       ${detailsMarkup}
       <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the setup workspace.</p>
@@ -1000,14 +776,9 @@ function renderAccessLocked(agent) {
     markHandoffSeen();
   }
 
-  document.getElementById("unlock-vonza-button")?.addEventListener("click", async (event) => {
-    const unlockButton = event.currentTarget;
-    let redirectStarted = false;
-
+  document.getElementById("unlock-vonza-button")?.addEventListener("click", async () => {
     try {
-      unlockButton.disabled = true;
       setStatus("Opening secure checkout...");
-      setCheckoutFeedback("Opening secure checkout...", "pending");
       const result = await fetchJson("/create-checkout-session", {
         method: "POST",
         headers: {
@@ -1022,17 +793,9 @@ function renderAccessLocked(agent) {
         throw new Error("Checkout is not available right now.");
       }
 
-      redirectStarted = true;
-      setCheckoutFeedback("Redirecting you to secure checkout...", "success");
       window.location.assign(result.url);
     } catch (error) {
-      const message = error.message || "We could not open checkout right now.";
-      setStatus(message);
-      setCheckoutFeedback(message, "error");
-    } finally {
-      if (!redirectStarted) {
-        unlockButton.disabled = false;
-      }
+      setStatus(error.message || "We could not open checkout right now.");
     }
   });
 
@@ -1621,6 +1384,7 @@ function buildOverviewPanel(agent, messages, setup, actionQueue) {
 }
 
 function buildCustomizePanel(agent, setup) {
+  const knowledgeActionLabel = setup.knowledgeState === "limited" ? "Retry website import" : "Import website knowledge";
   const behaviorSummary = buildBehaviorSummary(agent.tone, agent.systemPrompt);
 
   return `
@@ -1685,18 +1449,10 @@ function buildCustomizePanel(agent, setup) {
 
             <section class="studio-group">
               <h3 class="studio-group-title">Website knowledge</h3>
-              <p class="studio-group-copy">Vonza automatically refreshes website knowledge after a real website URL change, and this section shows whether the current website and imported knowledge are in sync.</p>
-              <div class="studio-summary-badge-row">
-                <span class="${getKnowledgeBadgeClass(setup)}">${escapeHtml(setup.knowledgeStatusLabel)}</span>
+              <p class="studio-group-copy">Run an import after adding or changing your website so Vonza can answer with the right context.</p>
+              <div class="inline-actions">
+                <button class="ghost-button" type="button" data-action="import-knowledge">${knowledgeActionLabel}</button>
               </div>
-              <div class="overview-list">
-                ${buildKnowledgeDetailMarkup(setup)}
-              </div>
-              ${setup.showKnowledgeImportAction ? `
-                <div class="inline-actions">
-                  <button class="ghost-button" type="button" data-action="import-knowledge" ${setup.disableKnowledgeImportAction ? "disabled" : ""}>${escapeHtml(setup.knowledgeImportActionLabel)}</button>
-                </div>
-              ` : ""}
               <p class="section-note">${escapeHtml(setup.knowledgeDescription)}</p>
             </section>
 
@@ -1867,6 +1623,8 @@ function buildAppearanceStudio(agent) {
 }
 
 function buildConfigurationStudio(agent, setup) {
+  const knowledgeActionLabel = setup.knowledgeState === "limited" ? "Retry website import" : "Import website knowledge";
+
   return `
     <section class="workspace-panel" data-shell-section="configuration" hidden>
       <div class="workspace-panel-header">
@@ -1923,17 +1681,9 @@ function buildConfigurationStudio(agent, setup) {
                 <p class="field-help">Use the main public website your customers actually visit.</p>
               </div>
             </div>
-            <div class="studio-summary-badge-row">
-              <span class="${getKnowledgeBadgeClass(setup)}">${escapeHtml(setup.knowledgeStatusLabel)}</span>
+            <div class="inline-actions">
+              <button class="ghost-button" type="button" data-action="import-knowledge">${knowledgeActionLabel}</button>
             </div>
-            <div class="overview-list">
-              ${buildKnowledgeDetailMarkup(setup)}
-            </div>
-            ${setup.showKnowledgeImportAction ? `
-              <div class="inline-actions">
-                <button class="ghost-button" type="button" data-action="import-knowledge" ${setup.disableKnowledgeImportAction ? "disabled" : ""}>${escapeHtml(setup.knowledgeImportActionLabel)}</button>
-              </div>
-            ` : ""}
             <p class="section-note">${escapeHtml(setup.knowledgeDescription)}</p>
           </section>
 
@@ -2380,7 +2130,6 @@ function createEmptyActionQueue() {
     },
     summary: {
       total: 0,
-      open: 0,
       new: 0,
       reviewed: 0,
       done: 0,
@@ -2389,35 +2138,11 @@ function createEmptyActionQueue() {
       followUpCompleted: 0,
       resolved: 0,
       attentionNeeded: 0,
-      highPriority: 0,
-      leadFollowUp: 0,
-      pricingInterest: 0,
-      bookingIntent: 0,
-      unansweredQuestion: 0,
-      knowledgeGap: 0,
-      repeatHighIntentVisitor: 0,
     },
     persistenceAvailable: true,
     migrationRequired: false,
-    loadError: "",
-  };
-}
-
-function hydrateActionQueueState(data = {}) {
-  return {
-    items: Array.isArray(data.items) ? data.items : [],
-    people: Array.isArray(data.people) ? data.people : [],
-    peopleSummary: {
-      ...createEmptyActionQueue().peopleSummary,
-      ...(data.peopleSummary || {}),
-    },
-    summary: {
-      ...createEmptyActionQueue().summary,
-      ...(data.summary || {}),
-    },
-    persistenceAvailable: data.persistenceAvailable !== false,
-    migrationRequired: data.migrationRequired === true,
-    loadError: trimText(data.loadError),
+    followUpWorkflowAvailable: true,
+    followUpWorkflowMigrationRequired: false,
   };
 }
 
@@ -2641,88 +2366,92 @@ function formatActionQueueContact(item) {
 }
 
 function getActionQueueTypeLabel(type) {
-  switch (trimText(type)) {
+  if (type === "weak_answer") {
+    return "Weak answers";
+  }
+
+  if (type === "repeat_high_intent") {
+    return "Repeat visitor";
+  }
+
+  return getIntentLabel(type);
+}
+
+function getOperatorActionTypeLabel(item = {}) {
+  switch (trimText(item.actionType).toLowerCase()) {
     case "lead_follow_up":
       return "Lead follow-up";
     case "pricing_interest":
       return "Pricing interest";
     case "booking_intent":
       return "Booking intent";
-    case "knowledge_gap":
-      return "Knowledge gap";
     case "repeat_high_intent_visitor":
       return "Repeat high-intent visitor";
+    case "knowledge_gap":
+      return "Knowledge gap";
     case "unanswered_question":
       return "Unanswered question";
     default:
-      if (type === "weak_answer") {
-        return "Weak answers";
-      }
-      return getIntentLabel(type);
+      return getActionQueueTypeLabel(item.type);
   }
 }
 
-function getActionQueuePriorityLabel(priority) {
-  const normalized = trimText(priority).toLowerCase();
+function getFollowUpStatusLabel(value) {
+  const normalized = trimText(value).toLowerCase();
 
-  if (normalized === "high") {
-    return "High priority";
+  switch (normalized) {
+    case "draft":
+      return "Draft";
+    case "ready":
+      return "Ready";
+    case "sent":
+      return "Sent";
+    case "failed":
+      return "Failed";
+    case "dismissed":
+      return "Dismissed";
+    case "missing_contact":
+      return "Missing contact";
+    default:
+      return "Not prepared";
   }
-
-  if (normalized === "medium") {
-    return "Medium priority";
-  }
-
-  return "Low priority";
 }
 
-function getActionQueuePriorityBadgeClass(priority) {
-  const normalized = trimText(priority).toLowerCase();
+function getFollowUpStatusBadgeClass(value) {
+  const normalized = trimText(value).toLowerCase();
 
-  if (normalized === "high") {
+  if (normalized === "sent") {
+    return "badge success";
+  }
+
+  if (normalized === "dismissed") {
+    return "pill";
+  }
+
+  if (normalized === "failed" || normalized === "missing_contact") {
     return "badge pending";
   }
 
-  if (normalized === "medium") {
+  if (normalized === "ready") {
     return "badge warning";
   }
 
-  return "pill";
+  return "badge pending";
 }
 
-function formatActionQueueEvidence(item = {}) {
-  const evidence = item.evidence || {};
-  const snippets = [];
+function formatFollowUpChannel(value) {
+  const normalized = trimText(value).toLowerCase();
 
-  if (Number(evidence.interactionCount || item.count || 0) > 1) {
-    snippets.push(`${Number(evidence.interactionCount || item.count || 0)} related conversations`);
+  switch (normalized) {
+    case "email":
+      return "Email";
+    case "phone":
+      return "Phone / text";
+    case "manual":
+      return "Manual";
+    default:
+      return "Not set";
   }
-
-  if (Array.isArray(evidence.intents) && evidence.intents.length) {
-    snippets.push(evidence.intents.map((intent) => getIntentLabel(intent)).join(" · "));
-  }
-
-  if (evidence.contactCaptured) {
-    snippets.push("Contact details captured");
-  }
-
-  if (evidence.repeatedQuestion) {
-    snippets.push("Repeated question pattern");
-  }
-
-  if (Number(evidence.weakAnswerCount || 0) > 0) {
-    snippets.push(`${evidence.weakAnswerCount} weak answer signal${Number(evidence.weakAnswerCount) === 1 ? "" : "s"}`);
-  }
-
-  if (Number(evidence.unresolvedCount || 0) > 0) {
-    snippets.push(`${evidence.unresolvedCount} unanswered`);
-  }
-
-  if (!snippets.length) {
-    return "No extra evidence captured yet.";
-  }
-
-  return snippets.join(" · ");
 }
 
 function buildActionQueueSummaryPills(summary = {}) {
@@ -2733,10 +2462,9 @@ function buildActionQueueSummaryPills(summary = {}) {
 
   return [
     `${counts.total} total`,
-    `${counts.open} open`,
     `${counts.attentionNeeded} need attention`,
     `${counts.followUpNeeded} follow-up needed`,
-    `${counts.highPriority} high priority`,
+    `${counts.resolved} resolved`,
   ];
 }
 
@@ -2889,15 +2617,17 @@ function buildPeopleMarkup(actionQueue = createEmptyActionQueue()) {
 }
 
 function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), options = {}) {
-  const queueState = hydrateActionQueueState(actionQueue);
-  const items = Array.isArray(queueState.items) ? queueState.items : [];
+  const items = Array.isArray(actionQueue.items) ? actionQueue.items : [];
   const summary = {
     ...createEmptyActionQueue().summary,
-    ...(queueState.summary || {}),
+    ...(actionQueue.summary || {}),
   };
-  const loadError = trimText(queueState.loadError);
+  const persistenceAvailable = actionQueue.persistenceAvailable !== false;
+  const migrationRequired = actionQueue.migrationRequired === true;
+  const followUpWorkflowAvailable = actionQueue.followUpWorkflowAvailable !== false;
+  const followUpWorkflowMigrationRequired = actionQueue.followUpWorkflowMigrationRequired === true;
   const compact = Boolean(options.compact);
-  const allowStatusUpdates = options.allowStatusUpdates !== false && !loadError;
+  const allowStatusUpdates = options.allowStatusUpdates !== false && persistenceAvailable;
   const visibleItems = compact ? items.slice(0, 3) : items;
   const sectionTitle = compact ? "Action queue feed" : "Action queue";
   const sectionCopy = compact
@@ -2936,29 +2666,69 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
     const personThreadLabel = item.person?.relatedInteractionCount > 1
       ? `${item.person.label || "Returning visitor"} · ${item.person.relatedInteractionCount} interactions`
       : "";
-    const quickActions = [];
-
-    if (allowStatusUpdates && normalizeActionQueueStatus(item.status) !== "reviewed") {
-      quickActions.push(`<button class="ghost-button" type="button" data-action-queue-quick-status="reviewed" data-action-key="${escapeHtml(item.key || "")}">Mark reviewed</button>`);
-    }
-
-    if (allowStatusUpdates && normalizeActionQueueStatus(item.status) !== "done") {
-      quickActions.push(`<button class="ghost-button" type="button" data-action-queue-quick-status="done" data-action-key="${escapeHtml(item.key || "")}">Mark done</button>`);
-    }
-
-    if (allowStatusUpdates && normalizeActionQueueStatus(item.status) !== "dismissed") {
-      quickActions.push(`<button class="ghost-button" type="button" data-action-queue-quick-status="dismissed" data-action-key="${escapeHtml(item.key || "")}">Dismiss</button>`);
-    }
-
-    quickActions.push(`<button class="ghost-button" type="button" data-shell-target="analytics">Open related conversation</button>`);
-
-    if (item.type === "knowledge_gap" || item.type === "unanswered_question") {
-      quickActions.push(`<button class="ghost-button" type="button" data-shell-target="customize">Jump to Customize</button>`);
-    }
-
-    if (item.contactCaptured) {
-      quickActions.push(`<button class="ghost-button" type="button" data-action-queue-open-handoff data-action-key="${escapeHtml(item.key || "")}">Open follow-up</button>`);
-    }
+    const followUp = item.followUp && typeof item.followUp === "object" ? item.followUp : null;
+    const followUpStatus = trimText(followUp?.status).toLowerCase();
+    const followUpSupported = item.followUpSupported === true;
+    const followUpActionsDisabled = !allowStatusUpdates || !followUpWorkflowAvailable || !followUp?.id;
+    const followUpNeedsContact = followUpStatus === "missing_contact";
+    const followUpReadOnly = followUpStatus === "sent" || followUpStatus === "dismissed";
+    const toggleOpenLabel = item.note || item.outcome || item.nextStep || item.contactStatus
+      ? "Edit owner handoff"
+      : "Open owner handoff";
+    const followUpSummary = followUpSupported
+      ? `
+        ${followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up is read-only until the workflow migration is applied. Run db/agent_follow_up_workflows.sql before using this live.</div>` : ""}
+        ${followUp ? `
+          <form class="action-queue-follow-up-form" data-follow-up-form data-follow-up-id="${escapeHtml(followUp.id || "")}" data-action-key="${escapeHtml(item.key || "")}">
+            <div class="action-queue-handoff-summary">
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Operator action</span>
+                <strong class="action-queue-detail-value">${escapeHtml(getOperatorActionTypeLabel(item))}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Follow-up status</span>
+                <strong class="action-queue-detail-value">${escapeHtml(getFollowUpStatusLabel(followUp.status))}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Channel</span>
+                <strong class="action-queue-detail-value">${escapeHtml(formatFollowUpChannel(followUp.channel))}</strong>
+              </div>
+              <div class="action-queue-handoff-item">
+                <span class="action-queue-detail-label">Why this was prepared</span>
+                <strong class="action-queue-detail-value">${escapeHtml(followUp.whyPrepared || item.whyFlagged || "Prepared from this queue item.")}</strong>
+              </div>
+            </div>
+            <div class="action-queue-secondary-action">
+              ${item.messageId ? `<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(item.messageId)}">Open related conversation</button>` : ""}
+              <button class="ghost-button" type="button" data-copy-follow-up ${trimText(followUp.draftContent) ? "" : "disabled"}>Copy draft</button>
+            </div>
+            <div class="form-grid two-col">
+              <div class="field">
+                <label for="follow-up-subject-${escapeHtml(item.key || "")}">Subject</label>
+                <input id="follow-up-subject-${escapeHtml(item.key || "")}" name="subject" type="text" value="${escapeHtml(followUp.subject || "")}" ${followUpActionsDisabled || followUpReadOnly ? "disabled" : ""}>
+              </div>
+              <div class="field">
+                <label for="follow-up-status-${escapeHtml(item.key || "")}">Current status</label>
+                <input id="follow-up-status-${escapeHtml(item.key || "")}" type="text" value="${escapeHtml(getFollowUpStatusLabel(followUp.status))}" disabled>
+                <p class="field-help">${escapeHtml(followUpNeedsContact ? "No sendable contact is stored yet. Keep the draft context, review the conversation, and wait for contact capture." : followUpStatus === "sent" ? "This follow-up is resolved unless you deliberately reopen it." : "Mark sent after you send this outreach outside Vonza." )}</p>
+              </div>
+            </div>
+            <div class="field">
+              <label for="follow-up-draft-${escapeHtml(item.key || "")}">Draft</label>
+              <textarea id="follow-up-draft-${escapeHtml(item.key || "")}" name="draft_content" ${followUpActionsDisabled || followUpReadOnly ? "disabled" : ""}>${escapeHtml(followUp.draftContent || "")}</textarea>
+            </div>
+            ${followUp.lastError ? `<p class="action-queue-copy">${escapeHtml(`Last failure: ${followUp.lastError}`)}</p>` : ""}
+            <div class="action-queue-form-actions">
+              <button class="primary-button" type="submit" ${followUpActionsDisabled || followUpReadOnly ? "disabled" : ""}>Save draft</button>
+              <button class="ghost-button" type="button" data-follow-up-status-action data-next-status="ready" ${followUpActionsDisabled || followUpNeedsContact || followUpReadOnly ? "disabled" : ""}>Mark ready</button>
+              <button class="ghost-button" type="button" data-follow-up-status-action data-next-status="sent" ${followUpActionsDisabled || followUpNeedsContact || followUpReadOnly ? "disabled" : ""}>Mark sent</button>
+              <button class="ghost-button" type="button" data-follow-up-status-action data-next-status="dismissed" ${followUpActionsDisabled || followUpStatus === "sent" ? "disabled" : ""}>Dismiss</button>
+              <span class="action-queue-meta-inline">${escapeHtml(followUpNeedsContact ? "Vonza kept the draft context but blocked sending until contact capture exists." : "This draft stays deterministic and grounded in the captured conversation context.")}</span>
+            </div>
+          </form>
+        ` : `<div class="placeholder-card">Vonza will prepare a follow-up workflow for this queue item as soon as the server bridge syncs it.</div>`}
+      `
+      : "";
 
     return `
     <article
@@ -2971,15 +2741,15 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       <div class="action-queue-item-top">
         <div class="action-queue-headline">
           <div class="action-queue-badges">
-            <span class="pill">${escapeHtml(getActionQueueTypeLabel(item.type))}</span>
-            <span class="${getActionQueuePriorityBadgeClass(item.priority)}">${escapeHtml(getActionQueuePriorityLabel(item.priority))}</span>
+            <span class="pill">${escapeHtml(getOperatorActionTypeLabel(item))}</span>
             <span class="${getActionQueueStatusBadgeClass(item.status)}">${escapeHtml(getActionQueueStatusLabel(item.status))}</span>
             <span class="${getActionQueueOwnerWorkflowBadgeClass(item)}">${escapeHtml(workflow.label)}</span>
+            ${followUp ? `<span class="${getFollowUpStatusBadgeClass(followUp.status)}">${escapeHtml(getFollowUpStatusLabel(followUp.status))}</span>` : ""}
             <span class="pill">${escapeHtml(`${item.count || 0} conversation${item.count === 1 ? "" : "s"}`)}</span>
             ${personThreadLabel ? `<span class="pill">${escapeHtml(personThreadLabel)}</span>` : ""}
           </div>
           <h4 class="action-queue-title">${escapeHtml(item.label || getActionQueueTypeLabel(item.type))}</h4>
-          <p class="action-queue-copy">${escapeHtml(item.operatorSummary || item.whyFlagged || "Flagged from recent conversation activity.")}</p>
+          <p class="action-queue-copy">${escapeHtml(item.whyFlagged || "Flagged from recent conversation activity.")}</p>
         </div>
         ${allowStatusUpdates ? `
           <label class="action-queue-control">
@@ -2998,30 +2768,20 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       </div>
       <div class="action-queue-details">
         <div class="action-queue-detail">
-          <span class="action-queue-detail-label">What happened</span>
-          <strong class="action-queue-detail-value">${escapeHtml(item.operatorSummary || item.snippet || "No customer question stored yet.")}</strong>
-          <p class="action-queue-copy">${escapeHtml(item.snippet || "No customer question stored yet.")}</p>
+          <span class="action-queue-detail-label">Conversation summary</span>
+          <strong class="action-queue-detail-value">${escapeHtml(item.snippet || "No customer question stored yet.")}</strong>
         </div>
         <div class="action-queue-detail">
-          <span class="action-queue-detail-label">Why it matters</span>
+          <span class="action-queue-detail-label">Why it was flagged</span>
           <strong class="action-queue-detail-value">${escapeHtml(item.whyFlagged || "Flagged from recent conversation activity.")}</strong>
         </div>
         <div class="action-queue-detail">
-          <span class="action-queue-detail-label">What to do next</span>
-          <strong class="action-queue-detail-value">${escapeHtml(item.recommendedAction || item.suggestedAction || "Review the conversation pattern and improve the assistant or website flow.")}</strong>
-        </div>
-        <div class="action-queue-detail">
-          <span class="action-queue-detail-label">Evidence</span>
-          <strong class="action-queue-detail-value">${escapeHtml(formatActionQueueEvidence(item))}</strong>
-          <p class="action-queue-copy">${escapeHtml((item.evidence?.questionExamples || []).slice(0, 2).join(" • ") || "No example questions stored yet.")}</p>
+          <span class="action-queue-detail-label">Operator action</span>
+          <strong class="action-queue-detail-value">${escapeHtml(getOperatorActionTypeLabel(item))}</strong>
         </div>
         <div class="action-queue-detail">
           <span class="action-queue-detail-label">Contact</span>
           <strong class="action-queue-detail-value">${escapeHtml(formatActionQueueContact(item))}</strong>
-        </div>
-        <div class="action-queue-detail">
-          <span class="action-queue-detail-label">Related conversation</span>
-          <strong class="action-queue-detail-value">${escapeHtml(item.relatedConversationId || "Recent signal")}</strong>
         </div>
         <div class="action-queue-detail">
           <span class="action-queue-detail-label">Visitor thread</span>
@@ -3034,14 +2794,18 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
           <p class="action-queue-copy">${escapeHtml(workflow.copy)}</p>
         </div>
         <div class="action-queue-detail">
+          <span class="action-queue-detail-label">Suggested next action</span>
+          <strong class="action-queue-detail-value">${escapeHtml(item.suggestedAction || "Review the conversation pattern and improve the assistant or website flow.")}</strong>
+        </div>
+        <div class="action-queue-detail">
           <span class="action-queue-detail-label">Recency</span>
           <strong class="action-queue-detail-value">${escapeHtml(recencyLabel)}</strong>
         </div>
       </div>
       ${allowStatusUpdates ? `<p class="action-queue-meta-inline">${escapeHtml(metaLine)}</p>` : ""}
-      ${compact ? "" : `<div class="action-queue-secondary-action">${quickActions.join("")}</div>`}
       ${compact ? "" : `
         <div class="action-queue-handoff">
+          ${followUpSummary}
           <div class="action-queue-handoff-summary">
             <div class="action-queue-handoff-item">
               <span class="action-queue-detail-label">Owner note</span>
@@ -3074,10 +2838,10 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
               type="button"
               data-action-queue-toggle
               data-action-key="${escapeHtml(item.key || "")}"
-              data-open-label="${escapeHtml(item.note || item.outcome || item.nextStep || item.contactStatus ? "Edit owner handoff" : "Open owner handoff")}"
+              data-open-label="${escapeHtml(toggleOpenLabel)}"
               data-close-label="Hide owner handoff"
             >
-              ${handoffOpenByDefault ? "Hide owner handoff" : escapeHtml(item.note || item.outcome || item.nextStep || item.contactStatus ? "Edit owner handoff" : "Open owner handoff")}
+              ${handoffOpenByDefault ? "Hide owner handoff" : escapeHtml(toggleOpenLabel)}
             </button>
           </div>
           <form class="action-queue-form" data-action-queue-form data-action-key="${escapeHtml(item.key || "")}" ${handoffOpenByDefault ? "" : "hidden"}>
@@ -3124,7 +2888,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             </div>
             <div class="action-queue-form-actions">
               <button class="primary-button" type="submit" ${allowStatusUpdates ? "" : "disabled"}>Save owner handoff</button>
-              <span class="action-queue-meta-inline">${escapeHtml(loadError ? "Action queue updates are temporarily unavailable. Please try again after the queue loads cleanly." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
+              <span class="action-queue-meta-inline">${escapeHtml(migrationRequired ? "Apply the action queue migration before follow-up can be saved." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
             </div>
           </form>
         </div>
@@ -3146,7 +2910,8 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
           `).join("")}
         </div>
       </div>
-      ${loadError ? `<div class="placeholder-card">Action queue data is temporarily unavailable. ${escapeHtml(loadError)}</div>` : ""}
+      ${migrationRequired ? `<div class="placeholder-card">Action queue follow-up is currently read-only because the database migration for persistent queue fields is not applied yet. Apply db/action_queue_statuses.sql before using this operational handoff live.</div>` : ""}
+      ${!migrationRequired && followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up workflows are read-only because the workflow migration is not applied yet. Apply db/agent_follow_up_workflows.sql before using outbound follow-up from the queue.</div>` : ""}
       ${visibleItems.length ? `
         ${compact ? `
           <div class="action-queue-secondary-action">
@@ -3158,12 +2923,12 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
               <span class="action-queue-filter-label">Filter by type</span>
               <select data-action-queue-filter-type>
                 <option value="all">All types</option>
-                <option value="lead_follow_up">Lead follow-up</option>
-                <option value="pricing_interest">Pricing interest</option>
-                <option value="booking_intent">Booking intent</option>
-                <option value="unanswered_question">Unanswered question</option>
-                <option value="knowledge_gap">Knowledge gap</option>
-                <option value="repeat_high_intent_visitor">Repeat high-intent visitor</option>
+                <option value="contact">Lead / contact</option>
+                <option value="booking">Booking</option>
+                <option value="pricing">Pricing / purchase</option>
+                <option value="repeat_high_intent">Repeat high intent</option>
+                <option value="support">Support / complaint</option>
+                <option value="weak_answer">Weak answers</option>
               </select>
             </label>
             <label class="action-queue-filter">
@@ -3187,7 +2952,6 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
 }
 
 function buildOverviewState(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
-  const queueLoadError = trimText(actionQueue.loadError);
   const installStatus = agent.installStatus || {
     state: "not_detected",
     label: "Not detected on a live site yet",
@@ -3229,7 +2993,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       });
     }
   } else if (installStatus.state === "live") {
-    if (!queueLoadError && queueSummary.attentionNeeded > 0) {
+    if (queueSummary.attentionNeeded > 0) {
       title = `Your assistant is live and ${queueSummary.attentionNeeded} follow-up item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
       copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations that deserve owner follow-up or a stronger answer path.`;
       primaryAction = {
@@ -3242,14 +3006,6 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "section",
         value: "analytics",
       });
-    } else if (queueLoadError) {
-      title = "Your assistant is live, but action queue data is temporarily unavailable";
-      copy = `Vonza is live on ${installStatus.host || "your site"}, but the action queue could not be loaded just now.`;
-      primaryAction = {
-        label: "Review analytics",
-        type: "section",
-        value: "analytics",
-      };
     } else if (signals.weakAnswerCount > 0) {
       title = "Your assistant is live, and a few answers need strengthening";
       copy = `Vonza is active on ${installStatus.host || "your site"}, and some real customer questions are showing where the assistant still needs help.`;
@@ -3337,13 +3093,8 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       nextActions.unshift(primaryAction);
     }
     primaryAction = {
-      label: setup.knowledgeImporting || setup.knowledgeQueued
-        ? "Importing website knowledge"
-        : setup.knowledgeNeedsRetry
-          ? "Strengthen website knowledge"
-          : "Import website knowledge",
+      label: "Strengthen website knowledge",
       type: "import",
-      disabled: setup.disableKnowledgeImportAction,
     };
   }
 
@@ -3355,19 +3106,10 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     },
     {
       title: "Assistant setup",
-      copy: setup.personalityReady
-        ? "The assistant has the core identity and welcome details it needs."
-        : "The assistant still needs a few core details before launch.",
-      done: setup.personalityReady,
-    },
-    {
-      title: "Website knowledge",
-      copy: setup.knowledgeReady
-        ? "Vonza has fresh knowledge for the current website."
-        : setup.knowledgeQueued || setup.knowledgeImporting
-          ? "Vonza is importing the latest saved website now."
-          : setup.knowledgeDescription,
-      done: setup.knowledgeReady,
+      copy: setup.isReady
+        ? "The assistant has the core details it needs."
+        : "The assistant still needs a few setup details before launch.",
+      done: setup.isReady,
     },
     {
       title: "Website install",
@@ -3429,7 +3171,6 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     signals,
     queueSummary,
     peopleSummary,
-    queueLoadError,
     cards,
     primaryAction,
     nextActions: nextActions.slice(0, 2),
@@ -3460,8 +3201,6 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       : "No usage yet";
   const recommendationTitle = !setup.knowledgeReady
     ? "Strengthen website knowledge"
-    : overview.queueLoadError
-      ? "Reload action queue"
     : overview.installStatus.state !== "live"
       ? "Finish live install"
       : overview.queueSummary.attentionNeeded > 0
@@ -3475,8 +3214,6 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           : "Keep learning from live usage";
   const recommendationCopy = !setup.knowledgeReady
     ? "Run another website import so the assistant can answer with stronger business context."
-    : overview.queueLoadError
-      ? "The action queue could not be loaded right now, so queue counts and owner attention cards may be temporarily unavailable. Refresh the workspace and try again."
     : overview.installStatus.state !== "live"
       ? "Place Vonza on the live site so it can start detecting real visitor behavior and customer intent."
       : overview.queueSummary.attentionNeeded > 0
@@ -3496,14 +3233,12 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       </div>
     `).join("")
     : `<div class="placeholder-card">No weak-answer signal yet. Once customers ask questions that Vonza struggles to answer, they will show up here instead of being hidden behind a fake success state.</div>`;
-  const attentionMarkup = overview.queueLoadError
-    ? `<div class="placeholder-card">Action queue data is temporarily unavailable. ${escapeHtml(overview.queueLoadError)}</div>`
-    : attentionItems.length
+  const attentionMarkup = attentionItems.length
     ? attentionItems.map((item) => {
       const workflow = getActionQueueOwnerWorkflow(item);
       const nextLine = trimText(item.nextStep)
         ? `Next step: ${trimText(item.nextStep)}`
-        : (item.recommendedAction || item.suggestedAction || workflow.copy);
+        : workflow.copy;
       const recencyLine = item.lastSeenAt ? `Flagged ${formatSeenAt(item.lastSeenAt)}` : "Recent signal";
 
       return `
@@ -3529,7 +3264,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
     }
 
     if (action.type === "import") {
-      return `<button class="${buttonClass}" type="button" data-action="import-knowledge" ${action.disabled ? "disabled" : ""}>${action.label}</button>`;
+      return `<button class="${buttonClass}" type="button" data-action="import-knowledge">${action.label}</button>`;
     }
 
     if (action.type === "install") {
@@ -3555,28 +3290,24 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
             <div class="overview-metric-value">${escapeHtml(overview.installStatus.state === "live" ? overview.installStatus.host || "Live" : overview.installStatus.state === "test" ? "Preview only" : "Not live")}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Open actions</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.open || 0))}</div>
+            <div class="overview-metric-label">Visitor questions</div>
+            <div class="overview-metric-value">${escapeHtml(recentUsageValue)}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Follow-up needed</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.followUpNeeded || 0))}</div>
+            <div class="overview-metric-value">${overview.queueSummary.followUpNeeded || 0}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Answer gaps</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String((overview.queueSummary.unansweredQuestion || 0) + (overview.queueSummary.knowledgeGap || 0)))}</div>
+            <div class="overview-metric-label">Attention now</div>
+            <div class="overview-metric-value">${overview.queueSummary.attentionNeeded || 0}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Pricing interest</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.pricingInterest || 0))}</div>
+            <div class="overview-metric-label">Resolved items</div>
+            <div class="overview-metric-value">${overview.queueSummary.resolved || 0}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Booking intent</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.bookingIntent || 0))}</div>
-          </div>
-          <div class="overview-metric">
-            <div class="overview-metric-label">High priority</div>
-            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.highPriority || 0))}</div>
+            <div class="overview-metric-label">Returning people</div>
+            <div class="overview-metric-value">${overview.peopleSummary.returning || 0}</div>
           </div>
         </div>
         <div class="overview-action-row">
@@ -3617,19 +3348,13 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
         </section>
 
         <section class="overview-card">
-          <h3 class="overview-card-title">Operator insight snapshot</h3>
-          <p class="overview-card-copy">These are the business actions Vonza is surfacing right now from real visitor behavior.</p>
+          <h3 class="overview-card-title">Intent signals</h3>
+          <p class="overview-card-copy">A fast read on the kinds of conversations visitors are trying to have with the business.</p>
           <div class="overview-list">
-            ${[
-              { label: "Lead follow-up", value: overview.queueSummary.leadFollowUp || 0, copy: "Visitors who asked to be contacted and gave the business a direct follow-up path." },
-              { label: "Pricing interest", value: overview.queueSummary.pricingInterest || 0, copy: "Visitors asking for prices, quotes, or package clarity." },
-              { label: "Booking intent", value: overview.queueSummary.bookingIntent || 0, copy: "Visitors trying to schedule, book, or confirm availability." },
-              { label: "Answer gaps", value: (overview.queueSummary.unansweredQuestion || 0) + (overview.queueSummary.knowledgeGap || 0), copy: "Questions where the assistant still needs stronger business knowledge or guidance." },
-              { label: "Repeat high-intent visitors", value: overview.queueSummary.repeatHighIntentVisitor || 0, copy: "Returning visitors showing the same strong commercial intent more than once." },
-            ].map((item) => `
+            ${["contact", "booking", "pricing", "support"].map((intent) => `
               <div class="overview-list-item">
-                <p class="overview-list-title">${escapeHtml(`${item.label}: ${item.value}`)}</p>
-                <p class="overview-list-copy">${escapeHtml(item.copy)}</p>
+                <p class="overview-list-title">${escapeHtml(`${getIntentLabel(intent)}: ${overview.signals.intentCounts[intent] || 0}`)}</p>
+                <p class="overview-list-copy">${escapeHtml(getIntentDescription(intent))}</p>
               </div>
             `).join("")}
           </div>
@@ -3656,10 +3381,6 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
   const { intentCounts } = signals;
   const activity = getActivityLevel(agent.messageCount || messages.length || 0, agent.lastMessageAt);
   const recentInteractions = messages.slice(0, 12);
-  const queueSummary = {
-    ...createEmptyActionQueue().summary,
-    ...(actionQueue.summary || {}),
-  };
   const peopleSummary = {
     ...createEmptyActionQueue().peopleSummary,
     ...(actionQueue.peopleSummary || {}),
@@ -3692,34 +3413,34 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     });
   }
 
-  if (queueSummary.pricingInterest >= 1) {
+  if (intentCounts.pricing >= 2) {
     opportunityItems.push({
       title: "Customers ask about pricing",
-      copy: `${queueSummary.pricingInterest} pricing-focused action item${queueSummary.pricingInterest === 1 ? "" : "s"} are open right now.`,
+      copy: "Pricing questions are coming up more than once, which usually means visitors want clearer guidance before reaching out.",
       subtle: "Consider adding pricing context or quote guidance to your website copy.",
     });
   }
 
-  if (queueSummary.leadFollowUp >= 1 || queueSummary.bookingIntent >= 1) {
+  if (intentCounts.contact >= 2) {
     opportunityItems.push({
       title: "Customers want a next step",
-      copy: `${(queueSummary.leadFollowUp || 0) + (queueSummary.bookingIntent || 0)} action item${(queueSummary.leadFollowUp || 0) + (queueSummary.bookingIntent || 0) === 1 ? "" : "s"} are asking for direct follow-up or booking clarity.`,
-      subtle: "Make your contact and booking path easier to find on the site and in the assistant responses.",
+      copy: "Contact-focused questions are appearing repeatedly, which suggests visitors are ready to move forward.",
+      subtle: "Make your contact route easier to find on the site and in the assistant responses.",
     });
   }
 
-  if ((queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0) > 0) {
+  if (signals.weakAnswerCount > 0) {
     opportunityItems.unshift({
       title: "Weak answers need review",
-      copy: `${(queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0)} operator action${(queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0) === 1 ? "" : "s"} show missing answer paths or knowledge gaps.`,
+      copy: `${signals.weakAnswerCount} customer question${signals.weakAnswerCount === 1 ? "" : "s"} ended in a weak or uncertain answer.`,
       subtle: "Review the weak-answer list below, then improve website knowledge or adjust the assistant setup.",
     });
   }
 
-  if ((queueSummary.repeatHighIntentVisitor || 0) > 0 || peopleSummary.returning > 0) {
+  if (peopleSummary.returning > 0) {
     opportunityItems.unshift({
       title: "Repeat visitors are showing up",
-      copy: `${queueSummary.repeatHighIntentVisitor || 0} repeat high-intent operator action${queueSummary.repeatHighIntentVisitor === 1 ? "" : "s"} and ${peopleSummary.returning} stitched visitor thread${peopleSummary.returning === 1 ? "" : "s"} already show returning behavior.`,
+      copy: `${peopleSummary.returning} stitched visitor thread${peopleSummary.returning === 1 ? "" : "s"} already show returning behavior.`,
       subtle: "Use the People view to see whether the same lead came back or the same support issue kept evolving.",
     });
   }
@@ -3741,28 +3462,24 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
       <div class="analytics-stack">
         <div class="metric-grid">
           <div class="metric-card">
-            <div class="metric-label">Open operator actions</div>
-            <div class="metric-value">${queueSummary.open || 0}</div>
+            <div class="metric-label">Total messages</div>
+            <div class="metric-value">${agent.messageCount || messages.length || 0}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Follow-ups needed</div>
-            <div class="metric-value">${queueSummary.followUpNeeded || 0}</div>
+            <div class="metric-label">Visitor questions</div>
+            <div class="metric-value">${signals.usageTrend.recentCount || signals.userMessageCount || 0}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Pricing interest</div>
-            <div class="metric-value">${queueSummary.pricingInterest || 0}</div>
+            <div class="metric-label">High-intent signals</div>
+            <div class="metric-value">${signals.highValueIntentCount}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Booking intent</div>
-            <div class="metric-value">${queueSummary.bookingIntent || 0}</div>
+            <div class="metric-label">Answers needing work</div>
+            <div class="metric-value">${signals.weakAnswerCount || 0}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Answer gaps</div>
-            <div class="metric-value">${(queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0)}</div>
-          </div>
-          <div class="metric-card">
-            <div class="metric-label">High priority</div>
-            <div class="metric-value">${queueSummary.highPriority || 0}</div>
+            <div class="metric-label">Returning people</div>
+            <div class="metric-value">${peopleSummary.returning || 0}</div>
           </div>
         </div>
 
@@ -3788,8 +3505,8 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Operator signal</p>
-                <p class="analytics-item-copy">${escapeHtml(queueSummary.highPriority > 0 ? `${queueSummary.highPriority} high-priority operator action${queueSummary.highPriority === 1 ? "" : "s"} are open right now.` : "There is not a strong high-priority operator action yet.")}</p>
-                <p class="analytics-subtle">${escapeHtml(((queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0)) > 0 ? `${(queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0)} answer-gap action${(queueSummary.unansweredQuestion || 0) + (queueSummary.knowledgeGap || 0) === 1 ? "" : "s"} may need a better answer path.` : "No answer-gap action has been detected yet.")}</p>
+                <p class="analytics-item-copy">${escapeHtml(signals.highValueIntentCount > 0 ? `${signals.highValueIntentCount} high-intent customer signal${signals.highValueIntentCount === 1 ? "" : "s"} have already appeared.` : "There is not a strong lead, booking, pricing, or support signal yet.")}</p>
+                <p class="analytics-subtle">${escapeHtml(signals.weakAnswerCount > 0 ? `${signals.weakAnswerCount} question${signals.weakAnswerCount === 1 ? "" : "s"} may need a better answer path.` : "No weak-answer signal has been detected yet.")}</p>
               </div>
             </div>
           </section>
@@ -3857,7 +3574,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
           ${recentInteractions.length ? `
             <div class="messages-list">
               ${recentInteractions.map((message) => `
-                <div class="message-row ${escapeHtml(message.role || "")}">
+                <div class="message-row ${escapeHtml(message.role || "")}" data-conversation-message="${escapeHtml(message.id || "")}">
                   <div class="message-role">${escapeHtml(message.role === "user" ? "Customer" : "Assistant")}</div>
                   <div class="message-content">${escapeHtml(message.content)}</div>
                 </div>
@@ -3887,7 +3604,6 @@ function buildCalendarPanel() {
 
 function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
   renderTopbarMeta();
-  const queueState = hydrateActionQueueState(actionQueue);
   const activeSection = getActiveShellSection(setup);
   const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
   const primaryAction = setup.isReady
@@ -3907,14 +3623,14 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
             <p class="workspace-subtitle">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
             <div class="workspace-badge-row">
               <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
-              <span class="${getKnowledgeBadgeClass(setup)}">${escapeHtml(`Knowledge ${setup.knowledgeStatusLabel.toLowerCase()}`)}</span>
+              <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
               <span class="${getBadgeClass(agent.installStatus?.state === "live" ? "Ready" : agent.installStatus?.state === "test" ? "Limited" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</span>
             </div>
           </div>
           <div class="workspace-actions">
             ${secondaryAction}
             ${primaryAction}
-            ${setup.showKnowledgeImportAction ? `<button class="ghost-button" data-action="import-knowledge" ${setup.disableKnowledgeImportAction ? "disabled" : ""}>${escapeHtml(setup.knowledgeImportActionLabel)}</button>` : ""}
+            ${!setup.knowledgeReady ? `<button class="ghost-button" data-action="import-knowledge">Retry website import</button>` : ""}
           </div>
         </div>
         ${buildWorkspaceTabs(activeSection, setup)}
@@ -3926,140 +3642,38 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
         </div>
       ` : ""}
 
-      ${buildOverviewPanel(agent, messages, setup, queueState)}
+      ${buildOverviewPanel(agent, messages, setup, actionQueue)}
       ${buildCustomizePanel(agent, setup)}
-      ${buildAnalyticsPanel(agent, messages, setup, queueState)}
+      ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
     </div>
   `;
 
-  bindSharedDashboardEvents(agent, messages, setup, queueState);
+  bindSharedDashboardEvents(agent, messages, setup, actionQueue);
 }
 
 function renderSetupState(agent, messages, setup, actionQueue) {
-  activeWorkspaceState = {
-    agent,
-    messages,
-    actionQueue: hydrateActionQueueState(actionQueue),
-  };
   renderAssistantShell(agent, messages, setup, actionQueue);
 }
 
 function renderReadyState(agent, messages, actionQueue) {
-  activeWorkspaceState = {
-    agent,
-    messages,
-    actionQueue: hydrateActionQueueState(actionQueue),
-  };
   renderAssistantShell(agent, messages, inferSetup(agent), actionQueue);
-}
-
-function getActiveWorkspaceState() {
-  return activeWorkspaceState;
-}
-
-function updateActiveWorkspaceAgent(nextAgent) {
-  if (!activeWorkspaceState?.agent || !nextAgent?.id || activeWorkspaceState.agent.id !== nextAgent.id) {
-    return;
-  }
-
-  activeWorkspaceState = {
-    ...activeWorkspaceState,
-    agent: {
-      ...activeWorkspaceState.agent,
-      ...nextAgent,
-    },
-  };
-}
-
-function updateActiveWorkspaceActionQueue(nextActionQueue) {
-  if (!activeWorkspaceState?.agent) {
-    return;
-  }
-
-  activeWorkspaceState = {
-    ...activeWorkspaceState,
-    actionQueue: hydrateActionQueueState(nextActionQueue),
-  };
-}
-
-function applyActiveWorkspaceActionQueue(nextActionQueue, options = {}) {
-  if (!activeWorkspaceState?.agent) {
-    return;
-  }
-
-  updateActiveWorkspaceActionQueue(nextActionQueue);
-
-  if (options.focus) {
-    setDashboardFocus(options.focus);
-  }
-
-  renderActiveWorkspace();
-}
-
-function renderActiveWorkspace() {
-  if (!activeWorkspaceState?.agent) {
-    return;
-  }
-
-  const setup = inferSetup(activeWorkspaceState.agent);
-
-  if (setup.isReady) {
-    renderReadyState(activeWorkspaceState.agent, activeWorkspaceState.messages || [], activeWorkspaceState.actionQueue || createEmptyActionQueue());
-    return;
-  }
-
-  renderSetupState(
-    activeWorkspaceState.agent,
-    activeWorkspaceState.messages || [],
-    setup,
-    activeWorkspaceState.actionQueue || createEmptyActionQueue()
-  );
-}
-
-async function refreshActiveWorkspace(agentId) {
-  const { agents } = await loadAgents();
-  const nextAgent = (agents || []).find((candidate) => candidate.id === agentId) || agents?.[0] || null;
-
-  if (!nextAgent) {
-    throw new Error("Your workspace could not be refreshed because the assistant is no longer available.");
-  }
-
-  const [messages, actionQueue] = await Promise.all([
-    loadAgentMessages(nextAgent.id),
-    loadActionQueue(nextAgent.id),
-  ]);
-  const setup = inferSetup(nextAgent);
-
-  if (setup.isReady) {
-    renderReadyState(nextAgent, messages, actionQueue);
-    return {
-      agent: nextAgent,
-      messages,
-      actionQueue,
-      setup,
-    };
-  }
-
-  renderSetupState(nextAgent, messages, setup, actionQueue);
-  return {
-    agent: nextAgent,
-    messages,
-    actionQueue,
-    setup,
-  };
 }
 
 function buildPreviewSection(agent, setup) {
   const statusPills = [
     `<span class="preview-status-pill">Website connected</span>`,
-    `<span class="preview-status-pill">${escapeHtml(`Knowledge ${setup.knowledgeStatusLabel.toLowerCase()}`)}</span>`,
+    setup.knowledgeState === "ready"
+      ? `<span class="preview-status-pill">Knowledge imported</span>`
+      : setup.knowledgeState === "limited"
+        ? `<span class="preview-status-pill">Knowledge limited</span>`
+        : `<span class="preview-status-pill">Knowledge not imported</span>`,
     setup.knowledgePageCount
       ? `<span class="preview-status-pill">${escapeHtml(`${setup.knowledgePageCount} page${setup.knowledgePageCount === 1 ? "" : "s"} imported`)}</span>`
       : "",
   ].join("");
 
   const warning = setup.knowledgeState !== "ready"
-    ? `<p class="preview-warning">${escapeHtml(setup.knowledgeDescription)}</p>`
+    ? `<p class="preview-warning">Your assistant can already be tested here, but the website knowledge is still ${setup.knowledgeState === "limited" ? "limited" : "incomplete"}. Run another import if you want a stronger launch-ready result.</p>`
     : "";
 
   return `
@@ -4081,7 +3695,7 @@ function buildPreviewSection(agent, setup) {
     <div class="preview-control-row">
       <a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">Open full preview</a>
       <button class="ghost-button" type="button" data-action="reset-preview">Reset conversation</button>
-      ${setup.showKnowledgeImportAction ? `<button class="ghost-button" type="button" data-action="import-knowledge" ${setup.disableKnowledgeImportAction ? "disabled" : ""}>${escapeHtml(setup.knowledgeImportActionLabel)}</button>` : ""}
+      ${setup.knowledgeState !== "ready" ? `<button class="ghost-button" type="button" data-action="import-knowledge">Retry import</button>` : ""}
     </div>
     <iframe
       id="preview-frame"
@@ -4263,22 +3877,10 @@ async function fetchJson(url, options) {
     : getAuthHeaders(options?.headers || {});
 
   const response = await fetch(url, nextOptions);
-  const responseText = await response.text();
-  let data = {};
-
-  if (responseText) {
-    try {
-      data = JSON.parse(responseText);
-    } catch (error) {
-      throw new Error(getReadableResponseError(response.status, responseText));
-    }
-  }
+  const data = await response.json();
 
   if (!response.ok) {
-    const error = new Error(data.error || getReadableResponseError(response.status, responseText));
-    error.status = response.status;
-    error.responseData = data;
-    throw error;
+    throw new Error(data.error || "Something went wrong.");
   }
 
   return data;
@@ -4309,13 +3911,25 @@ async function loadActionQueue(agentId) {
 
   try {
     const data = await fetchJson(url.toString());
-    return hydrateActionQueueState(data);
+    return {
+      items: Array.isArray(data.items) ? data.items : [],
+      people: Array.isArray(data.people) ? data.people : [],
+      peopleSummary: {
+        ...createEmptyActionQueue().peopleSummary,
+        ...(data.peopleSummary || {}),
+      },
+      summary: {
+        ...createEmptyActionQueue().summary,
+        ...(data.summary || {}),
+      },
+      persistenceAvailable: data.persistenceAvailable !== false,
+      migrationRequired: data.migrationRequired === true,
+      followUpWorkflowAvailable: data.followUpWorkflowAvailable !== false,
+      followUpWorkflowMigrationRequired: data.followUpWorkflowMigrationRequired === true,
+    };
   } catch (error) {
     console.warn("[action queue] Could not load the action queue:", error.message);
-    return hydrateActionQueueState({
-      ...createEmptyActionQueue(),
-      loadError: error.message || "The action queue could not be loaded right now.",
-    });
+    return createEmptyActionQueue();
   }
 }
 
@@ -4329,7 +3943,6 @@ async function importKnowledge(agent, options = {}) {
       auth: options.auth,
       body: JSON.stringify({
         agent_key: agent.publicAgentKey,
-        business_id: agent.businessId,
         client_id: options.clientId || getClientId(),
       })
     });
@@ -4348,20 +3961,12 @@ async function importKnowledge(agent, options = {}) {
     return {
       ...nextSetup,
       hadError: false,
-      import: importData.import || null,
     };
   } catch (error) {
     const fallbackSetup = {
-      knowledgeState: "failed",
-      label: "Retry needed",
-      description:
-        error.responseData?.import?.message
-        || error.message
-        || "Website knowledge import failed. Retry when you're ready.",
-      lastImportedUrl: trimText(error.responseData?.import?.lastImportedUrl || ""),
-      lastImportedAt: error.responseData?.import?.lastImportedAt || null,
-      pageCount: 0,
-      contentLength: 0,
+      knowledgeState: "limited",
+      label: "Limited",
+      description: "Your assistant was created, but the website knowledge needs another pass before it feels fully grounded.",
     };
 
     trackProductEvent("knowledge_limited", {
@@ -4374,99 +3979,24 @@ async function importKnowledge(agent, options = {}) {
     return {
       ...fallbackSetup,
       hadError: true,
-      import: error.responseData?.import || null,
-      errorMessage:
-        error.responseData?.import?.message
-        || error.message
-        || "Website knowledge import failed. Retry when you're ready.",
+      errorMessage: error.message || "Import failed. The assistant may have limited knowledge.",
     };
   }
 }
 
-async function runKnowledgeImport(agent, options = {}) {
-  if (!agent?.id) {
-    return null;
-  }
-
-  const existingImport = knowledgeImportPromiseByAgentId.get(agent.id);
-
-  if (existingImport) {
-    setStatus("Website knowledge import is already in progress.");
-    return existingImport;
-  }
-
-  const saveState = options.saveState || null;
-  const task = (async () => {
-    const startedAt = new Date().toISOString();
-    setKnowledgeImportState(agent.id, {
-      status: options.queued === true ? "queued" : "importing",
-      currentWebsiteUrl: agent.websiteUrl,
-      startedAt,
-      errorMessage: "",
-      lastImportedUrl: getKnowledgeImportState(agent.id)?.lastImportedUrl || "",
-      lastImportedAt: getKnowledgeImportState(agent.id)?.lastImportedAt || null,
-    });
-    updateActiveWorkspaceAgent({
-      id: agent.id,
-      websiteUrl: agent.websiteUrl,
-      businessId: agent.businessId,
-    });
-
-    if (saveState) {
-      saveState.textContent = "Importing website knowledge...";
-      saveState.className = "save-state saving";
-    }
-
-    setStatus(options.statusMessage || "Importing website knowledge...");
-
-    const nextSetup = await importKnowledge(agent, {
-      auth: options.auth,
-      clientId: options.clientId,
-    });
-
-    if (nextSetup.hadError) {
-      setKnowledgeImportState(agent.id, {
-        status: "failed",
-        currentWebsiteUrl: agent.websiteUrl,
-        errorMessage: nextSetup.errorMessage,
-        lastImportedUrl: nextSetup.lastImportedUrl || "",
-        lastImportedAt: nextSetup.lastImportedAt || null,
-      });
-      if (saveState) {
-        saveState.textContent = "Website saved. Import needs retry.";
-        saveState.className = "save-state unsaved";
-        saveState.title = nextSetup.errorMessage || "";
-      }
-      setStatus(nextSetup.errorMessage || "Website saved, but the knowledge import needs another try.");
-      await refreshActiveWorkspace(agent.id);
-      return nextSetup;
-    }
-
-    clearKnowledgeImportState(agent.id);
-    await refreshActiveWorkspace(agent.id);
-    if (saveState) {
-      saveState.textContent = nextSetup.knowledgeState === "ready"
-        ? "Changes saved and website imported."
-        : "Changes saved. Website import is limited.";
-      saveState.className = nextSetup.knowledgeState === "ready" ? "save-state saved" : "save-state unsaved";
-      saveState.removeAttribute("title");
-    }
-    setStatus(
-      nextSetup.knowledgeState === "ready"
-        ? "Website saved and website knowledge is ready."
-        : "Website saved. Website knowledge imported with limited detail."
-    );
-    return nextSetup;
-  })();
-
-  knowledgeImportPromiseByAgentId.set(agent.id, task);
+async function runKnowledgeImport(agent) {
+  setStatus("Importing website knowledge...");
+  const nextSetup = await importKnowledge(agent);
 
   try {
-    return await task;
-  } finally {
-    if (knowledgeImportPromiseByAgentId.get(agent.id) === task) {
-      knowledgeImportPromiseByAgentId.delete(agent.id);
-    }
+    setStatus(nextSetup.knowledgeState === "ready"
+      ? "Website knowledge is ready."
+      : "Website knowledge was imported with limited detail."
+    );
+    await boot();
+  } catch (error) {
+    setStatus(nextSetup.errorMessage || error.message || "Import failed. The assistant may have limited knowledge.");
+    await boot();
   }
 }
 
@@ -4611,6 +4141,8 @@ async function saveAssistant(event, agent) {
   const submitButton = form.querySelector('button[type="submit"]');
   const saveState = form.querySelector("[data-save-state]");
   const formData = new FormData(form);
+  const nextWebsiteUrl = trimText(formData.get("website_url"));
+  const websiteChanged = Boolean(nextWebsiteUrl && nextWebsiteUrl !== trimText(agent.websiteUrl));
 
   const getNextValue = (fieldName, fallbackValue = "") => {
     if (formData.has(fieldName)) {
@@ -4648,39 +4180,11 @@ async function saveAssistant(event, agent) {
       },
       body: JSON.stringify(payload)
     });
-    const savedAgent = {
-      ...agent,
-      ...(updateData.agent || {}),
-    };
-    const websiteSync = updateData.agent?.websiteSync || {};
-    updateActiveWorkspaceAgent(savedAgent);
 
-    if (websiteSync.changed && websiteSync.currentUrl) {
-      setKnowledgeImportState(agent.id, {
-        status: "queued",
-        currentWebsiteUrl: websiteSync.currentUrl,
-        errorMessage: "",
-      });
-      updateActiveWorkspaceAgent({
-        ...savedAgent,
-        websiteUrl: websiteSync.currentUrl,
-        businessId: savedAgent.businessId || agent.businessId,
-      });
-      renderActiveWorkspace();
-      if (saveState) {
-        saveState.textContent = "Website saved. Importing website knowledge...";
-        saveState.className = "save-state saving";
-      }
-      setStatus("Website saved. Importing website knowledge...");
+    if (websiteChanged) {
       await runKnowledgeImport({
         id: agent.id,
-        businessId: savedAgent.businessId || agent.businessId,
-        publicAgentKey: savedAgent.publicAgentKey || agent.publicAgentKey,
-        websiteUrl: websiteSync.currentUrl,
-      }, {
-        queued: true,
-        saveState,
-        statusMessage: "Website saved. Importing website knowledge...",
+        publicAgentKey: updateData.agent?.publicAgentKey || agent.publicAgentKey,
       });
       return;
     }
@@ -4691,7 +4195,7 @@ async function saveAssistant(event, agent) {
       saveState.className = "save-state saved";
       saveState.removeAttribute("title");
     }
-    await refreshActiveWorkspace(agent.id);
+    await boot();
   } catch (error) {
     const message = error.message || "We couldn't save those changes just yet.";
     console.error("[dashboard customize] Failed to save assistant settings:", {
@@ -5108,10 +4612,12 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
   const actionQueueStatusInputs = document.querySelectorAll("[data-action-queue-status]");
   const actionQueueForms = document.querySelectorAll("[data-action-queue-form]");
   const actionQueueToggleButtons = document.querySelectorAll("[data-action-queue-toggle]");
-  const actionQueueQuickStatusButtons = document.querySelectorAll("[data-action-queue-quick-status]");
-  const actionQueueOpenHandoffButtons = document.querySelectorAll("[data-action-queue-open-handoff]");
+  const followUpForms = document.querySelectorAll("[data-follow-up-form]");
+  const followUpStatusButtons = document.querySelectorAll("[data-follow-up-status-action]");
+  const openConversationButtons = document.querySelectorAll("[data-open-conversation]");
+  const copyFollowUpButtons = document.querySelectorAll("[data-copy-follow-up]");
 
-  const openShellSection = (targetSection) => {
+  const showShellSection = (targetSection) => {
     if (!SHELL_SECTIONS.includes(targetSection)) {
       return;
     }
@@ -5125,10 +4631,46 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
     document.querySelectorAll("[data-shell-section]").forEach((section) => {
       section.hidden = section.dataset.shellSection !== targetSection;
     });
+  };
 
-    const sectionEl = document.querySelector(`[data-shell-section="${targetSection}"]`);
-    if (sectionEl) {
-      sectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  const saveFollowUp = async (form, nextStatus = "") => {
+    const formData = new FormData(form);
+    const followUpId = form.dataset.followUpId;
+    const submitButton = form.querySelector('button[type="submit"]');
+
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+
+    setStatus(nextStatus
+      ? `Updating follow-up to ${getFollowUpStatusLabel(nextStatus).toLowerCase()}...`
+      : "Saving prepared follow-up...");
+
+    try {
+      const result = await fetchJson("/agents/follow-ups/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          follow_up_id: followUpId,
+          status: nextStatus || undefined,
+          subject: trimText(formData.get("subject")),
+          draft_content: trimText(formData.get("draft_content")),
+        }),
+      });
+
+      setDashboardFocus("action-queue");
+      setStatus(result.message || "Follow-up updated.");
+      await boot();
+    } catch (error) {
+      setStatus(error.message || "We couldn't update that follow-up.");
+    } finally {
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
     }
   };
 
@@ -5195,7 +4737,12 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
     button.addEventListener("click", () => {
       const targetSection = button.dataset.overviewTarget;
 
-      openShellSection(targetSection);
+      showShellSection(targetSection);
+
+      const sectionEl = document.querySelector(`[data-shell-section="${targetSection}"]`);
+      if (sectionEl) {
+        sectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     });
   });
 
@@ -5230,7 +4777,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       setStatus("Updating action queue item...");
 
       try {
-        const result = await fetchJson("/agents/action-queue/status", {
+        await fetchJson("/agents/action-queue/status", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -5243,10 +4790,9 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
           }),
         });
         input.dataset.previousStatus = nextStatus;
-        applyActiveWorkspaceActionQueue(result.queue, {
-          focus: "action-queue",
-        });
+        setDashboardFocus("action-queue");
         setStatus(`Action item marked ${getActionQueueStatusLabel(nextStatus).toLowerCase()}.`);
+        await boot();
       } catch (error) {
         input.value = previousStatus;
         setStatus(error.message || "We couldn't update that action item.");
@@ -5255,44 +4801,6 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       }
     });
     input.dataset.previousStatus = input.value;
-  });
-
-  actionQueueQuickStatusButtons.forEach((button) => {
-    button.addEventListener("click", async () => {
-      const actionKey = button.dataset.actionKey;
-      const nextStatus = button.dataset.actionQueueQuickStatus;
-
-      if (!actionKey || !nextStatus) {
-        return;
-      }
-
-      button.disabled = true;
-      setStatus(`Updating action queue item...`);
-
-      try {
-        const result = await fetchJson("/agents/action-queue/status", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            client_id: getClientId(),
-            agent_id: agent.id,
-            action_key: actionKey,
-            status: nextStatus,
-          }),
-        });
-
-        applyActiveWorkspaceActionQueue(result.queue, {
-          focus: "action-queue",
-        });
-        setStatus(`Action item marked ${getActionQueueStatusLabel(nextStatus).toLowerCase()}.`);
-      } catch (error) {
-        setStatus(error.message || "We couldn't update that action item.");
-      } finally {
-        button.disabled = false;
-      }
-    });
   });
 
   actionQueueToggleButtons.forEach((button) => {
@@ -5309,21 +4817,6 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       button.textContent = opening
         ? (button.dataset.closeLabel || "Hide owner handoff")
         : (button.dataset.openLabel || "Open owner handoff");
-    });
-  });
-
-  actionQueueOpenHandoffButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const actionKey = button.dataset.actionKey;
-      const toggleButton = document.querySelector(`[data-action-queue-toggle][data-action-key="${actionKey}"]`);
-
-      if (!toggleButton) {
-        return;
-      }
-
-      if (typeof toggleButton.click === "function") {
-        toggleButton.click();
-      }
     });
   });
 
@@ -5359,14 +4852,78 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
           }),
         });
 
-        applyActiveWorkspaceActionQueue(result.queue, {
-          focus: "action-queue",
-        });
-        setStatus("Owner handoff saved.");
+        setDashboardFocus("action-queue");
+        if (result.migrationRequired) {
+          setStatus("Follow-up could not be persisted yet. Apply the action queue migration first.");
+        } else {
+          setStatus("Owner handoff saved.");
+        }
+        await boot();
       } catch (error) {
         setStatus(error.message || "We couldn't save that follow-up yet.");
       } finally {
         submitButton.disabled = false;
+      }
+    });
+  });
+
+  followUpForms.forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveFollowUp(form);
+    });
+  });
+
+  followUpStatusButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const form = button.closest("[data-follow-up-form]");
+
+      if (!form) {
+        return;
+      }
+
+      await saveFollowUp(form, button.dataset.nextStatus || "");
+    });
+  });
+
+  openConversationButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const messageId = button.dataset.messageId;
+
+      showShellSection("analytics");
+
+      const sectionEl = document.querySelector('[data-shell-section="analytics"]');
+      if (sectionEl) {
+        sectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      window.setTimeout(() => {
+        const row = document.querySelector(`[data-conversation-message="${messageId}"]`);
+
+        if (row) {
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+          row.classList.add("active");
+          window.setTimeout(() => row.classList.remove("active"), 1500);
+        }
+      }, 120);
+    });
+  });
+
+  copyFollowUpButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const form = button.closest("[data-follow-up-form]");
+      const draftValue = trimText(form?.querySelector('textarea[name="draft_content"]')?.value || "");
+
+      if (!draftValue) {
+        setStatus("There is no draft content to copy yet.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(draftValue);
+        setStatus("Follow-up draft copied.");
+      } catch (error) {
+        setStatus("We couldn't copy that draft.");
       }
     });
   });
@@ -5487,7 +5044,6 @@ async function boot() {
   });
 
   if (!hasAuthConfig()) {
-    activeWorkspaceState = null;
     setStatus("Supabase Auth is not configured yet.");
     renderAuthEntry();
     return;
@@ -5498,14 +5054,12 @@ async function boot() {
 
   if (!authSession || !authUser) {
     clearLaunchState();
-    activeWorkspaceState = null;
     renderAuthEntry();
     return;
   }
 
   if (getAuthFlowType() === "recovery") {
     authViewMode = AUTH_VIEW_MODES.UPDATE_PASSWORD;
-    activeWorkspaceState = null;
     renderAuthEntry();
     return;
   }
@@ -5563,7 +5117,6 @@ async function boot() {
         clearLaunchState();
         setStatus("Setup was interrupted before your assistant was created. You can start again whenever you're ready.");
       }
-      activeWorkspaceState = null;
       setStatus("Sign in complete. Unlock Vonza to open your setup workspace.");
       renderAccessLocked(null);
       return;
@@ -5574,7 +5127,6 @@ async function boot() {
 
     if (accessStatus !== "active") {
       clearLaunchState();
-      activeWorkspaceState = null;
       setStatus(accessStatus === "suspended"
         ? "Workspace access is currently paused."
         : "Finish payment to open your Vonza setup workspace."
@@ -5597,7 +5149,6 @@ async function boot() {
     renderSetupState(agent, messages, setup, actionQueue);
   } catch (error) {
     clearLaunchState();
-    activeWorkspaceState = null;
     setStatus(error.message || "We couldn't load your Vonza workspace right now.");
     renderErrorState(
       "We couldn't load your Vonza workspace.",

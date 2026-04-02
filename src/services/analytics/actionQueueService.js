@@ -4,27 +4,12 @@ import { cleanText } from "../../utils/text.js";
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const CONTACT_STATUSES = ["not_contacted", "attempted", "contacted", "qualified"];
 const ACTIONABLE_INTENTS = ["contact", "booking", "pricing", "support"];
-const ACTION_QUEUE_ITEM_TYPES = [
+const SUPPORTED_FOLLOW_UP_ACTION_TYPES = [
   "lead_follow_up",
   "pricing_interest",
   "booking_intent",
-  "unanswered_question",
-  "knowledge_gap",
   "repeat_high_intent_visitor",
 ];
-const ACTION_QUEUE_PRIORITIES = ["high", "medium", "low"];
-const HIGH_INTENT_ACTION_TYPES = new Set([
-  "lead_follow_up",
-  "pricing_interest",
-  "booking_intent",
-  "repeat_high_intent_visitor",
-]);
-const ACTION_QUEUE_STATUS_TRANSITIONS = {
-  new: new Set(["new", "reviewed", "done", "dismissed"]),
-  reviewed: new Set(["new", "reviewed", "done", "dismissed"]),
-  done: new Set(["new", "reviewed", "done"]),
-  dismissed: new Set(["new", "reviewed", "dismissed"]),
-};
 const ACTION_QUEUE_PERSISTENCE_COLUMNS = [
   "note",
   "outcome",
@@ -47,62 +32,6 @@ function isMissingRelationError(error, relationName) {
 function normalizeStatus(value) {
   const normalized = cleanText(value).toLowerCase();
   return ACTION_QUEUE_STATUSES.includes(normalized) ? normalized : "new";
-}
-
-function normalizeActionType(value) {
-  const normalized = cleanText(value).toLowerCase();
-
-  if (!ACTION_QUEUE_ITEM_TYPES.includes(normalized)) {
-    throw buildActionQueueError(
-      `Unsupported action queue item type: ${value || "unknown"}.`,
-      500,
-      "ACTION_QUEUE_INVALID_TYPE"
-    );
-  }
-
-  return normalized;
-}
-
-function normalizeActionPriority(value) {
-  const normalized = cleanText(value).toLowerCase();
-
-  if (!ACTION_QUEUE_PRIORITIES.includes(normalized)) {
-    throw buildActionQueueError(
-      `Unsupported action queue priority: ${value || "unknown"}.`,
-      500,
-      "ACTION_QUEUE_INVALID_PRIORITY"
-    );
-  }
-
-  return normalized;
-}
-
-function getPriorityRank(value) {
-  switch (normalizeActionPriority(value)) {
-    case "high":
-      return 0;
-    case "medium":
-      return 1;
-    default:
-      return 2;
-  }
-}
-
-function buildActionQueueError(message, statusCode = 500, code = "") {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  if (code) {
-    error.code = code;
-  }
-  return error;
-}
-
-function buildPersistenceUnavailableError() {
-  return buildActionQueueError(
-    "Action queue persistence is not ready on the server yet. Apply the action queue migration and try again.",
-    503,
-    "ACTION_QUEUE_PERSISTENCE_UNAVAILABLE"
-  );
 }
 
 function isMissingPersistenceColumnError(error) {
@@ -142,91 +71,6 @@ function normalizeContactStatus(value) {
   return CONTACT_STATUSES.includes(normalized) ? normalized : "";
 }
 
-function parseRequestedStatus(value) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  const normalized = cleanText(value).toLowerCase();
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  if (!ACTION_QUEUE_STATUSES.includes(normalized)) {
-    throw buildActionQueueError(
-      "Use one of the supported action queue statuses: new, reviewed, done, or dismissed.",
-      400,
-      "ACTION_QUEUE_INVALID_STATUS"
-    );
-  }
-
-  return normalized;
-}
-
-function parseRequestedContactStatus(value) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  const normalized = cleanText(value).toLowerCase();
-
-  if (!normalized) {
-    return "";
-  }
-
-  if (!CONTACT_STATUSES.includes(normalized)) {
-    throw buildActionQueueError(
-      "Use one of the supported contact states: not_contacted, attempted, contacted, or qualified.",
-      400,
-      "ACTION_QUEUE_INVALID_CONTACT_STATUS"
-    );
-  }
-
-  return normalized;
-}
-
-function assertValidStatusTransition(previousStatus, nextStatus) {
-  const current = normalizeStatus(previousStatus);
-  const allowedTransitions = ACTION_QUEUE_STATUS_TRANSITIONS[current] || ACTION_QUEUE_STATUS_TRANSITIONS.new;
-
-  if (allowedTransitions.has(nextStatus)) {
-    return;
-  }
-
-  throw buildActionQueueError(
-    `Cannot move an action queue item directly from ${current} to ${nextStatus}. Reopen it first if more work is needed.`,
-    400,
-    "ACTION_QUEUE_INVALID_TRANSITION"
-  );
-}
-
-function validateStateShape({ status, followUpNeeded, followUpCompleted }) {
-  if (followUpNeeded === true && followUpCompleted === true) {
-    throw buildActionQueueError(
-      "Follow-up cannot be both needed and completed at the same time.",
-      400,
-      "ACTION_QUEUE_CONFLICTING_FOLLOW_UP"
-    );
-  }
-
-  if (status === "dismissed" && followUpCompleted === true) {
-    throw buildActionQueueError(
-      "Dismissed items cannot also be marked follow-up completed.",
-      400,
-      "ACTION_QUEUE_DISMISSED_CONFLICT"
-    );
-  }
-
-  if (status === "done" && followUpNeeded === true) {
-    throw buildActionQueueError(
-      "Resolved items cannot still be marked as needing follow-up.",
-      400,
-      "ACTION_QUEUE_DONE_CONFLICT"
-    );
-  }
-}
-
 function normalizePersistedItem(item = {}) {
   return {
     agentId: cleanText(item.agentId || item.agent_id),
@@ -241,6 +85,106 @@ function normalizePersistedItem(item = {}) {
     contactStatus: normalizeContactStatus(item.contactStatus || item.contact_status),
     updatedAt: item.updatedAt || item.updated_at || null,
   };
+}
+
+function normalizeActionType(value) {
+  const normalized = cleanText(value).toLowerCase();
+  return [
+    "lead_follow_up",
+    "pricing_interest",
+    "booking_intent",
+    "repeat_high_intent_visitor",
+    "knowledge_gap",
+    "unanswered_question",
+  ].includes(normalized)
+    ? normalized
+    : "";
+}
+
+function isSupportedFollowUpActionType(value) {
+  return SUPPORTED_FOLLOW_UP_ACTION_TYPES.includes(normalizeActionType(value));
+}
+
+function buildActionType(interaction = {}) {
+  switch (interaction.type) {
+    case "contact":
+      return "lead_follow_up";
+    case "pricing":
+      return "pricing_interest";
+    case "booking":
+      return "booking_intent";
+    case "weak_answer":
+      return interaction.unresolved ? "unanswered_question" : "knowledge_gap";
+    default:
+      return "";
+  }
+}
+
+function buildFollowUpWorkflowState(followUp = {}) {
+  const status = cleanText(followUp.status).toLowerCase();
+
+  switch (status) {
+    case "ready":
+      return {
+        key: "follow_up_ready",
+        label: "Follow-up ready",
+        copy: cleanText(followUp.subject)
+          ? `Prepared and ready to review: ${cleanText(followUp.subject)}`
+          : "A prepared follow-up is ready for review.",
+        attention: true,
+        resolved: false,
+        rank: 0,
+      };
+    case "draft":
+      return {
+        key: "follow_up_draft",
+        label: "Draft prepared",
+        copy: "A prepared follow-up draft is waiting for owner review.",
+        attention: true,
+        resolved: false,
+        rank: 1,
+      };
+    case "failed":
+      return {
+        key: "follow_up_failed",
+        label: "Follow-up failed",
+        copy: cleanText(followUp.lastError)
+          ? `Last failure: ${cleanText(followUp.lastError)}`
+          : "The prepared follow-up failed and still needs owner attention.",
+        attention: true,
+        resolved: false,
+        rank: 0,
+      };
+    case "missing_contact":
+      return {
+        key: "missing_contact",
+        label: "Missing contact",
+        copy: "Vonza prepared the context, but this conversation still needs a usable email address or phone number.",
+        attention: true,
+        resolved: false,
+        rank: 0,
+      };
+    case "sent":
+      return {
+        key: "follow_up_sent",
+        label: "Follow-up sent",
+        copy: "The prepared follow-up was marked sent, so this queue item is resolved.",
+        attention: false,
+        resolved: true,
+        rank: 4,
+      };
+    case "dismissed":
+      return {
+        key: "follow_up_dismissed",
+        label: "Dismissed",
+        copy: "This prepared follow-up was intentionally dismissed.",
+        attention: false,
+        resolved: false,
+        rank: 5,
+      };
+    default:
+      return null;
+  }
 }
 
 function hasOwnerHandoffContent(item = {}) {
@@ -271,6 +215,12 @@ function isResolved(item = {}) {
 }
 
 function buildOwnerWorkflow(item = {}) {
+  const followUpWorkflow = buildFollowUpWorkflowState(item.followUp || {});
+
+  if (followUpWorkflow) {
+    return followUpWorkflow;
+  }
+
   const status = normalizeStatus(item.status);
   const followUpNeeded = isFollowUpNeeded(item);
   const resolved = isResolved(item);
@@ -342,18 +292,6 @@ function normalizeQuestion(message) {
     .replace(/[^\p{L}\p{N}\s]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function buildQuestionFingerprint(question) {
-  return normalizeQuestion(question)
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 8)
-    .join("-");
-}
-
-function isUnknownPersonKey(value) {
-  return cleanText(value).startsWith("person:unknown:");
 }
 
 function truncateText(value, maxLength = 180) {
@@ -486,52 +424,6 @@ function getIntentLabel(intent) {
     default:
       return "General";
   }
-}
-
-function isHighIntentIntent(intent) {
-  return ["contact", "booking", "pricing"].includes(intent);
-}
-
-function hasExplicitFollowUpRequest(message) {
-  const normalized = cleanText(String(message || "")).toLowerCase();
-
-  if (!normalized) {
-    return false;
-  }
-
-  return [
-    "call me",
-    "call back",
-    "email me",
-    "reach me",
-    "get back to me",
-    "follow up",
-    "contact me",
-    "text me",
-    "phone me",
-  ].some((snippet) => normalized.includes(snippet));
-}
-
-function replySignalsKnowledgeGap(reply) {
-  const normalized = cleanText(String(reply || "")).toLowerCase();
-
-  if (!normalized) {
-    return true;
-  }
-
-  return [
-    "not available on the website",
-    "not mentioned on the website",
-    "not provided on the website",
-    "i don't know",
-    "i do not know",
-    "i'm not sure",
-    "i am not sure",
-    "i couldn't find",
-    "i could not find",
-    "i can't find",
-    "i cannot find",
-  ].some((snippet) => normalized.includes(snippet));
 }
 
 function getSuggestedAction(intent) {
@@ -967,6 +859,7 @@ function buildConversationInteractions(messages = []) {
 
     interactions.push({
       key: actionKey,
+      messageId: cleanText(message.id || message.messageId),
       type,
       label: type === "weak_answer"
         ? unresolved ? "Unresolved conversation" : "Weak answer"
@@ -1001,211 +894,72 @@ function buildConversationInteractions(messages = []) {
   return interactions;
 }
 
-function buildQuestionRepeatCounts(interactions = []) {
-  const counts = new Map();
+function buildRepeatHighIntentItems(people = [], persistedMap = new Map()) {
+  return people
+    .map((person) => {
+      const highIntentTimeline = (person.timeline || [])
+        .filter((entry) => ["contact", "pricing", "booking"].includes(entry.intent));
 
-  interactions.forEach((interaction) => {
-    const fingerprint = buildQuestionFingerprint(interaction.question);
+      if (!person.isReturning || highIntentTimeline.length < 2) {
+        return null;
+      }
 
-    if (!fingerprint) {
-      return;
-    }
+      const actionKey = `person:${person.key}:repeat_high_intent`;
+      const persistedItem = persistedMap.get(actionKey) || {};
+      const snippets = (person.snippets || [])
+        .filter((entry) => ["contact", "pricing", "booking"].includes(entry.intent))
+        .slice(0, 2)
+        .map((entry) => cleanText(entry.text))
+        .filter(Boolean);
+      const intentLabels = [...new Set(
+        highIntentTimeline
+          .map((entry) => getIntentLabel(entry.intent))
+          .filter(Boolean)
+      )];
+      const ownerWorkflow = buildOwnerWorkflow({
+        ...persistedItem,
+      });
 
-    counts.set(fingerprint, (counts.get(fingerprint) || 0) + 1);
-  });
-
-  return counts;
-}
-
-function selectInteractionActionType(interaction, context = {}) {
-  const explicitFollowUp = context.explicitFollowUp === true;
-  const repeatedQuestion = context.repeatedQuestion === true;
-  const knowledgeGap = context.knowledgeGap === true;
-
-  if (interaction.contactCaptured && (explicitFollowUp || interaction.intent === "contact")) {
-    return "lead_follow_up";
-  }
-
-  if (interaction.intent === "pricing") {
-    return "pricing_interest";
-  }
-
-  if (interaction.intent === "booking") {
-    return "booking_intent";
-  }
-
-  if (interaction.unresolved || interaction.weakAnswer) {
-    return knowledgeGap || repeatedQuestion ? "knowledge_gap" : "unanswered_question";
-  }
-
-  return "";
-}
-
-function getActionTypeLabel(type) {
-  switch (normalizeActionType(type)) {
-    case "lead_follow_up":
-      return "Lead follow-up";
-    case "pricing_interest":
-      return "Pricing interest";
-    case "booking_intent":
-      return "Booking intent";
-    case "unanswered_question":
-      return "Unanswered question";
-    case "knowledge_gap":
-      return "Knowledge gap";
-    case "repeat_high_intent_visitor":
-      return "Repeat high-intent visitor";
-    default:
-      return "Operator action";
-  }
-}
-
-function getActionPriority(type, options = {}) {
-  const normalizedType = normalizeActionType(type);
-
-  switch (normalizedType) {
-    case "lead_follow_up":
-    case "booking_intent":
-    case "repeat_high_intent_visitor":
-      return "high";
-    case "knowledge_gap":
-      return options.repeatedQuestion || options.highIntent ? "high" : "medium";
-    case "pricing_interest":
-      return options.contactCaptured ? "high" : "medium";
-    default:
-      return "medium";
-  }
-}
-
-function buildActionGroupKey(type, interaction, person, options = {}) {
-  const normalizedType = normalizeActionType(type);
-  const personKey = cleanText(person?.key);
-  const scopedPersonKey = personKey && !isUnknownPersonKey(personKey)
-    ? personKey
-    : cleanText(interaction.key);
-
-  if (normalizedType === "lead_follow_up" || normalizedType === "pricing_interest" || normalizedType === "booking_intent") {
-    return `operator:${normalizedType}:${scopedPersonKey}`;
-  }
-
-  if (normalizedType === "repeat_high_intent_visitor") {
-    return `operator:${normalizedType}:${scopedPersonKey}`;
-  }
-
-  const issueFingerprint = cleanText(options.issueFingerprint || buildQuestionFingerprint(interaction.question) || interaction.intent || "issue");
-  return `operator:${normalizedType}:${scopedPersonKey}:${issueFingerprint}`;
-}
-
-function buildActionTitle(type, options = {}) {
-  const normalizedType = normalizeActionType(type);
-  const personLabel = cleanText(options.personLabel);
-
-  switch (normalizedType) {
-    case "lead_follow_up":
-      return personLabel ? `Follow up with ${personLabel}` : "Follow up with captured lead";
-    case "pricing_interest":
-      return personLabel ? `Pricing interest from ${personLabel}` : "Pricing interest detected";
-    case "booking_intent":
-      return personLabel ? `Booking intent from ${personLabel}` : "Booking intent detected";
-    case "knowledge_gap":
-      return "Important answer gap in current knowledge";
-    case "repeat_high_intent_visitor":
-      return personLabel ? `${personLabel} came back with high-intent questions` : "Repeat high-intent visitor";
-    default:
-      return "Customer question still needs an answer";
-  }
-}
-
-function buildActionOperatorSummary(type, summary = {}) {
-  const interactionCount = Number(summary.interactionCount || 0);
-  const questionLabel = interactionCount > 1
-    ? `${interactionCount} related conversations`
-    : "This conversation";
-
-  switch (normalizeActionType(type)) {
-    case "lead_follow_up":
-      return summary.contactInfo
-        ? `${questionLabel} included a direct follow-up request and captured contact details.`
-        : `${questionLabel} showed a clear request for direct owner follow-up.`;
-    case "pricing_interest":
-      return `${questionLabel} asked for pricing, quotes, packages, or cost clarity.`;
-    case "booking_intent":
-      return `${questionLabel} asked to book, schedule, or check availability.`;
-    case "knowledge_gap":
-      return `${questionLabel} exposed a missing answer path in the current website knowledge or assistant guidance.`;
-    case "repeat_high_intent_visitor":
-      return `${questionLabel} show the same visitor returning with strong buyer intent.`;
-    default:
-      return `${questionLabel} did not receive a confident answer from the assistant.`;
-  }
-}
-
-function buildActionWhyItMatters(type, summary = {}) {
-  switch (normalizeActionType(type)) {
-    case "lead_follow_up":
-      return "This visitor asked to be contacted, so the business has a direct chance to move the conversation forward.";
-    case "pricing_interest":
-      return "Pricing questions usually signal purchase intent and often need clearer guidance to convert.";
-    case "booking_intent":
-      return "Booking intent means the visitor is close to taking action if the next step is obvious.";
-    case "knowledge_gap":
-      return summary.repeatedQuestion
-        ? "The same missing answer is repeating, which suggests a durable gap in the current setup."
-        : "Vonza could not answer this confidently from the current business knowledge.";
-    case "repeat_high_intent_visitor":
-      return "A returning high-intent visitor is a strong operator signal worth prioritizing now.";
-    default:
-      return "Unanswered customer questions erode trust and usually point to a missing answer path.";
-  }
-}
-
-function buildRecommendedAction(type, summary = {}) {
-  switch (normalizeActionType(type)) {
-    case "lead_follow_up":
-      return summary.contactInfo
-        ? "Send follow-up to the captured lead and confirm the best next step."
-        : "Review the conversation and make the contact path easier to find for similar visitors.";
-    case "pricing_interest":
-      return summary.contactInfo
-        ? "Review pricing questions, send the right follow-up, and add clearer pricing guidance."
-        : "Review pricing questions and add pricing guidance to the website or assistant setup.";
-    case "booking_intent":
-      return "Prioritize this visitor and make the booking or contact path easier to reach.";
-    case "knowledge_gap":
-      return "Jump to Customize and add the missing answer to website knowledge or assistant guidance.";
-    case "repeat_high_intent_visitor":
-      return "Prioritize this visitor, review the full thread, and make the next step obvious.";
-    default:
-      return "Review the related conversation and add the missing answer to assistant guidance.";
-  }
-}
-
-function buildActionEvidence(interactions = [], options = {}) {
-  const questionExamples = interactions
-    .map((interaction) => cleanText(interaction.question))
-    .filter(Boolean)
-    .slice(0, 3);
-  const replyExamples = interactions
-    .map((interaction) => cleanText(interaction.reply))
-    .filter(Boolean)
-    .slice(0, 2);
-  const intents = [...new Set(interactions.map((interaction) => cleanText(interaction.intent)).filter(Boolean))];
-  const contactInfo = options.contactInfo || interactions.find((interaction) => interaction.contactCaptured)?.contactInfo || null;
-
-  return {
-    interactionCount: interactions.length,
-    questionExamples,
-    replyExamples,
-    intents,
-    contactCaptured: Boolean(contactInfo?.email || contactInfo?.phone),
-    contactInfo,
-    weakAnswerCount: interactions.filter((interaction) => interaction.weakAnswer).length,
-    unresolvedCount: interactions.filter((interaction) => interaction.unresolved).length,
-    repeatedQuestion: options.repeatedQuestion === true,
-    explicitFollowUp: options.explicitFollowUp === true,
-    knowledgeGap: options.knowledgeGap === true,
-    personKey: cleanText(options.personKey) || null,
-  };
+      return {
+        key: actionKey,
+        type: "repeat_high_intent",
+        actionType: "repeat_high_intent_visitor",
+        followUpSupported: true,
+        label: "Repeat high-intent visitor",
+        status: persistedItem.status || "new",
+        count: highIntentTimeline.length,
+        snippet: truncateText(snippets.join(" ")),
+        question: snippets[0] || "",
+        reply: "",
+        whyFlagged: `Flagged because this same visitor returned across ${highIntentTimeline.length} high-intent interactions${intentLabels.length ? ` around ${intentLabels.join(", ")}` : ""}.`,
+        suggestedAction: "Use the prepared follow-up to reconnect while the visitor is still showing active intent.",
+        lastSeenAt: person.lastSeenAt || null,
+        note: persistedItem.note || "",
+        outcome: persistedItem.outcome || "",
+        nextStep: persistedItem.nextStep || "",
+        followUpNeeded: persistedItem.followUpNeeded,
+        followUpCompleted: persistedItem.followUpCompleted,
+        contactStatus: persistedItem.contactStatus || "",
+        updatedAt: persistedItem.updatedAt || null,
+        ownerWorkflow,
+        contactCaptured: Boolean(person.email || person.phone),
+        contactInfo: person.email || person.phone || person.name
+          ? {
+            email: person.email || null,
+            phone: person.phone || null,
+            name: person.name || null,
+          }
+          : null,
+        unresolved: false,
+        weakAnswer: false,
+        intent: highIntentTimeline[0]?.intent || "contact",
+        sessionKey: null,
+        personKey: person.key,
+        relatedActionKeys: highIntentTimeline.map((entry) => entry.actionKey).filter(Boolean),
+        messageId: highIntentTimeline[0]?.messageId || "",
+      };
+    })
+    .filter(Boolean);
 }
 
 function buildPersonKeyIntents(intentCounts = new Map()) {
@@ -1308,7 +1062,7 @@ function buildPersonDisplayLabel(person) {
   return "Unknown visitor";
 }
 
-function buildPeopleRecords(interactions = []) {
+function stitchPeople(interactions = [], actionItems = []) {
   const peopleByKey = new Map();
   const signalMaps = {
     email: new Map(),
@@ -1316,7 +1070,7 @@ function buildPeopleRecords(interactions = []) {
     session: new Map(),
     name: new Map(),
   };
-  const interactionToPersonKey = new Map();
+  const actionItemMap = new Map(actionItems.map((item) => [item.key, item]));
 
   interactions.forEach((interaction) => {
     const identity = buildInteractionIdentity(interaction);
@@ -1369,28 +1123,15 @@ function buildPeopleRecords(interactions = []) {
     registerPersonSignals(person, signalMaps);
   });
 
-  const records = [...peopleByKey.values()];
-
-  records.forEach((person) => {
-    person.interactions.forEach((interaction) => {
-      interactionToPersonKey.set(interaction.key, person.key);
-    });
-  });
-
-  return {
-    records,
-    interactionToPersonKey,
-  };
-}
-
-function materializePeople(records = [], actionItems = [], interactionToPersonKey = new Map()) {
-  const actionItemMap = new Map(actionItems.map((item) => [item.key, item]));
-  const recordsByKey = new Map(records.map((record) => [record.key, record]));
-
-  const people = records
+  const people = [...peopleByKey.values()]
     .map((person) => {
-      const queueItems = actionItems
-        .filter((item) => cleanText(item.relatedVisitorId) === person.key)
+      const queueItems = [...new Set([
+        ...person.actionKeys,
+        ...actionItems
+          .filter((item) => cleanText(item.personKey) === person.key)
+          .map((item) => item.key),
+      ])]
+        .map((actionKey) => actionItemMap.get(actionKey))
         .filter(Boolean)
         .sort((left, right) => getMessageTimestamp({ createdAt: right.lastSeenAt }) - getMessageTimestamp({ createdAt: left.lastSeenAt }));
       const interactionsDesc = [...person.interactions]
@@ -1418,6 +1159,7 @@ function materializePeople(records = [], actionItems = [], interactionToPersonKe
         keyIntents: buildPersonKeyIntents(person.intentCounts),
         snippets: interactionsDesc.slice(0, 3).map((interaction) => ({
           actionKey: interaction.key,
+          messageId: interaction.messageId || "",
           text: interaction.snippet || buildConversationSummary(interaction.question, interaction.reply),
           at: interaction.lastSeenAt || interaction.createdAt || null,
           intent: interaction.intent,
@@ -1425,6 +1167,7 @@ function materializePeople(records = [], actionItems = [], interactionToPersonKe
         })),
         timeline: interactionsDesc.slice(0, 5).map((interaction) => ({
           actionKey: interaction.key,
+          messageId: interaction.messageId || "",
           at: interaction.lastSeenAt || interaction.createdAt || null,
           label: interaction.label,
           intent: interaction.intent,
@@ -1460,9 +1203,8 @@ function materializePeople(records = [], actionItems = [], interactionToPersonKe
   return {
     people,
     items: actionItems.map((item) => {
-      const personKey = cleanText(item.relatedVisitorId) || peopleByActionKey.get(item.key) || interactionToPersonKey.get(item.relatedConversationId);
+      const personKey = cleanText(item.personKey) || peopleByActionKey.get(item.key);
       const person = peopleIndex.get(personKey);
-      const rawRecord = recordsByKey.get(personKey);
 
       if (!person) {
         return item;
@@ -1479,281 +1221,10 @@ function materializePeople(records = [], actionItems = [], interactionToPersonKe
           isReturning: person.isReturning,
           story: person.story,
           followUp: person.followUp,
-          timeline: rawRecord?.interactions
-            ?.slice()
-            .sort((left, right) => getMessageTimestamp({ createdAt: right.lastSeenAt || right.createdAt }) - getMessageTimestamp({ createdAt: left.lastSeenAt || left.createdAt }))
-            .map((interaction) => ({
-              actionKey: interaction.key,
-              at: interaction.lastSeenAt || interaction.createdAt || null,
-              summary: interaction.snippet || buildConversationSummary(interaction.question, interaction.reply),
-            })) || [],
         },
       };
     }),
   };
-}
-
-function createActionCandidateBucket(candidate) {
-  return {
-    ...candidate,
-    interactions: [...(candidate.interactions || [])],
-  };
-}
-
-function upsertActionCandidate(bucketMap, candidate) {
-  const existing = bucketMap.get(candidate.key);
-
-  if (!existing) {
-    bucketMap.set(candidate.key, createActionCandidateBucket(candidate));
-    return;
-  }
-
-  existing.interactions.push(...candidate.interactions);
-  existing.contactCaptured = existing.contactCaptured || candidate.contactCaptured;
-  existing.contactInfo = existing.contactInfo || candidate.contactInfo || null;
-  existing.lastSeenAt = getMessageTimestamp({ createdAt: candidate.lastSeenAt }) > getMessageTimestamp({ createdAt: existing.lastSeenAt })
-    ? candidate.lastSeenAt
-    : existing.lastSeenAt;
-  existing.createdAt = getMessageTimestamp({ createdAt: candidate.createdAt }) < getMessageTimestamp({ createdAt: existing.createdAt })
-    ? candidate.createdAt
-    : existing.createdAt;
-  existing.relatedConversationIds = [...new Set([...(existing.relatedConversationIds || []), ...(candidate.relatedConversationIds || [])])];
-  existing.relatedConversationId = existing.relatedConversationIds[existing.relatedConversationIds.length - 1] || existing.relatedConversationId;
-  existing.count = existing.interactions.length;
-}
-
-function buildInteractionActionCandidates(interactions = [], options = {}) {
-  const peopleByKey = new Map((options.peopleRecords || []).map((person) => [person.key, person]));
-  const interactionToPersonKey = options.interactionToPersonKey || new Map();
-  const questionRepeatCounts = buildQuestionRepeatCounts(interactions);
-  const buckets = new Map();
-
-  interactions.forEach((interaction) => {
-    const personKey = interactionToPersonKey.get(interaction.key) || "";
-    const person = peopleByKey.get(personKey) || null;
-    const questionFingerprint = buildQuestionFingerprint(interaction.question);
-    const repeatedQuestion = Boolean(questionFingerprint && (questionRepeatCounts.get(questionFingerprint) || 0) > 1);
-    const explicitFollowUp = hasExplicitFollowUpRequest(interaction.question);
-    const knowledgeGap = replySignalsKnowledgeGap(interaction.reply);
-    const type = selectInteractionActionType(interaction, {
-      explicitFollowUp,
-      repeatedQuestion,
-      knowledgeGap,
-    });
-
-    if (!type) {
-      return;
-    }
-
-    const relatedVisitorId = cleanText(person?.key);
-    const priority = getActionPriority(type, {
-      repeatedQuestion,
-      highIntent: isHighIntentIntent(interaction.intent),
-      contactCaptured: interaction.contactCaptured,
-    });
-    const title = buildActionTitle(type, {
-      personLabel: cleanText(person?.label || person?.nameRaw || person?.email || person?.phoneRaw),
-    });
-    const operatorSummary = buildActionOperatorSummary(type, {
-      interactionCount: 1,
-      contactInfo: interaction.contactInfo,
-    });
-    const whyItMatters = buildActionWhyItMatters(type, {
-      repeatedQuestion,
-    });
-    const recommendedAction = buildRecommendedAction(type, {
-      contactInfo: interaction.contactInfo,
-    });
-    const key = buildActionGroupKey(type, interaction, person, {
-      issueFingerprint: questionFingerprint || interaction.intent || "issue",
-    });
-
-    upsertActionCandidate(buckets, {
-      key,
-      type,
-      priority,
-      label: title,
-      operatorSummary,
-      whyFlagged: whyItMatters,
-      suggestedAction: recommendedAction,
-      snippet: interaction.snippet,
-      createdAt: interaction.createdAt || interaction.lastSeenAt || null,
-      lastSeenAt: interaction.lastSeenAt || interaction.createdAt || null,
-      contactCaptured: interaction.contactCaptured,
-      contactInfo: interaction.contactInfo || null,
-      relatedConversationId: interaction.key,
-      relatedConversationIds: [interaction.key],
-      relatedVisitorId: relatedVisitorId || null,
-      relatedPageUrl: null,
-      evidence: buildActionEvidence([interaction], {
-        repeatedQuestion,
-        explicitFollowUp,
-        knowledgeGap,
-        contactInfo: interaction.contactInfo,
-        personKey: relatedVisitorId,
-      }),
-      interactions: [interaction],
-      count: 1,
-    });
-  });
-
-  return [...buckets.values()];
-}
-
-function buildRepeatHighIntentVisitorCandidates(peopleRecords = []) {
-  const buckets = [];
-
-  peopleRecords.forEach((person) => {
-    if (isUnknownPersonKey(person.key)) {
-      return;
-    }
-
-    const highIntentInteractions = person.interactions
-      .filter((interaction) => isHighIntentIntent(interaction.intent))
-      .sort((left, right) => getMessageTimestamp({ createdAt: right.lastSeenAt || right.createdAt }) - getMessageTimestamp({ createdAt: left.lastSeenAt || left.createdAt }));
-
-    if (highIntentInteractions.length < 2) {
-      return;
-    }
-
-    const latest = highIntentInteractions[0];
-    const priority = getActionPriority("repeat_high_intent_visitor");
-    const title = buildActionTitle("repeat_high_intent_visitor", {
-      personLabel: buildPersonDisplayLabel(person),
-    });
-
-    buckets.push({
-      key: `operator:repeat_high_intent_visitor:${person.key}`,
-      type: "repeat_high_intent_visitor",
-      priority,
-      label: title,
-      operatorSummary: buildActionOperatorSummary("repeat_high_intent_visitor", {
-        interactionCount: highIntentInteractions.length,
-      }),
-      whyFlagged: buildActionWhyItMatters("repeat_high_intent_visitor"),
-      suggestedAction: buildRecommendedAction("repeat_high_intent_visitor"),
-      snippet: truncateText(highIntentInteractions.map((interaction) => interaction.snippet || buildConversationSummary(interaction.question, interaction.reply)).join(" ")),
-      createdAt: highIntentInteractions[highIntentInteractions.length - 1]?.createdAt || null,
-      lastSeenAt: latest.lastSeenAt || latest.createdAt || null,
-      contactCaptured: highIntentInteractions.some((interaction) => interaction.contactCaptured),
-      contactInfo: highIntentInteractions.find((interaction) => interaction.contactCaptured)?.contactInfo || null,
-      relatedConversationId: latest.key,
-      relatedConversationIds: highIntentInteractions.map((interaction) => interaction.key),
-      relatedVisitorId: person.key,
-      relatedPageUrl: null,
-      evidence: buildActionEvidence(highIntentInteractions, {
-        personKey: person.key,
-      }),
-      interactions: highIntentInteractions,
-      count: highIntentInteractions.length,
-    });
-  });
-
-  return buckets;
-}
-
-function finalizeActionItems(candidates = [], persistedStatuses = [], options = {}) {
-  const persistedMap = new Map(
-    (persistedStatuses || []).map((item) => {
-      const normalized = normalizePersistedItem(item);
-      return [normalized.actionKey, normalized];
-    })
-  );
-  const grouped = new Map();
-
-  candidates.forEach((candidate) => {
-    upsertActionCandidate(grouped, candidate);
-  });
-
-  const items = [...grouped.values()].map((candidate) => {
-    const type = normalizeActionType(candidate.type);
-    const priority = normalizeActionPriority(candidate.priority);
-    const persistedItem = persistedMap.get(candidate.key) || {};
-    const ownerWorkflow = buildOwnerWorkflow(persistedItem);
-    const personLabel = cleanText(candidate.contactInfo?.name) || "";
-    const questionExamples = candidate.interactions.map((interaction) => buildQuestionFingerprint(interaction.question)).filter(Boolean);
-    const repeatedQuestion = new Set(questionExamples).size < questionExamples.length;
-    const evidence = buildActionEvidence(candidate.interactions, {
-      repeatedQuestion,
-      explicitFollowUp: candidate.interactions.some((interaction) => hasExplicitFollowUpRequest(interaction.question)),
-      knowledgeGap: candidate.interactions.some((interaction) => replySignalsKnowledgeGap(interaction.reply)),
-      contactInfo: candidate.contactInfo,
-      personKey: candidate.relatedVisitorId,
-    });
-    const count = Number(candidate.interactions.length || candidate.count || 1);
-    const title = buildActionTitle(type, { personLabel });
-    const operatorSummary = buildActionOperatorSummary(type, {
-      interactionCount: count,
-      contactInfo: candidate.contactInfo,
-    });
-    const whyItMatters = buildActionWhyItMatters(type, {
-      repeatedQuestion,
-    });
-    const recommendedAction = buildRecommendedAction(type, {
-      contactInfo: candidate.contactInfo,
-    });
-
-    return {
-      key: candidate.key,
-      type,
-      priority,
-      priorityRank: getPriorityRank(priority),
-      priorityLabel: `${priority.charAt(0).toUpperCase()}${priority.slice(1)} priority`,
-      label: candidate.label || title,
-      title: candidate.label || title,
-      operatorSummary,
-      status: persistedItem.status || "new",
-      count,
-      snippet: candidate.snippet || truncateText(candidate.interactions.map((interaction) => interaction.snippet).filter(Boolean).join(" ")),
-      whyFlagged: whyItMatters,
-      suggestedAction: recommendedAction,
-      recommendedAction,
-      lastSeenAt: candidate.lastSeenAt,
-      createdAt: candidate.createdAt,
-      note: persistedItem.note || "",
-      outcome: persistedItem.outcome || "",
-      nextStep: persistedItem.nextStep || "",
-      followUpNeeded: persistedItem.followUpNeeded,
-      followUpCompleted: persistedItem.followUpCompleted,
-      contactStatus: persistedItem.contactStatus || "",
-      updatedAt: persistedItem.updatedAt || null,
-      ownerWorkflow,
-      contactCaptured: candidate.contactCaptured,
-      contactInfo: candidate.contactInfo,
-      unresolved: candidate.interactions.some((interaction) => interaction.unresolved),
-      weakAnswer: candidate.interactions.some((interaction) => interaction.weakAnswer),
-      intent: candidate.interactions[0]?.intent || "",
-      intents: [...new Set(candidate.interactions.map((interaction) => interaction.intent).filter(Boolean))],
-      sessionKey: candidate.interactions.find((interaction) => interaction.sessionKey)?.sessionKey || null,
-      evidence,
-      relatedConversationId: candidate.relatedConversationId || null,
-      relatedConversationIds: candidate.relatedConversationIds || [],
-      relatedVisitorId: candidate.relatedVisitorId || null,
-      relatedPageUrl: candidate.relatedPageUrl || null,
-      interactions: candidate.interactions.map((interaction) => ({
-        key: interaction.key,
-        question: interaction.question,
-        reply: interaction.reply,
-        snippet: interaction.snippet,
-        createdAt: interaction.createdAt,
-        lastSeenAt: interaction.lastSeenAt,
-      })),
-    };
-  });
-
-  if (options.logDecisions) {
-    const typeCounts = items.reduce((counts, item) => {
-      counts[item.type] = (counts[item.type] || 0) + 1;
-      return counts;
-    }, {});
-
-    console.log("[action queue] Generated operator actions:", {
-      total: items.length,
-      byType: typeCounts,
-    });
-  }
-
-  return items;
 }
 
 function buildPeopleSummary(people = []) {
@@ -1767,7 +1238,6 @@ function buildPeopleSummary(people = []) {
 function buildStatusSummary(items = []) {
   const summary = {
     total: items.length,
-    open: 0,
     new: 0,
     reviewed: 0,
     done: 0,
@@ -1776,13 +1246,6 @@ function buildStatusSummary(items = []) {
     followUpCompleted: 0,
     resolved: 0,
     attentionNeeded: 0,
-    highPriority: 0,
-    leadFollowUp: 0,
-    pricingInterest: 0,
-    bookingIntent: 0,
-    unansweredQuestion: 0,
-    knowledgeGap: 0,
-    repeatHighIntentVisitor: 0,
   };
 
   items.forEach((item) => {
@@ -1805,63 +1268,58 @@ function buildStatusSummary(items = []) {
     if (workflow.attention) {
       summary.attentionNeeded += 1;
     }
-
-    if (status !== "done" && status !== "dismissed") {
-      summary.open += 1;
-    }
-
-    if (item.priority === "high") {
-      summary.highPriority += 1;
-    }
-
-    switch (item.type) {
-      case "lead_follow_up":
-        summary.leadFollowUp += 1;
-        break;
-      case "pricing_interest":
-        summary.pricingInterest += 1;
-        break;
-      case "booking_intent":
-        summary.bookingIntent += 1;
-        break;
-      case "unanswered_question":
-        summary.unansweredQuestion += 1;
-        break;
-      case "knowledge_gap":
-        summary.knowledgeGap += 1;
-        break;
-      case "repeat_high_intent_visitor":
-        summary.repeatHighIntentVisitor += 1;
-        break;
-      default:
-        break;
-    }
   });
 
   return summary;
 }
 
 export function buildActionQueue(messages = [], persistedStatuses = [], options = {}) {
+  const persistedMap = new Map(
+    (persistedStatuses || []).map((item) => {
+      const normalized = normalizePersistedItem(item);
+      return [normalized.actionKey, normalized];
+    })
+  );
   const interactions = buildConversationInteractions(messages);
-  const { records: peopleRecords, interactionToPersonKey } = buildPeopleRecords(interactions);
-  const candidates = [
-    ...buildInteractionActionCandidates(interactions, {
-      peopleRecords,
-      interactionToPersonKey,
-    }),
-    ...buildRepeatHighIntentVisitorCandidates(peopleRecords),
-  ];
-  const items = finalizeActionItems(candidates, persistedStatuses, {
-    logDecisions: options.logDecisions,
-  });
-  const sortedItems = items
+  const baseItems = interactions
+    .filter((interaction) => interaction.actionable)
+    .map((interaction) => {
+      const persistedItem = persistedMap.get(interaction.key) || {};
+      const ownerWorkflow = buildOwnerWorkflow(persistedItem);
+
+      return {
+        key: interaction.key,
+        type: interaction.type,
+        actionType: buildActionType(interaction),
+        followUpSupported: isSupportedFollowUpActionType(buildActionType(interaction)),
+        label: interaction.label,
+        status: persistedItem.status || "new",
+        count: 1,
+        snippet: interaction.snippet,
+        question: interaction.question,
+        reply: interaction.reply,
+        whyFlagged: interaction.whyFlagged,
+        suggestedAction: interaction.suggestedAction,
+        lastSeenAt: interaction.lastSeenAt,
+        messageId: interaction.messageId || "",
+        note: persistedItem.note || "",
+        outcome: persistedItem.outcome || "",
+        nextStep: persistedItem.nextStep || "",
+        followUpNeeded: persistedItem.followUpNeeded,
+        followUpCompleted: persistedItem.followUpCompleted,
+        contactStatus: persistedItem.contactStatus || "",
+        updatedAt: persistedItem.updatedAt || null,
+        ownerWorkflow,
+        contactCaptured: interaction.contactCaptured,
+        contactInfo: interaction.contactInfo,
+        unresolved: interaction.unresolved,
+        weakAnswer: interaction.weakAnswer,
+        intent: interaction.intent,
+        sessionKey: interaction.sessionKey,
+      };
+    });
+  const preliminarySortedItems = [...baseItems]
     .sort((left, right) => {
-      const priorityDelta = (left.priorityRank ?? 99) - (right.priorityRank ?? 99);
-
-      if (priorityDelta !== 0) {
-        return priorityDelta;
-      }
-
       const rankDelta = (left.ownerWorkflow?.rank ?? 99) - (right.ownerWorkflow?.rank ?? 99);
 
       if (rankDelta !== 0) {
@@ -1870,15 +1328,62 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
 
       return getMessageTimestamp({ createdAt: right.lastSeenAt }) - getMessageTimestamp({ createdAt: left.lastSeenAt });
     });
-  const stitched = materializePeople(peopleRecords, sortedItems, interactionToPersonKey);
+  const preliminaryStitched = stitchPeople(interactions, preliminarySortedItems);
+  const repeatHighIntentItems = buildRepeatHighIntentItems(preliminaryStitched.people, persistedMap);
+  const items = [...baseItems, ...repeatHighIntentItems];
+  const followUpsByActionKey = new Map();
+
+  (Array.isArray(options.followUps) ? options.followUps : []).forEach((followUp) => {
+    const linkedActionKeys = [
+      cleanText(followUp.sourceActionKey || followUp.source_action_key),
+      ...(Array.isArray(followUp.linkedActionKeys || followUp.linked_action_keys)
+        ? followUp.linkedActionKeys || followUp.linked_action_keys
+        : []),
+    ]
+      .map((actionKey) => cleanText(actionKey))
+      .filter(Boolean);
+
+    linkedActionKeys.forEach((actionKey) => {
+      followUpsByActionKey.set(actionKey, followUp);
+    });
+  });
+
+  const sortedItems = items
+    .sort((left, right) => {
+      const rankDelta = (left.ownerWorkflow?.rank ?? 99) - (right.ownerWorkflow?.rank ?? 99);
+
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+
+      return getMessageTimestamp({ createdAt: right.lastSeenAt }) - getMessageTimestamp({ createdAt: left.lastSeenAt });
+    });
+  const stitched = stitchPeople(interactions, sortedItems);
+  const hydratedItems = stitched.items.map((item) => {
+    const followUp = followUpsByActionKey.get(item.key) || null;
+    const ownerWorkflow = buildOwnerWorkflow({
+      ...item,
+      followUp,
+    });
+
+    return {
+      ...item,
+      actionType: normalizeActionType(item.actionType) || "",
+      followUpSupported: item.followUpSupported === true || isSupportedFollowUpActionType(item.actionType),
+      followUp,
+      ownerWorkflow,
+    };
+  });
 
   return {
-    items: stitched.items,
+    items: hydratedItems,
     people: stitched.people,
     peopleSummary: buildPeopleSummary(stitched.people),
-    summary: buildStatusSummary(stitched.items),
+    summary: buildStatusSummary(hydratedItems),
     persistenceAvailable: options.persistenceAvailable !== false,
     migrationRequired: options.persistenceAvailable === false,
+    followUpWorkflowAvailable: options.followUpWorkflowAvailable !== false,
+    followUpWorkflowMigrationRequired: options.followUpWorkflowAvailable === false,
   };
 }
 
@@ -1898,13 +1403,10 @@ export async function listActionQueueStatuses(supabase, options = {}) {
 
   if (error) {
     if (isUnavailablePersistenceError(error)) {
-      console.error("[action queue] Persistence schema unavailable while loading queue:", {
-        agentId,
-        ownerUserId,
-        code: error.code || null,
-        message: error.message || "Unknown error",
-      });
-      throw buildPersistenceUnavailableError();
+      return {
+        records: [],
+        persistenceAvailable: false,
+      };
     }
 
     console.error(error);
@@ -1926,78 +1428,33 @@ export async function updateActionQueueStatus(supabase, options = {}) {
   const nextStep = options.nextStep === undefined ? undefined : cleanText(options.nextStep);
   const followUpNeeded = options.followUpNeeded === undefined ? undefined : normalizeBooleanFlag(options.followUpNeeded);
   const followUpCompleted = options.followUpCompleted === undefined ? undefined : normalizeBooleanFlag(options.followUpCompleted);
-  const contactStatus = parseRequestedContactStatus(options.contactStatus);
-  const explicitStatus = parseRequestedStatus(options.status);
-
-  if (!agentId || !ownerUserId || !actionKey) {
-    throw buildActionQueueError(
-      "agent_id, owner_user_id, and action_key are required",
-      400,
-      "ACTION_QUEUE_INVALID_REQUEST"
-    );
-  }
-
-  const { data: existingRow, error: existingError } = await supabase
-    .from(ACTION_QUEUE_STATUS_TABLE)
-    .select("agent_id, owner_user_id, action_key, status, note, outcome, next_step, follow_up_needed, follow_up_completed, contact_status, updated_at")
-    .eq("agent_id", agentId)
-    .eq("owner_user_id", ownerUserId)
-    .eq("action_key", actionKey)
-    .maybeSingle();
-
-  if (existingError) {
-    if (isUnavailablePersistenceError(existingError)) {
-      console.error("[action queue] Persistence schema unavailable while loading existing status:", {
-        agentId,
-        ownerUserId,
-        actionKey,
-        code: existingError.code || null,
-        message: existingError.message || "Unknown error",
-      });
-      throw buildPersistenceUnavailableError();
-    }
-
-    console.error(existingError);
-    throw existingError;
-  }
-
-  const previousItem = normalizePersistedItem(existingRow || {});
-  const previousStatus = previousItem.actionKey ? previousItem.status : "new";
-  const mergedItem = {
-    ...previousItem,
-    status: explicitStatus || previousStatus,
-    note: note === undefined ? previousItem.note : note,
-    outcome: outcome === undefined ? previousItem.outcome : outcome,
-    nextStep: nextStep === undefined ? previousItem.nextStep : nextStep,
-    followUpNeeded: followUpNeeded === undefined ? previousItem.followUpNeeded : followUpNeeded,
-    followUpCompleted: followUpCompleted === undefined ? previousItem.followUpCompleted : followUpCompleted,
-    contactStatus: contactStatus === undefined ? previousItem.contactStatus : contactStatus,
-  };
+  const contactStatus = options.contactStatus === undefined ? undefined : normalizeContactStatus(options.contactStatus);
+  const explicitStatus = options.status === undefined ? null : normalizeStatus(options.status);
   const hasHandoffUpdate = [
     note,
     outcome,
     nextStep,
     contactStatus,
   ].some((value) => value !== undefined && value !== "") || followUpNeeded !== undefined || followUpCompleted !== undefined;
-  let status = mergedItem.status || "new";
+  let status = explicitStatus;
+
+  if (!status) {
+    status = "new";
+  }
 
   if (status !== "dismissed") {
-    if (
-      mergedItem.followUpCompleted === true
-      || (mergedItem.followUpNeeded === false && cleanText(mergedItem.outcome))
-    ) {
+    if (followUpCompleted === true || (followUpNeeded === false && outcome)) {
       status = "done";
-    } else if ((hasHandoffUpdate || hasOwnerHandoffContent(mergedItem)) && status === "new") {
+    } else if (hasHandoffUpdate && status === "new") {
       status = "reviewed";
     }
   }
 
-  validateStateShape({
-    status,
-    followUpNeeded: mergedItem.followUpNeeded,
-    followUpCompleted: mergedItem.followUpCompleted,
-  });
-  assertValidStatusTransition(previousStatus, status);
+  if (!agentId || !ownerUserId || !actionKey) {
+    const error = new Error("agent_id, owner_user_id, and action_key are required");
+    error.statusCode = 400;
+    throw error;
+  }
 
   const payload = {
     agent_id: agentId,
@@ -2040,30 +1497,27 @@ export async function updateActionQueueStatus(supabase, options = {}) {
 
   if (error) {
     if (isUnavailablePersistenceError(error)) {
-      console.error("[action queue] Persistence schema unavailable while saving status:", {
-        agentId,
-        ownerUserId,
-        actionKey,
-        code: error.code || null,
-        message: error.message || "Unknown error",
-      });
-      throw buildPersistenceUnavailableError();
+      return {
+        item: normalizePersistedItem({
+          agentId,
+          ownerUserId,
+          actionKey,
+          status,
+          note,
+          outcome,
+          nextStep,
+          followUpNeeded,
+          followUpCompleted,
+          contactStatus,
+          updatedAt: new Date().toISOString(),
+        }),
+        persistenceAvailable: false,
+      };
     }
 
     console.error(error);
     throw error;
   }
-
-  console.log("[action queue] Persisted status update:", {
-    agentId,
-    ownerUserId,
-    actionKey,
-    previousStatus,
-    nextStatus: status,
-    followUpNeeded: payload.follow_up_needed ?? null,
-    followUpCompleted: payload.follow_up_completed ?? null,
-    contactStatus: payload.contact_status ?? null,
-  });
 
   return {
     item: normalizePersistedItem(data),

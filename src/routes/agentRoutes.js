@@ -24,6 +24,10 @@ import {
   updateActionQueueStatus,
 } from "../services/analytics/actionQueueService.js";
 import {
+  syncFollowUpWorkflows,
+  updateFollowUpWorkflow,
+} from "../services/followup/followUpService.js";
+import {
   createHostedCheckoutSession,
   constructStripeWebhookEvent,
   getStripeCheckoutConfigurationErrorMessage,
@@ -34,7 +38,6 @@ import {
 } from "../services/billing/checkoutService.js";
 import { isLocalDevBillingRequestAllowed } from "../config/env.js";
 import { extractBusinessWebsiteContent } from "../services/scraping/websiteContentService.js";
-import { importBusinessWebsiteKnowledge } from "../services/scraping/websiteImportCoordinator.js";
 
 export function createAgentRouter(deps = {}) {
   const router = express.Router();
@@ -48,16 +51,12 @@ export function createAgentRouter(deps = {}) {
   const buildActionQueueImpl = deps.buildActionQueue || buildActionQueue;
   const listActionQueueStatusesImpl = deps.listActionQueueStatuses || listActionQueueStatuses;
   const updateActionQueueStatusImpl = deps.updateActionQueueStatus || updateActionQueueStatus;
+  const syncFollowUpWorkflowsImpl = deps.syncFollowUpWorkflows || syncFollowUpWorkflows;
+  const updateFollowUpWorkflowImpl = deps.updateFollowUpWorkflow || updateFollowUpWorkflow;
   const updateAgentSettingsImpl = deps.updateAgentSettings || updateAgentSettings;
   const deleteAgentImpl = deps.deleteAgent || deleteAgent;
   const resolveAgentContextImpl = deps.resolveAgentContext || resolveAgentContext;
   const extractBusinessWebsiteContentImpl = deps.extractBusinessWebsiteContent || extractBusinessWebsiteContent;
-  const importBusinessWebsiteKnowledgeImpl =
-    deps.importBusinessWebsiteKnowledge
-    || ((supabase, options) =>
-      importBusinessWebsiteKnowledge(supabase, options, {
-        extractBusinessWebsiteContent: extractBusinessWebsiteContentImpl,
-      }));
   const updateOwnedAccessStatusImpl = deps.updateOwnedAccessStatus || updateOwnedAccessStatus;
   const createHostedCheckoutSessionImpl =
     deps.createHostedCheckoutSession || createHostedCheckoutSession;
@@ -70,30 +69,6 @@ export function createAgentRouter(deps = {}) {
     const ownerUserId = String(user?.id || "").trim();
     const suffix = ownerUserId ? ownerUserId.slice(0, 8) : "owner";
     return `Vonza setup ${suffix}`;
-  }
-
-  function requireAuthenticatedCheckoutUser(user) {
-    if (user?.id) {
-      return user;
-    }
-
-    const error = new Error("Your sign-in session expired. Please sign in again to open checkout.");
-    error.statusCode = 401;
-    throw error;
-  }
-
-  async function getCheckoutUser(supabase, req) {
-    try {
-      return requireAuthenticatedCheckoutUser(await authenticateUser(supabase, req));
-    } catch (error) {
-      if (error?.statusCode === 401) {
-        const authError = new Error("Your sign-in session expired. Please sign in again to open checkout.");
-        authError.statusCode = 401;
-        throw authError;
-      }
-
-      throw error;
-    }
   }
 
   function ensureAdminAccess(req) {
@@ -313,13 +288,6 @@ export function createAgentRouter(deps = {}) {
         secondaryColor: req.body.secondary_color || req.body.secondaryColor,
       });
 
-      console.info("[agents/update] Saved agent settings.", {
-        agentId: result.id,
-        businessId: result.businessId || null,
-        websiteChanged: result.websiteSync?.changed === true,
-        websiteUrl: result.websiteUrl || null,
-      });
-
       res.json({ ok: true, agent: result });
     } catch (err) {
       console.error("[agents/update] Failed to update agent settings:", {
@@ -362,11 +330,9 @@ export function createAgentRouter(deps = {}) {
   });
 
   router.get("/agents/action-queue", async (req, res) => {
-    let user = null;
-
     try {
       const supabase = getSupabase();
-      user = await authenticateUser(supabase, req).catch((error) => {
+      const user = await authenticateUser(supabase, req).catch((error) => {
         if (error.statusCode === 401) {
           return null;
         }
@@ -380,28 +346,57 @@ export function createAgentRouter(deps = {}) {
         clientId: req.query.client_id || req.query.clientId,
       });
 
-      const [messages, statuses] = await Promise.all([
+      const [messages, statuses, agentListResult] = await Promise.all([
         listAgentMessagesImpl(supabase, agentId),
         listActionQueueStatusesImpl(supabase, {
           agentId,
           ownerUserId: user?.id || null,
         }),
+        listAgentsImpl(supabase, {
+          ownerUserId: user?.id || null,
+          includeBridgeAgent: false,
+        }),
       ]);
 
       const persistedRecords = Array.isArray(statuses) ? statuses : statuses?.records || [];
-
-      res.json(buildActionQueueImpl(messages, persistedRecords, {
-        logDecisions: true,
-      }));
-    } catch (err) {
-      console.error("[action queue] Failed to load action queue:", {
-        agentId: req.query.agent_id || req.query.agentId || null,
-        ownerUserId: user?.id || null,
-        clientId: req.query.client_id || req.query.clientId || null,
-        code: err?.code || null,
-        statusCode: err?.statusCode || 500,
-        message: err?.message || "Something went wrong",
+      const persistenceAvailable = Array.isArray(statuses)
+        ? true
+        : statuses?.persistenceAvailable !== false;
+      const agentProfile = (agentListResult?.agents || []).find((candidate) => candidate.id === agentId) || null;
+      const preliminaryQueue = buildActionQueueImpl(messages, persistedRecords, {
+        persistenceAvailable,
       });
+      const followUpSync = await syncFollowUpWorkflowsImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        queueItems: preliminaryQueue.items || [],
+        agentProfile: {
+          agentId,
+          ownerUserId: user?.id || null,
+          businessName: agentProfile?.name || "",
+          assistantName: agentProfile?.assistantName || agentProfile?.name || "",
+        },
+      });
+      const latestStatuses = followUpSync?.persistenceAvailable === false
+        ? statuses
+        : await listActionQueueStatusesImpl(supabase, {
+          agentId,
+          ownerUserId: user?.id || null,
+        });
+      const finalPersistedRecords = Array.isArray(latestStatuses) ? latestStatuses : latestStatuses?.records || [];
+      const finalPersistenceAvailable = Array.isArray(latestStatuses)
+        ? true
+        : latestStatuses?.persistenceAvailable !== false;
+
+      res.json(
+        buildActionQueueImpl(messages, finalPersistedRecords, {
+          persistenceAvailable: finalPersistenceAvailable,
+          followUps: followUpSync?.records || [],
+          followUpWorkflowAvailable: followUpSync?.persistenceAvailable !== false,
+        })
+      );
+    } catch (err) {
+      console.error(err);
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
       });
@@ -409,11 +404,9 @@ export function createAgentRouter(deps = {}) {
   });
 
   router.post("/agents/action-queue/status", async (req, res) => {
-    let user = null;
-
     try {
       const supabase = getSupabase();
-      user = await authenticateUser(supabase, req).catch((error) => {
+      const user = await authenticateUser(supabase, req).catch((error) => {
         if (error.statusCode === 401) {
           return null;
         }
@@ -441,34 +434,67 @@ export function createAgentRouter(deps = {}) {
       });
 
       const item = result?.item || result;
-      const [messages, statuses] = await Promise.all([
-        listAgentMessagesImpl(supabase, agentId),
-        listActionQueueStatusesImpl(supabase, {
-          agentId,
-          ownerUserId: user?.id || null,
-        }),
-      ]);
-      const persistedRecords = Array.isArray(statuses) ? statuses : statuses?.records || [];
-      const queue = buildActionQueueImpl(messages, persistedRecords, {
-        logDecisions: true,
-      });
+      const persistenceAvailable = result?.persistenceAvailable !== false;
 
       res.json({
         ok: true,
         item,
-        queue,
+        persistenceAvailable,
+        migrationRequired: !persistenceAvailable,
       });
     } catch (err) {
-      console.error("[action queue] Failed to update action queue item:", {
-        agentId: req.body.agent_id || req.body.agentId || null,
-        ownerUserId: user?.id || null,
-        clientId: req.body.client_id || req.body.clientId || null,
-        actionKey: req.body.action_key || req.body.actionKey || null,
-        status: req.body.status || null,
-        code: err?.code || null,
-        statusCode: err?.statusCode || 500,
-        message: err?.message || "Something went wrong",
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
       });
+    }
+  });
+
+  router.post("/agents/follow-ups/update", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req).catch((error) => {
+        if (error.statusCode === 401) {
+          return null;
+        }
+        throw error;
+      });
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const result = await updateFollowUpWorkflowImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        followUpId: req.body.follow_up_id || req.body.followUpId,
+        status: req.body.status,
+        subject: req.body.subject,
+        draftContent: req.body.draft_content ?? req.body.draftContent,
+        errorMessage: req.body.error_message ?? req.body.errorMessage,
+        reopen: req.body.reopen === true || req.body.reopen === "true",
+      });
+
+      res.json({
+        ok: true,
+        followUp: result?.followUp || null,
+        queueSync: result?.queueSync || null,
+        persistenceAvailable: result?.persistenceAvailable !== false,
+        message: result?.followUp?.status === "sent"
+          ? "Follow-up marked sent."
+          : result?.followUp?.status === "dismissed"
+            ? "Follow-up dismissed."
+            : result?.followUp?.status === "ready"
+              ? "Follow-up marked ready."
+              : result?.followUp?.status === "failed"
+                ? "Follow-up marked failed."
+                : "Follow-up saved.",
+      });
+    } catch (err) {
+      console.error(err);
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
       });
@@ -501,24 +527,16 @@ export function createAgentRouter(deps = {}) {
         });
       }
 
-      const result = await importBusinessWebsiteKnowledgeImpl(supabase, {
+      const result = await extractBusinessWebsiteContentImpl(supabase, {
         businessId: context.business.id,
         websiteUrl: context.business.website_url,
       });
 
       res.json(result);
     } catch (err) {
-      console.error("[knowledge/import] Request failed.", {
-        agentKey: req.body.agent_key || req.body.agentKey || null,
-        businessId: req.body.business_id || req.body.businessId || null,
-        clientId: req.body.client_id || req.body.clientId || null,
-        code: err?.code || null,
-        statusCode: err?.statusCode || 500,
-        message: err?.message || "Something went wrong",
-      });
+      console.error(err);
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
-        import: err.import || null,
       });
     }
   });
@@ -545,7 +563,7 @@ export function createAgentRouter(deps = {}) {
   router.post("/create-checkout-session", async (req, res) => {
     try {
       const supabase = getSupabase();
-      const user = await getCheckoutUser(supabase, req);
+      const user = await authenticateUser(supabase, req);
       const action = req.body.action || "create";
 
       if (action === "simulate") {

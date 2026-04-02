@@ -622,6 +622,120 @@ function createAgentTestDeps(state) {
     state.actionQueueStatuses = new Map();
   }
 
+  if (!state.followUps) {
+    state.followUps = new Map();
+  }
+
+  let followUpCounter = state.followUpCounter || 0;
+
+  const nextFollowUpId = () => {
+    followUpCounter += 1;
+    state.followUpCounter = followUpCounter;
+    return `follow-up-${followUpCounter}`;
+  };
+
+  const dedupeActionKeys = (values = []) => [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+
+  const syncQueueStateFromFollowUp = (followUp) => {
+    const nextStatus = followUp.status === "sent"
+      ? { status: "done", followUpNeeded: false, followUpCompleted: true }
+      : followUp.status === "dismissed"
+        ? { status: "dismissed", followUpNeeded: false, followUpCompleted: false }
+        : { status: "reviewed", followUpNeeded: true, followUpCompleted: false };
+    const actionKeys = dedupeActionKeys([followUp.sourceActionKey, ...(followUp.linkedActionKeys || [])]);
+
+    actionKeys.forEach((actionKey) => {
+      const previous = state.actionQueueStatuses.get(actionKey) || {};
+      state.actionQueueStatuses.set(actionKey, {
+        ...previous,
+        status: nextStatus.status,
+        followUpNeeded: nextStatus.followUpNeeded,
+        followUpCompleted: nextStatus.followUpCompleted,
+      });
+    });
+
+    return nextStatus;
+  };
+
+  const buildStubDraftForItem = (item, actionType) => {
+    switch (actionType) {
+      case "pricing_interest":
+        return {
+          subject: "Following up on your pricing question",
+          draftContent: "Thanks for asking about pricing. If you share a little more detail about what you need, we can point you to the most relevant option or quote.",
+        };
+      case "booking_intent":
+        return {
+          subject: "Following up on your booking request",
+          draftContent: "Thanks for asking about booking. If you send the timing that works best, we can help move the booking forward.",
+        };
+      case "repeat_high_intent_visitor":
+        return {
+          subject: "Following up on your recent questions",
+          draftContent: "You have shown strong repeat intent, so this draft reconnects while the conversation is still warm.",
+        };
+      default:
+        return {
+          subject: "Following up on your request",
+          draftContent: "Thanks for reaching out. I wanted to make it easy to continue the conversation and help with the next step.",
+        };
+    }
+  };
+
+  const buildFollowUpForItem = (item) => {
+    const actionType = String(item.actionType || "").trim();
+
+    if (!actionType) {
+      return null;
+    }
+
+    const personKey = String(item.person?.key || item.personKey || "").trim();
+    const dedupeKey = personKey
+      ? `person:${personKey}:${actionType}`
+      : `action:${String(item.key || "").trim()}`;
+    const channel = item.contactInfo?.email ? "email" : item.contactInfo?.phone ? "phone" : "";
+    const existing = [...state.followUps.values()].find((followUp) =>
+      followUp.dedupeKey === dedupeKey ||
+      (actionType === "repeat_high_intent_visitor" &&
+        personKey &&
+        followUp.personKey === personKey &&
+        !["sent", "dismissed"].includes(followUp.status))
+    );
+    const draft = buildStubDraftForItem(item, existing?.actionType || actionType);
+    const nextFollowUp = {
+      id: existing?.id || nextFollowUpId(),
+      agentId: "agent-1",
+      ownerUserId: "owner-1",
+      dedupeKey: existing?.dedupeKey || dedupeKey,
+      sourceActionKey: existing?.sourceActionKey || item.key,
+      linkedActionKeys: dedupeActionKeys([
+        ...(existing?.linkedActionKeys || []),
+        item.key,
+        ...(item.relatedActionKeys || []),
+      ]),
+      actionType: existing?.actionType || actionType,
+      personKey: existing?.personKey || personKey,
+      status: existing?.status && ["sent", "dismissed"].includes(existing.status)
+        ? existing.status
+        : channel
+          ? (existing?.status === "missing_contact" ? "draft" : existing?.status || "draft")
+          : "missing_contact",
+      channel: channel || existing?.channel || "",
+      contactName: item.contactInfo?.name || existing?.contactName || "",
+      contactEmail: item.contactInfo?.email || existing?.contactEmail || "",
+      contactPhone: item.contactInfo?.phone || existing?.contactPhone || "",
+      subject: existing?.draftEditedManually ? existing.subject : draft.subject,
+      draftContent: existing?.draftEditedManually ? existing.draftContent : draft.draftContent,
+      draftEditedManually: existing?.draftEditedManually === true,
+      whyPrepared: item.whyFlagged || existing?.whyPrepared || "",
+      lastError: existing?.lastError || "",
+    };
+
+    state.followUps.set(nextFollowUp.id, nextFollowUp);
+    syncQueueStateFromFollowUp(nextFollowUp);
+    return nextFollowUp;
+  };
+
   return {
     getSupabaseClient: () => ({ test: true }),
     getAuthenticatedUser: async () => ({
@@ -739,6 +853,39 @@ function createAgentTestDeps(state) {
           ...nextItem,
           updatedAt: new Date().toISOString(),
         },
+        persistenceAvailable: true,
+      };
+    },
+    syncFollowUpWorkflows: async (_supabase, { queueItems }) => {
+      (queueItems || [])
+        .filter((item) => item.followUpSupported === true)
+        .forEach((item) => {
+          buildFollowUpForItem(item);
+        });
+
+      return {
+        records: [...state.followUps.values()],
+        persistenceAvailable: true,
+      };
+    },
+    updateFollowUpWorkflow: async (_supabase, { followUpId, status, subject, draftContent }) => {
+      const existing = state.followUps.get(followUpId);
+      assert.ok(existing, "follow-up should exist before update");
+      const nextFollowUp = {
+        ...existing,
+        status: status || existing.status,
+        subject: subject ?? existing.subject,
+        draftContent: draftContent ?? existing.draftContent,
+        draftEditedManually: subject !== undefined || draftContent !== undefined
+          ? true
+          : existing.draftEditedManually === true,
+      };
+      state.followUps.set(followUpId, nextFollowUp);
+      const queueSync = syncQueueStateFromFollowUp(nextFollowUp);
+
+      return {
+        followUp: nextFollowUp,
+        queueSync,
         persistenceAvailable: true,
       };
     },
@@ -1890,9 +2037,10 @@ test("repeat pricing signals for the same known visitor update the existing pric
   assert.equal(result.peopleSummary.returning, 1);
   assert.equal(result.people[0].identityType, "email");
   assert.equal(result.people[0].interactionCount, 2);
-  assert.equal(result.people[0].queueItemCount, 2);
+  assert.equal(result.people[0].queueItemCount, 3);
   assert.match(result.people[0].story, /pricing 2 times/i);
   assert.equal(new Set(result.items.map((item) => item.person?.key)).size, 1);
+  assert.ok(result.items.some((item) => item.actionType === "repeat_high_intent_visitor"));
 });
 
 test("repeat high-intent visitors create one dedicated operator action without duplicate spam", () => {
@@ -2126,7 +2274,7 @@ test("action queue status changes persist cleanly through the lightweight owner 
         assert.equal(contactItem.followUpNeeded, true);
         assert.equal(contactItem.followUpCompleted, false);
         assert.equal(contactItem.contactStatus, "attempted");
-        assert.equal(contactItem.ownerWorkflow.label, "Follow-up in progress");
+        assert.equal(contactItem.ownerWorkflow.label, "Draft prepared");
         assert.ok(refreshed.json.summary.followUpNeeded >= 1);
         assert.ok(refreshed.json.summary.attentionNeeded >= 1);
       } finally {
@@ -2393,6 +2541,406 @@ test("action queue follow-up persists through website re-imports", { concurrency
         await server.close();
       }
     }
+  );
+});
+
+test("lead follow-up queue item prepares a draft workflow when contact info exists", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "lead-message-1",
+        role: "user",
+        content: "Can someone email me at hello@example.com about the best option?",
+        createdAt: "2026-04-01T10:03:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please reach out directly.",
+        createdAt: "2026-04-01T10:03:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        const item = result.json.items.find((entry) => entry.actionType === "lead_follow_up");
+        assert.ok(item);
+        assert.equal(item.followUp.status, "draft");
+        assert.equal(item.followUp.channel, "email");
+        assert.match(item.followUp.subject, /Following up on your request/i);
+        assert.match(item.followUp.draftContent, /continue the conversation/i);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("pricing interest updates the existing follow-up instead of duplicating drafts", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "pricing-message-1",
+        role: "user",
+        content: "Can you email hello@example.com with pricing for monthly support?",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly for a quote.",
+        createdAt: "2026-04-01T10:00:04.000Z",
+      },
+      {
+        id: "pricing-message-2",
+        role: "user",
+        content: "I am John Smith and I still need pricing details at hello@example.com.",
+        createdAt: "2026-04-01T10:08:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly for pricing.",
+        createdAt: "2026-04-01T10:08:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        const pricingItems = result.json.items.filter((item) => item.actionType === "pricing_interest");
+        assert.ok(pricingItems.length >= 2);
+        assert.equal(new Set(pricingItems.map((item) => item.followUp?.id)).size, 1);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("booking intent prepares a booking-oriented draft", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "booking-message-1",
+        role: "user",
+        content: "Can I book something for next Tuesday? Email me at hello@example.com.",
+        createdAt: "2026-04-01T10:10:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly.",
+        createdAt: "2026-04-01T10:10:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const item = result.json.items.find((entry) => entry.actionType === "booking_intent");
+        assert.ok(item);
+        assert.equal(item.followUp.status, "draft");
+        assert.match(item.followUp.subject, /booking/i);
+        assert.match(item.followUp.draftContent, /move the booking forward/i);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("repeat high-intent visitor updates an existing draft instead of spawning another follow-up", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "repeat-message-1",
+        role: "user",
+        content: "Can you email hello@example.com with pricing for the monthly package?",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly for pricing.",
+        createdAt: "2026-04-01T10:00:04.000Z",
+      },
+      {
+        id: "repeat-message-2",
+        role: "user",
+        content: "I came back because I also want to book a demo. My email is hello@example.com.",
+        createdAt: "2026-04-01T10:08:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly.",
+        createdAt: "2026-04-01T10:08:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const repeatItem = result.json.items.find((entry) => entry.actionType === "repeat_high_intent_visitor");
+        const activeSpecificItem = result.json.items.find((entry) => ["pricing_interest", "booking_intent"].includes(entry.actionType));
+        assert.ok(repeatItem);
+        assert.ok(activeSpecificItem);
+        assert.equal(repeatItem.followUp.id, activeSpecificItem.followUp.id);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("missing contact creates a safe missing-contact follow-up state", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "missing-contact-1",
+        role: "user",
+        content: "How much does monthly support cost?",
+        createdAt: "2026-04-01T10:20:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly for pricing.",
+        createdAt: "2026-04-01T10:20:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const item = result.json.items.find((entry) => entry.actionType === "pricing_interest");
+        assert.ok(item);
+        assert.equal(item.followUp.status, "missing_contact");
+        assert.equal(item.followUp.channel, "");
+        assert.equal(item.status, "reviewed");
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("marking a prepared follow-up sent updates queue state and summary counts", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "send-follow-up-1",
+        role: "user",
+        content: "Please email hello@example.com with pricing details.",
+        createdAt: "2026-04-01T10:25:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly.",
+        createdAt: "2026-04-01T10:25:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const initial = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const item = initial.json.items.find((entry) => entry.followUp?.id);
+        assert.ok(item);
+
+        const updated = await getJson(server.baseUrl, "/agents/follow-ups/update", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            follow_up_id: item.followUp.id,
+            status: "sent",
+          }),
+        });
+
+        assert.equal(updated.status, 200);
+        assert.equal(updated.json.followUp.status, "sent");
+
+        const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const refreshedItem = refreshed.json.items.find((entry) => entry.key === item.key);
+        assert.equal(refreshedItem.followUp.status, "sent");
+        assert.equal(refreshedItem.status, "done");
+        assert.ok(refreshed.json.summary.resolved >= 1);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("website re-import does not reset follow-up linkage and reload preserves follow-up state", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "reload-follow-up-1",
+        role: "user",
+        content: "Please email hello@example.com about pricing.",
+        createdAt: "2026-04-01T10:30:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly.",
+        createdAt: "2026-04-01T10:30:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const first = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const followUp = first.json.items.find((item) => item.followUp?.id)?.followUp;
+        assert.ok(followUp);
+
+        const importResult = await getJson(server.baseUrl, "/knowledge/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            agent_key: "agent-key",
+          }),
+        });
+
+        assert.equal(importResult.status, 200);
+
+        const reloaded = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        const reloadedFollowUp = reloaded.json.items.find((item) => item.followUp?.id)?.followUp;
+        assert.equal(reloadedFollowUp.id, followUp.id);
+        assert.equal(reloadedFollowUp.status, followUp.status);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("follow-up updates still enforce active owner access and scoping", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "scoping-message-1",
+        role: "user",
+        content: "Please email hello@example.com about pricing.",
+        createdAt: "2026-04-01T10:35:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please contact the business directly.",
+        createdAt: "2026-04-01T10:35:05.000Z",
+      },
+    ],
+  };
+
+  const deps = {
+    ...createAgentTestDeps(state),
+    requireActiveAgentAccess: async () => {
+      const error = new Error("Forbidden");
+      error.statusCode = 403;
+      throw error;
+    },
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    () => withMutedConsoleError(async () => {
+      const server = await startServer(createTestApp(deps));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/follow-ups/update", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            follow_up_id: "follow-up-1",
+            status: "sent",
+          }),
+        });
+
+        assert.equal(result.status, 403);
+      } finally {
+        await server.close();
+      }
+    })
   );
 });
 

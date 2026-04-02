@@ -858,8 +858,21 @@ button:disabled {
   border: 1px solid rgba(148, 163, 184, 0.12);
 }
 
+.action-queue-follow-up-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
 .action-queue-form textarea {
   min-height: 92px;
+}
+
+.action-queue-follow-up-form textarea {
+  min-height: 140px;
 }
 
 .action-queue-form-actions {
@@ -2084,6 +2097,13 @@ button:disabled {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(148, 163, 184, 0.12);
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.message-row.active {
+  border-color: rgba(250, 204, 21, 0.65);
+  background: rgba(250, 204, 21, 0.09);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.18);
 }
 
 .message-role {
