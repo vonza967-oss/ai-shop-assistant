@@ -2058,7 +2058,9 @@ test("action queue status changes persist cleanly through the lightweight owner 
         assert.equal(updated.json.item.followUpNeeded, true);
         assert.equal(updated.json.item.followUpCompleted, false);
         assert.equal(updated.json.item.contactStatus, "attempted");
-        assert.equal(updated.json.persistenceAvailable, true);
+        assert.ok(updated.json.queue);
+        assert.ok(updated.json.queue.summary.followUpNeeded >= 1);
+        assert.ok(updated.json.queue.summary.attentionNeeded >= 1);
 
         const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
         assert.equal(refreshed.status, 200);
@@ -2135,12 +2137,36 @@ test("action queue prioritizes owner follow-up and reports attention cleanly", (
 
 test("lightweight owner handoff updates auto-advance queue status when appropriate", async () => {
   let capturedPayload = null;
+  let persistedRow = null;
   const supabase = {
     from(tableName) {
       assert.equal(tableName, "agent_action_queue_statuses");
       return {
+        select() {
+          return {
+            eq() {
+              return {
+                eq() {
+                  return {
+                    eq() {
+                      return {
+                        async maybeSingle() {
+                          return {
+                            data: persistedRow,
+                            error: null,
+                          };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
         upsert(payload) {
           capturedPayload = payload;
+          persistedRow = payload;
           return {
             select() {
               return {
@@ -2186,7 +2212,7 @@ test("lightweight owner handoff updates auto-advance queue status when appropria
   assert.equal(resolved.item.status, "done");
 });
 
-test("action queue surfaces migration-required state instead of silently pretending follow-up is persistent", { concurrency: false }, async () => {
+test("action queue returns a clear persistence error instead of silently falling back to read-only mode", { concurrency: false }, async () => {
   const state = {
     accessStatus: "active",
     messages: [
@@ -2205,10 +2231,11 @@ test("action queue surfaces migration-required state instead of silently pretend
 
   const deps = {
     ...createAgentTestDeps(state),
-    listActionQueueStatuses: async () => ({
-      records: [],
-      persistenceAvailable: false,
-    }),
+    listActionQueueStatuses: async () => {
+      const error = new Error("Action queue persistence is not ready on the server yet. Apply the action queue migration and try again.");
+      error.statusCode = 503;
+      throw error;
+    },
   };
 
   await withEnv(
@@ -2222,9 +2249,90 @@ test("action queue surfaces migration-required state instead of silently pretend
 
       try {
         const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
-        assert.equal(result.status, 200);
-        assert.equal(result.json.persistenceAvailable, false);
-        assert.equal(result.json.migrationRequired, true);
+        assert.equal(result.status, 503);
+        assert.equal(
+          result.json.error,
+          "Action queue persistence is not ready on the server yet. Apply the action queue migration and try again."
+        );
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("action queue follow-up persists through website re-imports", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        role: "user",
+        content: "Can someone email me at hello@example.com about the best option?",
+        createdAt: "2026-04-01T10:03:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please reach out directly.",
+        createdAt: "2026-04-01T10:03:05.000Z",
+      },
+    ],
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(createAgentTestDeps(state)));
+
+      try {
+        const initial = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(initial.status, 200);
+        const actionKey = initial.json.items.find((item) => item.type === "contact")?.key;
+        assert.ok(actionKey);
+
+        const updated = await getJson(server.baseUrl, "/agents/action-queue/status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_id: "agent-1",
+            action_key: actionKey,
+            status: "reviewed",
+            note: "Owner called the lead.",
+            next_step: "Send pricing details.",
+            follow_up_needed: true,
+            follow_up_completed: false,
+          }),
+        });
+
+        assert.equal(updated.status, 200);
+        assert.equal(updated.json.item.status, "reviewed");
+
+        const imported = await getJson(server.baseUrl, "/knowledge/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            agent_key: "agent-key",
+            client_id: "client-1",
+          }),
+        });
+
+        assert.equal(imported.status, 200);
+
+        const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(refreshed.status, 200);
+        const refreshedItem = refreshed.json.items.find((item) => item.key === actionKey);
+        assert.equal(refreshedItem.status, "reviewed");
+        assert.equal(refreshedItem.note, "Owner called the lead.");
+        assert.equal(refreshedItem.nextStep, "Send pricing details.");
+        assert.equal(refreshedItem.followUpNeeded, true);
+        assert.equal(refreshedItem.followUpCompleted, false);
       } finally {
         await server.close();
       }

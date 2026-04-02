@@ -2391,6 +2391,25 @@ function createEmptyActionQueue() {
     },
     persistenceAvailable: true,
     migrationRequired: false,
+    loadError: "",
+  };
+}
+
+function hydrateActionQueueState(data = {}) {
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    people: Array.isArray(data.people) ? data.people : [],
+    peopleSummary: {
+      ...createEmptyActionQueue().peopleSummary,
+      ...(data.peopleSummary || {}),
+    },
+    summary: {
+      ...createEmptyActionQueue().summary,
+      ...(data.summary || {}),
+    },
+    persistenceAvailable: data.persistenceAvailable !== false,
+    migrationRequired: data.migrationRequired === true,
+    loadError: trimText(data.loadError),
   };
 }
 
@@ -2784,15 +2803,15 @@ function buildPeopleMarkup(actionQueue = createEmptyActionQueue()) {
 }
 
 function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), options = {}) {
-  const items = Array.isArray(actionQueue.items) ? actionQueue.items : [];
+  const queueState = hydrateActionQueueState(actionQueue);
+  const items = Array.isArray(queueState.items) ? queueState.items : [];
   const summary = {
     ...createEmptyActionQueue().summary,
-    ...(actionQueue.summary || {}),
+    ...(queueState.summary || {}),
   };
-  const persistenceAvailable = actionQueue.persistenceAvailable !== false;
-  const migrationRequired = actionQueue.migrationRequired === true;
+  const loadError = trimText(queueState.loadError);
   const compact = Boolean(options.compact);
-  const allowStatusUpdates = options.allowStatusUpdates !== false && persistenceAvailable;
+  const allowStatusUpdates = options.allowStatusUpdates !== false && !loadError;
   const visibleItems = compact ? items.slice(0, 3) : items;
   const sectionTitle = compact ? "Action queue feed" : "Action queue";
   const sectionCopy = compact
@@ -2984,7 +3003,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             </div>
             <div class="action-queue-form-actions">
               <button class="primary-button" type="submit" ${allowStatusUpdates ? "" : "disabled"}>Save owner handoff</button>
-              <span class="action-queue-meta-inline">${escapeHtml(migrationRequired ? "Apply the action queue migration before follow-up can be saved." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
+              <span class="action-queue-meta-inline">${escapeHtml(loadError ? "Action queue updates are temporarily unavailable. Please try again after the queue loads cleanly." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
             </div>
           </form>
         </div>
@@ -3006,7 +3025,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
           `).join("")}
         </div>
       </div>
-      ${migrationRequired ? `<div class="placeholder-card">Action queue follow-up is currently read-only because the database migration for persistent follow-up fields is not applied yet. Apply db/action_queue_statuses.sql before using this operational handoff live.</div>` : ""}
+      ${loadError ? `<div class="placeholder-card">Action queue data is temporarily unavailable. ${escapeHtml(loadError)}</div>` : ""}
       ${visibleItems.length ? `
         ${compact ? `
           <div class="action-queue-secondary-action">
@@ -3046,6 +3065,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
 }
 
 function buildOverviewState(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
+  const queueLoadError = trimText(actionQueue.loadError);
   const installStatus = agent.installStatus || {
     state: "not_detected",
     label: "Not detected on a live site yet",
@@ -3087,7 +3107,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       });
     }
   } else if (installStatus.state === "live") {
-    if (queueSummary.attentionNeeded > 0) {
+    if (!queueLoadError && queueSummary.attentionNeeded > 0) {
       title = `Your assistant is live and ${queueSummary.attentionNeeded} follow-up item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
       copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations that deserve owner follow-up or a stronger answer path.`;
       primaryAction = {
@@ -3100,6 +3120,14 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "section",
         value: "analytics",
       });
+    } else if (queueLoadError) {
+      title = "Your assistant is live, but action queue data is temporarily unavailable";
+      copy = `Vonza is live on ${installStatus.host || "your site"}, but the action queue could not be loaded just now.`;
+      primaryAction = {
+        label: "Review analytics",
+        type: "section",
+        value: "analytics",
+      };
     } else if (signals.weakAnswerCount > 0) {
       title = "Your assistant is live, and a few answers need strengthening";
       copy = `Vonza is active on ${installStatus.host || "your site"}, and some real customer questions are showing where the assistant still needs help.`;
@@ -3279,6 +3307,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     signals,
     queueSummary,
     peopleSummary,
+    queueLoadError,
     cards,
     primaryAction,
     nextActions: nextActions.slice(0, 2),
@@ -3309,6 +3338,8 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       : "No usage yet";
   const recommendationTitle = !setup.knowledgeReady
     ? "Strengthen website knowledge"
+    : overview.queueLoadError
+      ? "Reload action queue"
     : overview.installStatus.state !== "live"
       ? "Finish live install"
       : overview.queueSummary.attentionNeeded > 0
@@ -3322,6 +3353,8 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           : "Keep learning from live usage";
   const recommendationCopy = !setup.knowledgeReady
     ? "Run another website import so the assistant can answer with stronger business context."
+    : overview.queueLoadError
+      ? "The action queue could not be loaded right now, so queue counts and owner attention cards may be temporarily unavailable. Refresh the workspace and try again."
     : overview.installStatus.state !== "live"
       ? "Place Vonza on the live site so it can start detecting real visitor behavior and customer intent."
       : overview.queueSummary.attentionNeeded > 0
@@ -3341,7 +3374,9 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       </div>
     `).join("")
     : `<div class="placeholder-card">No weak-answer signal yet. Once customers ask questions that Vonza struggles to answer, they will show up here instead of being hidden behind a fake success state.</div>`;
-  const attentionMarkup = attentionItems.length
+  const attentionMarkup = overview.queueLoadError
+    ? `<div class="placeholder-card">Action queue data is temporarily unavailable. ${escapeHtml(overview.queueLoadError)}</div>`
+    : attentionItems.length
     ? attentionItems.map((item) => {
       const workflow = getActionQueueOwnerWorkflow(item);
       const nextLine = trimText(item.nextStep)
@@ -3403,15 +3438,15 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Follow-up needed</div>
-            <div class="overview-metric-value">${overview.queueSummary.followUpNeeded || 0}</div>
+            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.followUpNeeded || 0))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Attention now</div>
-            <div class="overview-metric-value">${overview.queueSummary.attentionNeeded || 0}</div>
+            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.attentionNeeded || 0))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Resolved items</div>
-            <div class="overview-metric-value">${overview.queueSummary.resolved || 0}</div>
+            <div class="overview-metric-value">${escapeHtml(overview.queueLoadError ? "Unavailable" : String(overview.queueSummary.resolved || 0))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Returning people</div>
@@ -3712,6 +3747,7 @@ function buildCalendarPanel() {
 
 function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
   renderTopbarMeta();
+  const queueState = hydrateActionQueueState(actionQueue);
   const activeSection = getActiveShellSection(setup);
   const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
   const primaryAction = setup.isReady
@@ -3750,20 +3786,20 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
         </div>
       ` : ""}
 
-      ${buildOverviewPanel(agent, messages, setup, actionQueue)}
+      ${buildOverviewPanel(agent, messages, setup, queueState)}
       ${buildCustomizePanel(agent, setup)}
-      ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
+      ${buildAnalyticsPanel(agent, messages, setup, queueState)}
     </div>
   `;
 
-  bindSharedDashboardEvents(agent, messages, setup, actionQueue);
+  bindSharedDashboardEvents(agent, messages, setup, queueState);
 }
 
 function renderSetupState(agent, messages, setup, actionQueue) {
   activeWorkspaceState = {
     agent,
     messages,
-    actionQueue,
+    actionQueue: hydrateActionQueueState(actionQueue),
   };
   renderAssistantShell(agent, messages, setup, actionQueue);
 }
@@ -3772,7 +3808,7 @@ function renderReadyState(agent, messages, actionQueue) {
   activeWorkspaceState = {
     agent,
     messages,
-    actionQueue,
+    actionQueue: hydrateActionQueueState(actionQueue),
   };
   renderAssistantShell(agent, messages, inferSetup(agent), actionQueue);
 }
@@ -3793,6 +3829,31 @@ function updateActiveWorkspaceAgent(nextAgent) {
       ...nextAgent,
     },
   };
+}
+
+function updateActiveWorkspaceActionQueue(nextActionQueue) {
+  if (!activeWorkspaceState?.agent) {
+    return;
+  }
+
+  activeWorkspaceState = {
+    ...activeWorkspaceState,
+    actionQueue: hydrateActionQueueState(nextActionQueue),
+  };
+}
+
+function applyActiveWorkspaceActionQueue(nextActionQueue, options = {}) {
+  if (!activeWorkspaceState?.agent) {
+    return;
+  }
+
+  updateActiveWorkspaceActionQueue(nextActionQueue);
+
+  if (options.focus) {
+    setDashboardFocus(options.focus);
+  }
+
+  renderActiveWorkspace();
 }
 
 function renderActiveWorkspace() {
@@ -4108,23 +4169,13 @@ async function loadActionQueue(agentId) {
 
   try {
     const data = await fetchJson(url.toString());
-    return {
-      items: Array.isArray(data.items) ? data.items : [],
-      people: Array.isArray(data.people) ? data.people : [],
-      peopleSummary: {
-        ...createEmptyActionQueue().peopleSummary,
-        ...(data.peopleSummary || {}),
-      },
-      summary: {
-        ...createEmptyActionQueue().summary,
-        ...(data.summary || {}),
-      },
-      persistenceAvailable: data.persistenceAvailable !== false,
-      migrationRequired: data.migrationRequired === true,
-    };
+    return hydrateActionQueueState(data);
   } catch (error) {
     console.warn("[action queue] Could not load the action queue:", error.message);
-    return createEmptyActionQueue();
+    return hydrateActionQueueState({
+      ...createEmptyActionQueue(),
+      loadError: error.message || "The action queue could not be loaded right now.",
+    });
   }
 }
 
@@ -5033,7 +5084,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       setStatus("Updating action queue item...");
 
       try {
-        await fetchJson("/agents/action-queue/status", {
+        const result = await fetchJson("/agents/action-queue/status", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -5046,9 +5097,10 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
           }),
         });
         input.dataset.previousStatus = nextStatus;
-        setDashboardFocus("action-queue");
+        applyActiveWorkspaceActionQueue(result.queue, {
+          focus: "action-queue",
+        });
         setStatus(`Action item marked ${getActionQueueStatusLabel(nextStatus).toLowerCase()}.`);
-        await boot();
       } catch (error) {
         input.value = previousStatus;
         setStatus(error.message || "We couldn't update that action item.");
@@ -5108,13 +5160,10 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
           }),
         });
 
-        setDashboardFocus("action-queue");
-        if (result.migrationRequired) {
-          setStatus("Follow-up could not be persisted yet. Apply the action queue migration first.");
-        } else {
-          setStatus("Owner handoff saved.");
-        }
-        await boot();
+        applyActiveWorkspaceActionQueue(result.queue, {
+          focus: "action-queue",
+        });
+        setStatus("Owner handoff saved.");
       } catch (error) {
         setStatus(error.message || "We couldn't save that follow-up yet.");
       } finally {

@@ -4,6 +4,12 @@ import { cleanText } from "../../utils/text.js";
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const CONTACT_STATUSES = ["not_contacted", "attempted", "contacted", "qualified"];
 const ACTIONABLE_INTENTS = ["contact", "booking", "pricing", "support"];
+const ACTION_QUEUE_STATUS_TRANSITIONS = {
+  new: new Set(["new", "reviewed", "done", "dismissed"]),
+  reviewed: new Set(["new", "reviewed", "done", "dismissed"]),
+  done: new Set(["new", "reviewed", "done"]),
+  dismissed: new Set(["new", "reviewed", "dismissed"]),
+};
 const ACTION_QUEUE_PERSISTENCE_COLUMNS = [
   "note",
   "outcome",
@@ -26,6 +32,23 @@ function isMissingRelationError(error, relationName) {
 function normalizeStatus(value) {
   const normalized = cleanText(value).toLowerCase();
   return ACTION_QUEUE_STATUSES.includes(normalized) ? normalized : "new";
+}
+
+function buildActionQueueError(message, statusCode = 500, code = "") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  if (code) {
+    error.code = code;
+  }
+  return error;
+}
+
+function buildPersistenceUnavailableError() {
+  return buildActionQueueError(
+    "Action queue persistence is not ready on the server yet. Apply the action queue migration and try again.",
+    503,
+    "ACTION_QUEUE_PERSISTENCE_UNAVAILABLE"
+  );
 }
 
 function isMissingPersistenceColumnError(error) {
@@ -63,6 +86,91 @@ function normalizeBooleanFlag(value) {
 function normalizeContactStatus(value) {
   const normalized = cleanText(value).toLowerCase();
   return CONTACT_STATUSES.includes(normalized) ? normalized : "";
+}
+
+function parseRequestedStatus(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const normalized = cleanText(value).toLowerCase();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!ACTION_QUEUE_STATUSES.includes(normalized)) {
+    throw buildActionQueueError(
+      "Use one of the supported action queue statuses: new, reviewed, done, or dismissed.",
+      400,
+      "ACTION_QUEUE_INVALID_STATUS"
+    );
+  }
+
+  return normalized;
+}
+
+function parseRequestedContactStatus(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const normalized = cleanText(value).toLowerCase();
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (!CONTACT_STATUSES.includes(normalized)) {
+    throw buildActionQueueError(
+      "Use one of the supported contact states: not_contacted, attempted, contacted, or qualified.",
+      400,
+      "ACTION_QUEUE_INVALID_CONTACT_STATUS"
+    );
+  }
+
+  return normalized;
+}
+
+function assertValidStatusTransition(previousStatus, nextStatus) {
+  const current = normalizeStatus(previousStatus);
+  const allowedTransitions = ACTION_QUEUE_STATUS_TRANSITIONS[current] || ACTION_QUEUE_STATUS_TRANSITIONS.new;
+
+  if (allowedTransitions.has(nextStatus)) {
+    return;
+  }
+
+  throw buildActionQueueError(
+    `Cannot move an action queue item directly from ${current} to ${nextStatus}. Reopen it first if more work is needed.`,
+    400,
+    "ACTION_QUEUE_INVALID_TRANSITION"
+  );
+}
+
+function validateStateShape({ status, followUpNeeded, followUpCompleted }) {
+  if (followUpNeeded === true && followUpCompleted === true) {
+    throw buildActionQueueError(
+      "Follow-up cannot be both needed and completed at the same time.",
+      400,
+      "ACTION_QUEUE_CONFLICTING_FOLLOW_UP"
+    );
+  }
+
+  if (status === "dismissed" && followUpCompleted === true) {
+    throw buildActionQueueError(
+      "Dismissed items cannot also be marked follow-up completed.",
+      400,
+      "ACTION_QUEUE_DISMISSED_CONFLICT"
+    );
+  }
+
+  if (status === "done" && followUpNeeded === true) {
+    throw buildActionQueueError(
+      "Resolved items cannot still be marked as needing follow-up.",
+      400,
+      "ACTION_QUEUE_DONE_CONFLICT"
+    );
+  }
 }
 
 function normalizePersistedItem(item = {}) {
@@ -1166,10 +1274,13 @@ export async function listActionQueueStatuses(supabase, options = {}) {
 
   if (error) {
     if (isUnavailablePersistenceError(error)) {
-      return {
-        records: [],
-        persistenceAvailable: false,
-      };
+      console.error("[action queue] Persistence schema unavailable while loading queue:", {
+        agentId,
+        ownerUserId,
+        code: error.code || null,
+        message: error.message || "Unknown error",
+      });
+      throw buildPersistenceUnavailableError();
     }
 
     console.error(error);
@@ -1191,33 +1302,78 @@ export async function updateActionQueueStatus(supabase, options = {}) {
   const nextStep = options.nextStep === undefined ? undefined : cleanText(options.nextStep);
   const followUpNeeded = options.followUpNeeded === undefined ? undefined : normalizeBooleanFlag(options.followUpNeeded);
   const followUpCompleted = options.followUpCompleted === undefined ? undefined : normalizeBooleanFlag(options.followUpCompleted);
-  const contactStatus = options.contactStatus === undefined ? undefined : normalizeContactStatus(options.contactStatus);
-  const explicitStatus = options.status === undefined ? null : normalizeStatus(options.status);
+  const contactStatus = parseRequestedContactStatus(options.contactStatus);
+  const explicitStatus = parseRequestedStatus(options.status);
+
+  if (!agentId || !ownerUserId || !actionKey) {
+    throw buildActionQueueError(
+      "agent_id, owner_user_id, and action_key are required",
+      400,
+      "ACTION_QUEUE_INVALID_REQUEST"
+    );
+  }
+
+  const { data: existingRow, error: existingError } = await supabase
+    .from(ACTION_QUEUE_STATUS_TABLE)
+    .select("agent_id, owner_user_id, action_key, status, note, outcome, next_step, follow_up_needed, follow_up_completed, contact_status, updated_at")
+    .eq("agent_id", agentId)
+    .eq("owner_user_id", ownerUserId)
+    .eq("action_key", actionKey)
+    .maybeSingle();
+
+  if (existingError) {
+    if (isUnavailablePersistenceError(existingError)) {
+      console.error("[action queue] Persistence schema unavailable while loading existing status:", {
+        agentId,
+        ownerUserId,
+        actionKey,
+        code: existingError.code || null,
+        message: existingError.message || "Unknown error",
+      });
+      throw buildPersistenceUnavailableError();
+    }
+
+    console.error(existingError);
+    throw existingError;
+  }
+
+  const previousItem = normalizePersistedItem(existingRow || {});
+  const previousStatus = previousItem.actionKey ? previousItem.status : "new";
+  const mergedItem = {
+    ...previousItem,
+    status: explicitStatus || previousStatus,
+    note: note === undefined ? previousItem.note : note,
+    outcome: outcome === undefined ? previousItem.outcome : outcome,
+    nextStep: nextStep === undefined ? previousItem.nextStep : nextStep,
+    followUpNeeded: followUpNeeded === undefined ? previousItem.followUpNeeded : followUpNeeded,
+    followUpCompleted: followUpCompleted === undefined ? previousItem.followUpCompleted : followUpCompleted,
+    contactStatus: contactStatus === undefined ? previousItem.contactStatus : contactStatus,
+  };
   const hasHandoffUpdate = [
     note,
     outcome,
     nextStep,
     contactStatus,
   ].some((value) => value !== undefined && value !== "") || followUpNeeded !== undefined || followUpCompleted !== undefined;
-  let status = explicitStatus;
-
-  if (!status) {
-    status = "new";
-  }
+  let status = mergedItem.status || "new";
 
   if (status !== "dismissed") {
-    if (followUpCompleted === true || (followUpNeeded === false && outcome)) {
+    if (
+      mergedItem.followUpCompleted === true
+      || (mergedItem.followUpNeeded === false && cleanText(mergedItem.outcome))
+    ) {
       status = "done";
-    } else if (hasHandoffUpdate && status === "new") {
+    } else if ((hasHandoffUpdate || hasOwnerHandoffContent(mergedItem)) && status === "new") {
       status = "reviewed";
     }
   }
 
-  if (!agentId || !ownerUserId || !actionKey) {
-    const error = new Error("agent_id, owner_user_id, and action_key are required");
-    error.statusCode = 400;
-    throw error;
-  }
+  validateStateShape({
+    status,
+    followUpNeeded: mergedItem.followUpNeeded,
+    followUpCompleted: mergedItem.followUpCompleted,
+  });
+  assertValidStatusTransition(previousStatus, status);
 
   const payload = {
     agent_id: agentId,
@@ -1260,27 +1416,30 @@ export async function updateActionQueueStatus(supabase, options = {}) {
 
   if (error) {
     if (isUnavailablePersistenceError(error)) {
-      return {
-        item: normalizePersistedItem({
-          agentId,
-          ownerUserId,
-          actionKey,
-          status,
-          note,
-          outcome,
-          nextStep,
-          followUpNeeded,
-          followUpCompleted,
-          contactStatus,
-          updatedAt: new Date().toISOString(),
-        }),
-        persistenceAvailable: false,
-      };
+      console.error("[action queue] Persistence schema unavailable while saving status:", {
+        agentId,
+        ownerUserId,
+        actionKey,
+        code: error.code || null,
+        message: error.message || "Unknown error",
+      });
+      throw buildPersistenceUnavailableError();
     }
 
     console.error(error);
     throw error;
   }
+
+  console.log("[action queue] Persisted status update:", {
+    agentId,
+    ownerUserId,
+    actionKey,
+    previousStatus,
+    nextStatus: status,
+    followUpNeeded: payload.follow_up_needed ?? null,
+    followUpCompleted: payload.follow_up_completed ?? null,
+    contactStatus: payload.contact_status ?? null,
+  });
 
   return {
     item: normalizePersistedItem(data),

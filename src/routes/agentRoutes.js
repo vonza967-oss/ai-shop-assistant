@@ -362,9 +362,11 @@ export function createAgentRouter(deps = {}) {
   });
 
   router.get("/agents/action-queue", async (req, res) => {
+    let user = null;
+
     try {
       const supabase = getSupabase();
-      const user = await authenticateUser(supabase, req).catch((error) => {
+      user = await authenticateUser(supabase, req).catch((error) => {
         if (error.statusCode === 401) {
           return null;
         }
@@ -387,17 +389,17 @@ export function createAgentRouter(deps = {}) {
       ]);
 
       const persistedRecords = Array.isArray(statuses) ? statuses : statuses?.records || [];
-      const persistenceAvailable = Array.isArray(statuses)
-        ? true
-        : statuses?.persistenceAvailable !== false;
 
-      res.json(
-        buildActionQueueImpl(messages, persistedRecords, {
-          persistenceAvailable,
-        })
-      );
+      res.json(buildActionQueueImpl(messages, persistedRecords));
     } catch (err) {
-      console.error(err);
+      console.error("[action queue] Failed to load action queue:", {
+        agentId: req.query.agent_id || req.query.agentId || null,
+        ownerUserId: user?.id || null,
+        clientId: req.query.client_id || req.query.clientId || null,
+        code: err?.code || null,
+        statusCode: err?.statusCode || 500,
+        message: err?.message || "Something went wrong",
+      });
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
       });
@@ -405,9 +407,11 @@ export function createAgentRouter(deps = {}) {
   });
 
   router.post("/agents/action-queue/status", async (req, res) => {
+    let user = null;
+
     try {
       const supabase = getSupabase();
-      const user = await authenticateUser(supabase, req).catch((error) => {
+      user = await authenticateUser(supabase, req).catch((error) => {
         if (error.statusCode === 401) {
           return null;
         }
@@ -435,16 +439,32 @@ export function createAgentRouter(deps = {}) {
       });
 
       const item = result?.item || result;
-      const persistenceAvailable = result?.persistenceAvailable !== false;
+      const [messages, statuses] = await Promise.all([
+        listAgentMessagesImpl(supabase, agentId),
+        listActionQueueStatusesImpl(supabase, {
+          agentId,
+          ownerUserId: user?.id || null,
+        }),
+      ]);
+      const persistedRecords = Array.isArray(statuses) ? statuses : statuses?.records || [];
+      const queue = buildActionQueueImpl(messages, persistedRecords);
 
       res.json({
         ok: true,
         item,
-        persistenceAvailable,
-        migrationRequired: !persistenceAvailable,
+        queue,
       });
     } catch (err) {
-      console.error(err);
+      console.error("[action queue] Failed to update action queue item:", {
+        agentId: req.body.agent_id || req.body.agentId || null,
+        ownerUserId: user?.id || null,
+        clientId: req.body.client_id || req.body.clientId || null,
+        actionKey: req.body.action_key || req.body.actionKey || null,
+        status: req.body.status || null,
+        code: err?.code || null,
+        statusCode: err?.statusCode || 500,
+        message: err?.message || "Something went wrong",
+      });
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
       });
