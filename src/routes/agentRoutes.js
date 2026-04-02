@@ -26,8 +26,10 @@ import {
 import {
   createHostedCheckoutSession,
   constructStripeWebhookEvent,
+  getStripeCheckoutConfigurationErrorMessage,
   getPaidOwnerIdFromCheckoutSession,
   isStripeConfigError,
+  isStripeCheckoutMinimumAmountError,
   verifySuccessfulCheckout,
 } from "../services/billing/checkoutService.js";
 import { isLocalDevBillingRequestAllowed } from "../config/env.js";
@@ -532,15 +534,18 @@ export function createAgentRouter(deps = {}) {
         session_id: session.id,
       });
     } catch (err) {
-      if (isStripeConfigError(err)) {
+      if (isStripeConfigError(err) || isStripeCheckoutMinimumAmountError(err)) {
         console.warn("[stripe checkout] Stripe configuration error:", err.message);
       } else {
         console.error(err);
       }
+
+      const configurationErrorMessage = getStripeCheckoutConfigurationErrorMessage(err);
+
       res.status(err.statusCode || 500).json({
         error: isStripeConfigError(err)
           ? "Stripe checkout is not configured yet. Please check the Stripe environment settings."
-          : err.message || "Something went wrong",
+          : configurationErrorMessage || err.message || "Something went wrong",
       });
     }
   });

@@ -1458,6 +1458,46 @@ test("checkout creation quietly seeds a draft assistant for signed-in unpaid own
   );
 });
 
+test("checkout creation returns a clear config error when the Stripe price is below the currency minimum", { concurrency: false }, async () => {
+  const state = { accessStatus: "pending", hasAgent: true };
+  const deps = {
+    ...createAgentTestDeps(state),
+    createHostedCheckoutSession: async () => {
+      throw new Error("The Checkout Session's total amount due must add up to at least 175.00 Ft huf");
+    },
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(deps));
+      try {
+        const checkout = await getJson(server.baseUrl, "/create-checkout-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: "owner@example.com",
+          }),
+        });
+
+        assert.equal(checkout.status, 500);
+        assert.match(
+          checkout.json.error,
+          /update STRIPE_PRICE_ID to a valid Stripe price in the same account and mode/i
+        );
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
 test("dev fake billing simulate path stays blocked outside local dev guard conditions", { concurrency: false }, async () => {
   const state = { accessStatus: "pending" };
 

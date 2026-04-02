@@ -185,3 +185,18 @@ export function isStripeConfigError(error) {
     cleanText(error?.message)
   );
 }
+
+export function isStripeCheckoutMinimumAmountError(error) {
+  const message = cleanText(error?.message);
+
+  return /checkout session'?s total amount due must add up to at least/i.test(message)
+    || /amount must convert to at least/i.test(message);
+}
+
+export function getStripeCheckoutConfigurationErrorMessage(error) {
+  if (!isStripeCheckoutMinimumAmountError(error)) {
+    return "";
+  }
+
+  return "Stripe checkout is using a price that is below Stripe's minimum allowed amount for the configured currency. Update STRIPE_PRICE_ID to a valid Stripe price in the same account and mode, then retry checkout.";
+}
