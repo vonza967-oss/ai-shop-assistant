@@ -64,7 +64,7 @@ export async function listAgentMessages(supabase, agentId) {
 
   const { data, error } = await supabase
     .from(MESSAGES_TABLE)
-    .select("agent_id, role, content, created_at")
+    .select("id, agent_id, role, content, created_at")
     .eq("agent_id", normalizedAgentId)
     .order("created_at", { ascending: false })
     .limit(50);
@@ -79,6 +79,7 @@ export async function listAgentMessages(supabase, agentId) {
   }
 
   return (data || []).map((row) => ({
+    id: row.id,
     agentId: row.agent_id,
     role: row.role,
     content: row.content,

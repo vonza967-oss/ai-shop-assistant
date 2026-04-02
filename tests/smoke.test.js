@@ -486,6 +486,7 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
         assert.match(dashboardScript.text, /Resolved items/);
         assert.match(dashboardScript.text, /Owner attention now/);
         assert.match(dashboardScript.text, /Owner follow-up state/);
+        assert.match(dashboardScript.text, /Conversation summary/);
         assert.match(dashboardScript.text, /Open owner handoff/);
         assert.match(dashboardScript.text, /Save owner handoff/);
         assert.match(dashboardScript.text, /No weak-answer signal yet/);
@@ -680,7 +681,7 @@ test("locked owners stay blocked until local dev fake billing simulates activati
   );
 });
 
-test("action queue surfaces high-intent and weak-answer conversation signals for owners", { concurrency: false }, async () => {
+test("action queue creates separate owner items for important individual conversations", { concurrency: false }, async () => {
   const state = {
     accessStatus: "active",
     messages: [
@@ -706,6 +707,16 @@ test("action queue surfaces high-intent and weak-answer conversation signals for
       },
       {
         role: "user",
+        content: "Can someone call me at +1 555 111 2222 about the premium option?",
+        createdAt: "2026-04-01T10:02:30.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Please reach out directly.",
+        createdAt: "2026-04-01T10:02:35.000Z",
+      },
+      {
+        role: "user",
         content: "Can someone email me at hello@example.com about the best option?",
         createdAt: "2026-04-01T10:03:00.000Z",
       },
@@ -724,6 +735,16 @@ test("action queue surfaces high-intent and weak-answer conversation signals for
         content: "I don't know the current support policy.",
         createdAt: "2026-04-01T10:04:05.000Z",
       },
+      {
+        role: "user",
+        content: "Do you have parking on site?",
+        createdAt: "2026-04-01T10:05:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "I'm not sure.",
+        createdAt: "2026-04-01T10:05:05.000Z",
+      },
     ],
   };
 
@@ -740,17 +761,20 @@ test("action queue surfaces high-intent and weak-answer conversation signals for
         const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
         assert.equal(result.status, 200);
         assert.ok(Array.isArray(result.json.items));
-        assert.ok(result.json.summary.total >= 4);
+        assert.equal(result.json.summary.total, 6);
+        assert.equal(result.json.items.length, 6);
         assert.ok(result.json.items.some((item) => item.type === "booking"));
         assert.ok(result.json.items.some((item) => item.type === "pricing"));
-        assert.ok(result.json.items.some((item) => item.type === "contact"));
+        assert.equal(result.json.items.filter((item) => item.type === "contact").length, 2);
         assert.ok(result.json.items.some((item) => item.type === "support"));
         assert.ok(result.json.items.some((item) => item.type === "weak_answer"));
         assert.ok(result.json.items.every((item) => item.ownerWorkflow && typeof item.ownerWorkflow.label === "string"));
+        assert.ok(result.json.items.every((item) => String(item.key || "").startsWith("conversation:")));
 
-        const contactItem = result.json.items.find((item) => item.type === "contact");
+        const contactItem = result.json.items.find((item) => item.contactInfo?.email === "hello@example.com");
         assert.equal(contactItem.contactCaptured, true);
         assert.equal(contactItem.contactInfo.email, "hello@example.com");
+        assert.match(contactItem.snippet, /Visitor asked:/);
       } finally {
         await server.close();
       }
@@ -823,6 +847,11 @@ test("action queue status changes persist cleanly through the lightweight owner 
       const server = await startServer(createTestApp(createAgentTestDeps(state)));
 
       try {
+        const initial = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(initial.status, 200);
+        const contactActionKey = initial.json.items.find((item) => item.type === "contact")?.key;
+        assert.ok(contactActionKey);
+
         const updated = await getJson(server.baseUrl, "/agents/action-queue/status", {
           method: "POST",
           headers: {
@@ -830,7 +859,7 @@ test("action queue status changes persist cleanly through the lightweight owner 
           },
           body: JSON.stringify({
             agent_id: "agent-1",
-            action_key: "intent:contact",
+            action_key: contactActionKey,
             status: "reviewed",
             note: "Owner reviewed the lead and wants a follow-up tomorrow.",
             outcome: "Asked the team to reach out with package details.",
@@ -854,7 +883,7 @@ test("action queue status changes persist cleanly through the lightweight owner 
 
         const refreshed = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
         assert.equal(refreshed.status, 200);
-        const contactItem = refreshed.json.items.find((item) => item.key === "intent:contact");
+        const contactItem = refreshed.json.items.find((item) => item.key === contactActionKey);
         assert.equal(contactItem.status, "reviewed");
         assert.equal(contactItem.note, "Owner reviewed the lead and wants a follow-up tomorrow.");
         assert.equal(contactItem.outcome, "Asked the team to reach out with package details.");
@@ -873,51 +902,52 @@ test("action queue status changes persist cleanly through the lightweight owner 
 });
 
 test("action queue prioritizes owner follow-up and reports attention cleanly", () => {
-  const result = buildActionQueue(
-    [
-      {
-        role: "user",
-        content: "Can someone email me at hello@example.com?",
-        createdAt: "2026-04-01T10:03:00.000Z",
-      },
-      {
-        role: "assistant",
-        content: "Yes, our team can follow up.",
-        createdAt: "2026-04-01T10:03:05.000Z",
-      },
-      {
-        role: "user",
-        content: "What are your prices for monthly support?",
-        createdAt: "2026-04-01T10:05:00.000Z",
-      },
-      {
-        role: "assistant",
-        content: "Packages start at $99 per month.",
-        createdAt: "2026-04-01T10:05:05.000Z",
-      },
-    ],
-    [
-      {
-        action_key: "intent:contact",
-        status: "reviewed",
-        note: "Owner called the lead.",
-        next_step: "Send pricing details this afternoon.",
-        follow_up_needed: true,
-        follow_up_completed: false,
-      },
-      {
-        action_key: "intent:pricing",
-        status: "done",
-        outcome: "Quote already shared and no follow-up is needed.",
-        follow_up_needed: false,
-        follow_up_completed: true,
-      },
-    ]
-  );
+  const messages = [
+    {
+      role: "user",
+      content: "Can someone email me at hello@example.com?",
+      createdAt: "2026-04-01T10:03:00.000Z",
+    },
+    {
+      role: "assistant",
+      content: "Yes, our team can follow up.",
+      createdAt: "2026-04-01T10:03:05.000Z",
+    },
+    {
+      role: "user",
+      content: "What are your prices for monthly support?",
+      createdAt: "2026-04-01T10:05:00.000Z",
+    },
+    {
+      role: "assistant",
+      content: "Packages start at $99 per month.",
+      createdAt: "2026-04-01T10:05:05.000Z",
+    },
+  ];
+  const baseline = buildActionQueue(messages, []);
+  const contactKey = baseline.items.find((item) => item.type === "contact")?.key;
+  const pricingKey = baseline.items.find((item) => item.type === "pricing")?.key;
+  const result = buildActionQueue(messages, [
+    {
+      action_key: contactKey,
+      status: "reviewed",
+      note: "Owner called the lead.",
+      next_step: "Send pricing details this afternoon.",
+      follow_up_needed: true,
+      follow_up_completed: false,
+    },
+    {
+      action_key: pricingKey,
+      status: "done",
+      outcome: "Quote already shared and no follow-up is needed.",
+      follow_up_needed: false,
+      follow_up_completed: true,
+    },
+  ]);
 
-  assert.equal(result.items[0].key, "intent:contact");
+  assert.equal(result.items[0].key, contactKey);
   assert.equal(result.items[0].ownerWorkflow.label, "Follow-up in progress");
-  assert.equal(result.items[1].key, "intent:pricing");
+  assert.equal(result.items[1].key, pricingKey);
   assert.equal(result.items[1].ownerWorkflow.label, "Resolved");
   assert.equal(result.summary.followUpNeeded, 1);
   assert.equal(result.summary.resolved, 1);

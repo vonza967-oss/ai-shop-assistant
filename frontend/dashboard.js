@@ -2054,8 +2054,8 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
   const visibleItems = compact ? items.slice(0, 3) : items;
   const sectionTitle = compact ? "Action queue feed" : "Action queue";
   const sectionCopy = compact
-    ? "Analytics turns into action here. These are the conversation patterns that deserve owner follow-up or a better answer path."
-    : "These items are surfaced from real visitor conversations so the owner can quickly see what matters, what needs follow-up, and what should be improved next.";
+    ? "Analytics turns into action here. These are the individual conversations that deserve owner follow-up or a better answer path."
+    : "These items are surfaced from real visitor conversations so the owner can work specific follow-up moments instead of broad signal buckets.";
   const emptyCopy = compact
     ? "No conversation-derived actions yet. As soon as visitors show stronger commercial intent or Vonza gives a weak answer, the next owner actions will appear here."
     : "No actionable items yet. Once Vonza sees high-intent conversations or weak answers, the next owner actions will appear here instead of a fake busy state.";
@@ -2082,6 +2082,10 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
   const itemsMarkup = visibleItems.map((item, index) => {
     const workflow = getActionQueueOwnerWorkflow(item);
     const handoffOpenByDefault = !compact && workflow.attention && index === 0;
+    const recencyLabel = item.lastSeenAt ? formatSeenAt(item.lastSeenAt) : "Recent signal";
+    const metaLine = item.updatedAt
+      ? `Flagged ${recencyLabel} · Updated ${formatSeenAt(item.updatedAt)}`
+      : `Flagged ${recencyLabel}`;
 
     return `
     <article
@@ -2114,12 +2118,12 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             </select>
           </label>
         ` : `
-          <div class="action-queue-meta-inline">${escapeHtml(item.lastSeenAt ? `Last seen ${formatSeenAt(item.lastSeenAt)}` : "Recent signal")}</div>
+          <div class="action-queue-meta-inline">${escapeHtml(metaLine)}</div>
         `}
       </div>
       <div class="action-queue-details">
         <div class="action-queue-detail">
-          <span class="action-queue-detail-label">Latest customer signal</span>
+          <span class="action-queue-detail-label">Conversation summary</span>
           <strong class="action-queue-detail-value">${escapeHtml(item.snippet || "No customer question stored yet.")}</strong>
         </div>
         <div class="action-queue-detail">
@@ -2140,11 +2144,11 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
           <strong class="action-queue-detail-value">${escapeHtml(item.suggestedAction || "Review the conversation pattern and improve the assistant or website flow.")}</strong>
         </div>
         <div class="action-queue-detail">
-          <span class="action-queue-detail-label">Last owner update</span>
-          <strong class="action-queue-detail-value">${escapeHtml(item.updatedAt ? formatSeenAt(item.updatedAt) : "No owner update yet.")}</strong>
+          <span class="action-queue-detail-label">Recency</span>
+          <strong class="action-queue-detail-value">${escapeHtml(recencyLabel)}</strong>
         </div>
       </div>
-      ${allowStatusUpdates ? `<p class="action-queue-meta-inline">${escapeHtml(item.lastSeenAt ? `Last seen ${formatSeenAt(item.lastSeenAt)}` : "Recent signal")}</p>` : ""}
+      ${allowStatusUpdates ? `<p class="action-queue-meta-inline">${escapeHtml(metaLine)}</p>` : ""}
       ${compact ? "" : `
         <div class="action-queue-handoff">
           <div class="action-queue-handoff-summary">
@@ -2573,11 +2577,13 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       const nextLine = trimText(item.nextStep)
         ? `Next step: ${trimText(item.nextStep)}`
         : workflow.copy;
+      const recencyLine = item.lastSeenAt ? `Flagged ${formatSeenAt(item.lastSeenAt)}` : "Recent signal";
 
       return `
         <div class="overview-list-item">
           <p class="overview-list-title">${escapeHtml(item.label || getActionQueueTypeLabel(item.type))} · ${escapeHtml(workflow.label)}</p>
-          <p class="overview-list-copy">${escapeHtml(item.whyFlagged || "Flagged from recent conversation activity.")}</p>
+          <p class="overview-list-copy">${escapeHtml(item.snippet || item.whyFlagged || "Flagged from recent conversation activity.")}</p>
+          <p class="overview-list-copy">${escapeHtml(recencyLine)}</p>
           <p class="overview-list-copy">${escapeHtml(nextLine)}</p>
         </div>
       `;

@@ -3,6 +3,7 @@ import { cleanText } from "../../utils/text.js";
 
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const CONTACT_STATUSES = ["not_contacted", "attempted", "contacted", "qualified"];
+const ACTIONABLE_INTENTS = ["contact", "booking", "pricing", "support"];
 const ACTION_QUEUE_PERSISTENCE_COLUMNS = [
   "note",
   "outcome",
@@ -181,6 +182,16 @@ function normalizeQuestion(message) {
     .trim();
 }
 
+function truncateText(value, maxLength = 180) {
+  const normalized = cleanText(value);
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
 function getMessageTimestamp(message) {
   const value = new Date(message?.createdAt || message?.created_at || "").getTime();
   return Number.isFinite(value) ? value : 0;
@@ -188,6 +199,22 @@ function getMessageTimestamp(message) {
 
 function getChronologicalMessages(messages = []) {
   return [...messages].sort((left, right) => getMessageTimestamp(left) - getMessageTimestamp(right));
+}
+
+function buildConversationActionKey(message = {}, fallbackIndex = 0) {
+  const messageId = cleanText(message.id || message.messageId);
+
+  if (messageId) {
+    return `conversation:${messageId}`;
+  }
+
+  const timestamp = cleanText(message.createdAt || message.created_at).replace(/[^0-9TZ]/gi, "");
+  const questionSlug = normalizeQuestion(message.content || "")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .slice(0, 48);
+
+  return `conversation:${timestamp || `index-${fallbackIndex}`}:${questionSlug || "message"}`;
 }
 
 function categorizeIntent(message) {
@@ -323,6 +350,45 @@ function getFlaggedReason(intent, count) {
   }
 }
 
+function getConversationFlagReason(intent, options = {}) {
+  const weakAnswer = options.weakAnswer === true;
+  const unresolved = options.unresolved === true;
+  const reasons = [];
+
+  switch (intent) {
+    case "contact":
+      reasons.push("this visitor showed direct lead or contact intent");
+      break;
+    case "booking":
+      reasons.push("this visitor asked about booking, scheduling, or availability");
+      break;
+    case "pricing":
+      reasons.push("this visitor asked about pricing, packages, or purchase intent");
+      break;
+    case "support":
+      reasons.push("this visitor sounded like support, complaint, or problem-resolution work");
+      break;
+    default:
+      break;
+  }
+
+  if (unresolved) {
+    reasons.push("the conversation did not receive a clear assistant answer yet");
+  } else if (weakAnswer) {
+    reasons.push("the assistant answer looked weak or uncertain");
+  }
+
+  if (!reasons.length) {
+    return "Flagged because this conversation needs owner review.";
+  }
+
+  if (reasons.length === 1) {
+    return `Flagged because ${reasons[0]}.`;
+  }
+
+  return `Flagged because ${reasons.slice(0, -1).join(", ")} and ${reasons[reasons.length - 1]}.`;
+}
+
 function hasWeakAssistantReply(reply) {
   const normalized = cleanText(String(reply || "")).toLowerCase();
 
@@ -348,6 +414,42 @@ function hasWeakAssistantReply(reply) {
     "please reach out directly",
     "reach out to the business directly",
   ].some((snippet) => normalized.includes(snippet));
+}
+
+function buildConversationSummary(question, reply) {
+  const normalizedQuestion = cleanText(question);
+  const normalizedReply = cleanText(reply);
+
+  if (normalizedQuestion && normalizedReply) {
+    return truncateText(`Visitor asked: ${normalizedQuestion} Vonza replied: ${normalizedReply}`);
+  }
+
+  if (normalizedQuestion) {
+    return truncateText(`Visitor asked: ${normalizedQuestion}`);
+  }
+
+  if (normalizedReply) {
+    return truncateText(`Vonza replied: ${normalizedReply}`);
+  }
+
+  return "";
+}
+
+function getConversationSuggestedAction(type, options = {}) {
+  const weakAnswer = options.weakAnswer === true;
+  const contactCaptured = options.contactCaptured === true;
+  const unresolved = options.unresolved === true;
+  const base = getSuggestedAction(type);
+
+  if (type === "contact" && contactCaptured && (weakAnswer || unresolved)) {
+    return `${base} Contact details were captured here, so decide whether the owner should respond directly now.`;
+  }
+
+  if (type !== "weak_answer" && (weakAnswer || unresolved)) {
+    return `${base} The assistant also struggled in this conversation, so improve the answer path before the next similar visitor arrives.`;
+  }
+
+  return base;
 }
 
 function extractContactInfo(text = "") {
@@ -413,14 +515,8 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
       return [normalized.actionKey, normalized];
     })
   );
-  const grouped = {
-    contact: [],
-    booking: [],
-    pricing: [],
-    support: [],
-    weak_answer: [],
-  };
   const chronological = getChronologicalMessages(messages);
+  const items = [];
 
   chronological.forEach((message, index) => {
     if (message.role !== "user") {
@@ -434,6 +530,7 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
 
     const intent = categorizeIntent(question);
     let reply = "";
+    let assistantMessage = null;
 
     for (let cursor = index + 1; cursor < chronological.length; cursor += 1) {
       const nextMessage = chronological[cursor];
@@ -444,50 +541,44 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
 
       if (nextMessage.role === "assistant") {
         reply = cleanText(nextMessage.content || "");
+        assistantMessage = nextMessage;
         break;
       }
     }
 
-    const event = {
-      question,
-      reply,
-      createdAt: message.createdAt || message.created_at || null,
-      contactInfo: mergeContactInfo(extractContactInfo(question), extractContactInfo(reply)),
-    };
+    const actionableIntent = ACTIONABLE_INTENTS.includes(intent);
+    const weakAnswer = hasWeakAssistantReply(reply);
 
-    if (grouped[intent]) {
-      grouped[intent].push(event);
+    if (!actionableIntent && !weakAnswer) {
+      return;
     }
-
-    if (hasWeakAssistantReply(reply)) {
-      grouped.weak_answer.push(event);
-    }
-  });
-
-  const buildItem = (key, type, events) => {
-    if (!events.length) {
-      return null;
-    }
-
-    const latest = [...events].sort((left, right) => getMessageTimestamp(right) - getMessageTimestamp(left))[0];
-    const combinedContactInfo = events.reduce(
-      (current, event) => mergeContactInfo(current, event.contactInfo),
-      { email: "", phone: "" }
-    );
-
-    const persistedItem = persistedMap.get(key) || {};
+    const type = actionableIntent ? intent : "weak_answer";
+    const unresolved = !cleanText(reply);
+    const contactInfo = mergeContactInfo(extractContactInfo(question), extractContactInfo(reply));
+    const actionKey = buildConversationActionKey(message, index);
+    const persistedItem = persistedMap.get(actionKey) || {};
+    const label = type === "weak_answer"
+      ? unresolved ? "Unresolved conversation" : "Weak answer"
+      : getIntentLabel(type);
+    const lastSeenAt = assistantMessage?.createdAt || assistantMessage?.created_at || message.createdAt || message.created_at || null;
     const ownerWorkflow = buildOwnerWorkflow(persistedItem);
 
-    return {
-      key,
+    items.push({
+      key: actionKey,
       type,
-      label: type === "weak_answer" ? "Weak answers" : getIntentLabel(type),
+      label,
       status: persistedItem.status || "new",
-      count: events.length,
-      snippet: latest.question,
-      whyFlagged: getFlaggedReason(type, events.length),
-      suggestedAction: getSuggestedAction(type),
-      lastSeenAt: latest.createdAt || null,
+      count: 1,
+      snippet: buildConversationSummary(question, reply),
+      question,
+      reply,
+      whyFlagged: getConversationFlagReason(intent, { weakAnswer, unresolved }),
+      suggestedAction: getConversationSuggestedAction(type, {
+        weakAnswer,
+        unresolved,
+        contactCaptured: Boolean(contactInfo.email || contactInfo.phone),
+      }),
+      lastSeenAt,
       note: persistedItem.note || "",
       outcome: persistedItem.outcome || "",
       nextStep: persistedItem.nextStep || "",
@@ -496,24 +587,20 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
       contactStatus: persistedItem.contactStatus || "",
       updatedAt: persistedItem.updatedAt || null,
       ownerWorkflow,
-      contactCaptured: Boolean(combinedContactInfo.email || combinedContactInfo.phone),
-      contactInfo: combinedContactInfo.email || combinedContactInfo.phone
+      contactCaptured: Boolean(contactInfo.email || contactInfo.phone),
+      contactInfo: contactInfo.email || contactInfo.phone
         ? {
-            email: combinedContactInfo.email || null,
-            phone: combinedContactInfo.phone || null,
+            email: contactInfo.email || null,
+            phone: contactInfo.phone || null,
           }
         : null,
-    };
-  };
+      unresolved,
+      weakAnswer,
+      intent,
+    });
+  });
 
-  const items = [
-    buildItem("intent:contact", "contact", grouped.contact),
-    buildItem("intent:booking", "booking", grouped.booking),
-    buildItem("intent:pricing", "pricing", grouped.pricing),
-    buildItem("intent:support", "support", grouped.support),
-    buildItem("signal:weak_answer", "weak_answer", grouped.weak_answer),
-  ]
-    .filter(Boolean)
+  const sortedItems = items
     .sort((left, right) => {
       const rankDelta = (left.ownerWorkflow?.rank ?? 99) - (right.ownerWorkflow?.rank ?? 99);
 
@@ -525,8 +612,8 @@ export function buildActionQueue(messages = [], persistedStatuses = [], options 
     });
 
   return {
-    items,
-    summary: buildStatusSummary(items),
+    items: sortedItems,
+    summary: buildStatusSummary(sortedItems),
     persistenceAvailable: options.persistenceAvailable !== false,
     migrationRequired: options.persistenceAvailable === false,
   };
