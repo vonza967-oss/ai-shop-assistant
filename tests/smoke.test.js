@@ -675,9 +675,14 @@ test("marketing homepage and app routes load without broken handoff paths", { co
         const marketingHome = await getText(server.baseUrl, "/");
         assert.equal(marketingHome.status, 200);
         assert.match(marketingHome.text, /Make your website feel like it already has a smart first salesperson/);
+        assert.match(marketingHome.text, /create an account with email and password/i);
         assert.match(marketingHome.text, /href="\/dashboard\?from=site"/);
+        assert.match(marketingHome.text, /id="site-auth-link"/);
+        assert.match(marketingHome.text, /id="site-primary-cta"/);
+        assert.match(marketingHome.text, /data-app-link/);
         assert.match(marketingHome.text, /Vonza workspace/);
         assert.match(marketingHome.text, /see what visitors want and what to improve next/i);
+        assert.match(marketingHome.text, /\/marketing\.js/);
 
         const dashboard = await getText(server.baseUrl, "/dashboard");
         assert.equal(dashboard.status, 200);
@@ -697,6 +702,9 @@ test("marketing homepage and app routes load without broken handoff paths", { co
         const dashboardScript = await getText(server.baseUrl, "/dashboard.js");
         assert.equal(dashboardScript.status, 200);
 
+        const marketingScript = await getText(server.baseUrl, "/marketing.js");
+        assert.equal(marketingScript.status, 200);
+
         const adminAllowed = await getText(server.baseUrl, "/admin?token=admin-1234");
         assert.equal(adminAllowed.status, 200);
 
@@ -709,7 +717,7 @@ test("marketing homepage and app routes load without broken handoff paths", { co
   );
 });
 
-test("dashboard bundle exposes the canonical purchase-first flow and paid workspace tabs", { concurrency: false }, async () => {
+test("dashboard bundle exposes password auth entry, purchase-first handoff, and paid workspace tabs", { concurrency: false }, async () => {
   await withEnv(
     {
       PUBLIC_APP_URL: "http://localhost:3000",
@@ -724,8 +732,19 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
       try {
         const dashboardScript = await getText(server.baseUrl, "/dashboard.js");
         assert.equal(dashboardScript.status, 200);
+        assert.match(dashboardScript.text, /Create your Vonza account/);
+        assert.match(dashboardScript.text, /Sign in to continue into Vonza/);
+        assert.match(dashboardScript.text, /Create account/);
+        assert.match(dashboardScript.text, /Sign in/);
+        assert.match(dashboardScript.text, /Send reset link/);
+        assert.match(dashboardScript.text, /Use email link instead/);
+        assert.match(dashboardScript.text, /Choose your new password/);
+        assert.match(dashboardScript.text, /signInWithPassword/);
+        assert.match(dashboardScript.text, /signUp\(/);
+        assert.match(dashboardScript.text, /resetPasswordForEmail/);
+        assert.match(dashboardScript.text, /updateUser/);
+        assert.match(dashboardScript.text, /signInWithOtp/);
         assert.match(dashboardScript.text, /Unlock Vonza to open your setup workspace/);
-        assert.match(dashboardScript.text, /Continue with email/);
         assert.match(dashboardScript.text, /Overview/);
         assert.match(dashboardScript.text, /Customize/);
         assert.match(dashboardScript.text, /Analytics/);
@@ -750,6 +769,12 @@ test("dashboard bundle exposes the canonical purchase-first flow and paid worksp
         assert.match(dashboardScript.text, /Open owner handoff/);
         assert.match(dashboardScript.text, /Save owner handoff/);
         assert.match(dashboardScript.text, /No weak-answer signal yet/);
+
+        const marketingScript = await getText(server.baseUrl, "/marketing.js");
+        assert.equal(marketingScript.status, 200);
+        assert.match(marketingScript.text, /My Account/);
+        assert.match(marketingScript.text, /\/dashboard/);
+        assert.match(marketingScript.text, /auth\.onAuthStateChange/);
       } finally {
         await server.close();
       }
