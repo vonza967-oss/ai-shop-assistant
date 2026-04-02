@@ -118,7 +118,7 @@ async function ensureAuthClient() {
     }
   );
 
-  if (!authStateListenerBound) {
+  if (!authStateListenerBound && typeof authClient.auth?.onAuthStateChange === "function") {
     authClient.auth.onAuthStateChange((event, session) => {
       authSession = session || null;
       authUser = authSession?.user || null;
