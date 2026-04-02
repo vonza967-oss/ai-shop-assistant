@@ -27,16 +27,19 @@ export function createPublicRouter({ rootDir }) {
   });
 
   router.get("/widget", (_req, res) => {
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
     res.sendFile(path.join(rootDir, "frontend", "widget.html"));
   });
 
   router.get("/embed.js", (_req, res) => {
     res.type("application/javascript");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.sendFile(path.join(rootDir, "embed.js"));
   });
 
   router.get("/embed-lite.js", (_req, res) => {
     res.setHeader("Content-Type", "application/javascript");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.sendFile(path.join(rootDir, "embed-lite.js"));
   });
 

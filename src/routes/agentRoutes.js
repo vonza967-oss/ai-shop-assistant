@@ -6,6 +6,7 @@ import {
   claimAgentForOwner,
   createAgentForBusinessName,
   deleteAgent,
+  getAgentWorkspaceSnapshot,
   getWidgetBootstrap,
   listAllAgents,
   listAgents,
@@ -18,6 +19,7 @@ import {
 } from "../services/agents/agentService.js";
 import { listAgentMessages } from "../services/chat/messageService.js";
 import { getProductFunnelSummary, trackProductEvent } from "../services/analytics/productEventService.js";
+import { trackWidgetEvent } from "../services/analytics/widgetTelemetryService.js";
 import {
   buildActionQueue,
   listActionQueueStatuses,
@@ -45,6 +47,10 @@ import {
   extractBusinessWebsiteContent,
   getStoredWebsiteContent,
 } from "../services/scraping/websiteContentService.js";
+import {
+  recordInstallPing,
+  verifyAgentInstallation,
+} from "../services/install/installPresenceService.js";
 
 export function createAgentRouter(deps = {}) {
   const router = express.Router();
@@ -65,6 +71,7 @@ export function createAgentRouter(deps = {}) {
   const updateAgentSettingsImpl = deps.updateAgentSettings || updateAgentSettings;
   const deleteAgentImpl = deps.deleteAgent || deleteAgent;
   const resolveAgentContextImpl = deps.resolveAgentContext || resolveAgentContext;
+  const getAgentWorkspaceSnapshotImpl = deps.getAgentWorkspaceSnapshot || getAgentWorkspaceSnapshot;
   const extractBusinessWebsiteContentImpl = deps.extractBusinessWebsiteContent || extractBusinessWebsiteContent;
   const getStoredWebsiteContentImpl = deps.getStoredWebsiteContent || getStoredWebsiteContent;
   const updateOwnedAccessStatusImpl = deps.updateOwnedAccessStatus || updateOwnedAccessStatus;
@@ -132,16 +139,76 @@ export function createAgentRouter(deps = {}) {
 
   router.get("/widget/bootstrap", async (req, res) => {
     try {
-      const result = await getWidgetBootstrap(getSupabaseClient(), {
+      const result = await getWidgetBootstrap(getSupabase(), {
+        installId: req.query.install_id || req.query.installId,
         agentId: req.query.agent_id || req.query.agentId,
         agentKey: req.query.agent_key || req.query.agentKey,
         businessId: req.query.business_id || req.query.businessId,
         websiteUrl: req.query.website_url || req.query.websiteUrl,
+        origin: req.query.origin,
+        pageUrl: req.query.page_url || req.query.pageUrl,
+      });
+
+      res.setHeader("Cache-Control", "private, max-age=60, stale-while-revalidate=300");
+      res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/install/ping", async (req, res) => {
+    try {
+      const result = await recordInstallPing(getSupabase(), {
+        installId: req.body.install_id || req.body.installId,
+        origin: req.body.origin,
+        pageUrl: req.body.page_url || req.body.pageUrl,
+        sessionId: req.body.session_id || req.body.sessionId,
+        fingerprint: req.body.fingerprint,
+        timestamp: req.body.timestamp,
       });
 
       res.json(result);
     } catch (err) {
-      console.error(err);
+      console.warn("[install ping] ingestion failure", {
+        installId: req.body.install_id || req.body.installId || null,
+        origin: req.body.origin || null,
+        pageUrl: req.body.page_url || req.body.pageUrl || null,
+        statusCode: err?.statusCode || 500,
+        code: err?.code || null,
+        message: err?.message || "Something went wrong",
+      });
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/install/events", async (req, res) => {
+    try {
+      const result = await trackWidgetEvent(getSupabase(), {
+        installId: req.body.install_id || req.body.installId,
+        eventName: req.body.event_name || req.body.eventName,
+        sessionId: req.body.session_id || req.body.sessionId,
+        origin: req.body.origin,
+        pageUrl: req.body.page_url || req.body.pageUrl,
+        fingerprint: req.body.fingerprint,
+        dedupeKey: req.body.dedupe_key || req.body.dedupeKey,
+        metadata: req.body.metadata,
+      });
+
+      res.json(result);
+    } catch (err) {
+      console.warn("[install events] validation failure", {
+        installId: req.body.install_id || req.body.installId || null,
+        eventName: req.body.event_name || req.body.eventName || null,
+        sessionId: req.body.session_id || req.body.sessionId || null,
+        statusCode: err?.statusCode || 500,
+        code: err?.code || null,
+        message: err?.message || "Something went wrong",
+      });
       res.status(err.statusCode || 500).json({
         error: err.message || "Something went wrong",
       });
@@ -296,6 +363,7 @@ export function createAgentRouter(deps = {}) {
         websiteUrl: req.body.website_url || req.body.websiteUrl,
         primaryColor: req.body.primary_color || req.body.primaryColor,
         secondaryColor: req.body.secondary_color || req.body.secondaryColor,
+        allowedDomains: req.body.allowed_domains || req.body.allowedDomains,
       });
 
       res.json({ ok: true, agent: result });
@@ -425,6 +493,69 @@ export function createAgentRouter(deps = {}) {
           knowledgeFixWorkflowAvailable: knowledgeFixSync?.persistenceAvailable !== false,
         })
       );
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.get("/agents/install-status", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req).catch((error) => {
+        if (error.statusCode === 401) {
+          return null;
+        }
+        throw error;
+      });
+      const agentId = req.query.agent_id || req.query.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        clientId: req.query.client_id || req.query.clientId,
+      });
+
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+
+      res.json({ agent });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/install/verify", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req).catch((error) => {
+        if (error.statusCode === 401) {
+          return null;
+        }
+        throw error;
+      });
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const verification = await verifyAgentInstallation(supabase, {
+        agentId,
+      });
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+
+      res.json({
+        ok: verification.ok === true,
+        verification,
+        agent,
+      });
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({

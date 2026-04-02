@@ -50,6 +50,7 @@ let authUser = null;
 let authViewMode = AUTH_VIEW_MODES.SIGN_UP;
 let authFeedback = null;
 let authStateListenerBound = false;
+let workspaceState = null;
 
 function isDevFakeBillingEnabled() {
   return Boolean(window.VONZA_DEV_FAKE_BILLING);
@@ -57,6 +58,65 @@ function isDevFakeBillingEnabled() {
 
 function getPublicAppUrl() {
   return (window.VONZA_PUBLIC_APP_URL || window.location.origin).replace(/\/$/, "");
+}
+
+function getDefaultInstallStatus(agent = {}) {
+  return agent.installStatus || {
+    state: "not_installed",
+    label: "Not installed yet",
+    host: "",
+    pageUrl: null,
+    lastSeenAt: null,
+    lastSeenUrl: null,
+    lastVerifiedAt: null,
+    verificationStatus: null,
+    verificationTargetUrl: agent.websiteUrl || null,
+    verificationOrigin: null,
+    verificationDetails: {},
+    allowedDomains: Array.isArray(agent.allowedDomains) ? agent.allowedDomains : [],
+    installId: agent.installId || "",
+    installedAt: null,
+  };
+}
+
+function isInstallSeen(status) {
+  return ["seen_recently", "seen_stale"].includes(status?.state);
+}
+
+function isInstallRecent(status) {
+  return status?.state === "seen_recently";
+}
+
+function isInstallDetected(status) {
+  return ["installed_unseen", "seen_recently", "seen_stale"].includes(status?.state);
+}
+
+function getInstallSummaryLabel(status) {
+  if (!status) {
+    return "Not live";
+  }
+
+  if (status.state === "seen_recently") {
+    return status.host || "Seen recently";
+  }
+
+  if (status.state === "seen_stale") {
+    return status.host ? `${status.host} (stale)` : "Seen stale";
+  }
+
+  if (status.state === "installed_unseen") {
+    return "Installed, awaiting ping";
+  }
+
+  if (status.state === "domain_mismatch") {
+    return "Mismatch";
+  }
+
+  if (status.state === "verify_failed") {
+    return "Verify failed";
+  }
+
+  return "Not live";
 }
 
 function hasAuthConfig() {
@@ -528,15 +588,21 @@ function setStatus(message) {
   statusBanner.textContent = message || "";
 }
 
-function buildScript(agentKey) {
-  return `<script src="${getPublicAppUrl()}/embed.js" data-agent-key="${agentKey}"><\/script>`;
+function buildScript(agent) {
+  const installId = trimText(agent.installId);
+
+  if (!installId) {
+    return "";
+  }
+
+  return `<script async defer src="${getPublicAppUrl()}/embed.js" data-install-id="${installId}"><\/script>`;
 }
 
 function buildWidgetUrl(agentKey) {
   return `${getPublicAppUrl()}/widget?agent_key=${encodeURIComponent(agentKey)}`;
 }
 
-function buildPreviewMarkup(agentKey) {
+function buildPreviewMarkup(installId) {
   const publicAppUrl = getPublicAppUrl();
   return `<!DOCTYPE html>
 <html>
@@ -545,7 +611,7 @@ function buildPreviewMarkup(agentKey) {
   <h2 style="margin:0 0 8px;">Preview site</h2>
   <p style="margin:0;max-width:520px;color:#475569;line-height:1.6;">This simulates how your assistant will appear when installed on a real website.</p>
 </main>
-<script src="${publicAppUrl}/embed.js" data-agent-key="${agentKey}"><\/script>
+<script async defer src="${publicAppUrl}/embed.js" data-install-id="${escapeHtml(installId)}"><\/script>
   </body>
 </html>`;
 }
@@ -1423,6 +1489,11 @@ function buildCustomizePanel(agent, setup) {
                   <input id="assistant-website" name="website_url" type="text" value="${escapeHtml(agent.websiteUrl || "")}">
                   <p class="field-help">This should be the main website Vonza learns from and represents.</p>
                 </div>
+                <div class="field">
+                  <label for="assistant-allowed-domains">Allowed domains</label>
+                  <textarea id="assistant-allowed-domains" name="allowed_domains" placeholder="example.com&#10;www.example.com">${escapeHtml((agent.allowedDomains || []).join("\n"))}</textarea>
+                  <p class="field-help">One domain per line. Leave it as the website domain unless the widget should run on multiple live hosts.</p>
+                </div>
               </div>
               <div class="form-grid">
                 <div class="field">
@@ -1492,7 +1563,7 @@ function buildCustomizePanel(agent, setup) {
               </div>
               <div class="overview-list-item">
                 <p class="overview-list-title">Install status</p>
-                <p class="overview-list-copy">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</p>
+                <p class="overview-list-copy">${escapeHtml(agent.installStatus?.label || "Not installed yet")}</p>
               </div>
               <div class="overview-list-item">
                 <p id="behavior-summary-title" class="overview-list-title">${escapeHtml(behaviorSummary.title)}</p>
@@ -3100,12 +3171,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
 }
 
 function buildOverviewState(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
-  const installStatus = agent.installStatus || {
-    state: "not_detected",
-    label: "Not detected on a live site yet",
-    host: "",
-    lastSeenAt: null,
-  };
+  const installStatus = getDefaultInstallStatus(agent);
   const signals = analyzeConversationSignals(messages);
   const messageCount = Number(agent.messageCount || messages.length || 0);
   const lastActivity = agent.lastMessageAt || installStatus.lastSeenAt || null;
@@ -3140,7 +3206,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "preview",
       });
     }
-  } else if (installStatus.state === "live") {
+  } else if (isInstallSeen(installStatus)) {
     if (queueSummary.attentionNeeded > 0) {
       title = `Your assistant is live and ${queueSummary.attentionNeeded} action item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
       copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations that deserve owner follow-up or a stronger answer path.`;
@@ -3210,9 +3276,33 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "preview",
       });
     }
-  } else if (installStatus.state === "test") {
-    title = "Your assistant is ready for a live launch";
-    copy = "Vonza has been seen in preview or test environments. The next step is placing it on your live site so customers can actually use it.";
+  } else if (installStatus.state === "installed_unseen") {
+    title = "Your assistant is published and waiting for first live traffic";
+    copy = "Vonza found the install snippet on the website. The next step is letting a real page load trigger the first live ping.";
+    primaryAction = {
+      label: "Verify installation",
+      type: "focus",
+      value: "install",
+    };
+    nextActions.push({
+      label: "Copy install code",
+      type: "install",
+    });
+  } else if (installStatus.state === "domain_mismatch") {
+    title = "Your install needs a quick fix";
+    copy = "Vonza found embed markup, but it does not match the current install. Replace older snippets before launch.";
+    primaryAction = {
+      label: "Review install",
+      type: "focus",
+      value: "install",
+    };
+    nextActions.push({
+      label: "Copy install code",
+      type: "install",
+    });
+  } else if (installStatus.state === "verify_failed") {
+    title = "Your assistant is ready for verification";
+    copy = "The setup is in place, but the live install has not verified yet. Publish the snippet, then run the check again.";
     primaryAction = {
       label: "Add to website",
       type: "focus",
@@ -3261,23 +3351,23 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     },
     {
       title: "Website install",
-      copy: installStatus.state === "live"
+      copy: isInstallSeen(installStatus)
         ? "Vonza has already been detected on the live site."
         : "The next milestone is getting Vonza onto the live website.",
-      done: installStatus.state === "live",
+      done: isInstallSeen(installStatus),
     },
   ];
 
   const cards = [];
 
-  if (installStatus.state === "live" && messageCount === 0) {
+  if (isInstallSeen(installStatus) && messageCount === 0) {
     cards.push({
       title: "Now help visitors notice it",
       copy: "Make the launcher text and welcome message stronger, then test a few common customer questions to make sure the first interaction feels clear and helpful.",
     });
   }
 
-  if (installStatus.state === "live" && messageCount > 0) {
+  if (isInstallSeen(installStatus) && messageCount > 0) {
     const topIntentLabelMap = {
       general: "general business questions",
       services: "services and what the business offers",
@@ -3305,7 +3395,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
   if (!cards.length) {
     cards.push({
       title: "Next best move",
-      copy: installStatus.state === "live"
+      copy: isInstallSeen(installStatus)
         ? "Keep testing the assistant on your site and review the wording, welcome message, and response style until it feels like a natural part of the business."
         : "Once the assistant is installed on a live site, Vonza will start showing real usage and recent customer questions here.",
     });
@@ -3349,7 +3439,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       : "No usage yet";
   const recommendationTitle = !setup.knowledgeReady
     ? "Strengthen website knowledge"
-    : overview.installStatus.state !== "live"
+    : !isInstallSeen(overview.installStatus)
       ? "Finish live install"
       : overview.queueSummary.attentionNeeded > 0
         ? "Review action queue"
@@ -3362,7 +3452,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           : "Keep learning from live usage";
   const recommendationCopy = !setup.knowledgeReady
     ? "Run another website import so the assistant can answer with stronger business context."
-    : overview.installStatus.state !== "live"
+    : !isInstallSeen(overview.installStatus)
       ? "Place Vonza on the live site so it can start detecting real visitor behavior and customer intent."
       : overview.queueSummary.attentionNeeded > 0
         ? "Important high-intent or weak-answer items are in the Action Queue. Review them first so the owner knows which visitors or answer paths still need attention."
@@ -3416,7 +3506,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
     }
 
     if (action.type === "install") {
-      return `<button class="${options.primary ? "primary-button" : "ghost-button"}" type="button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>${action.label}</button>`;
+      return `<button class="${options.primary ? "primary-button" : "ghost-button"}" type="button" data-action="copy-install" ${trimText(agent.installId) ? "" : "disabled"}>${action.label}</button>`;
     }
 
     if (action.type === "preview") {
@@ -3429,13 +3519,13 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
   return `
     <section class="overview-shell">
       <section class="overview-hero">
-        <span class="eyebrow">${overview.installStatus.state === "live" ? "Live performance" : "Assistant overview"}</span>
+        <span class="eyebrow">${isInstallSeen(overview.installStatus) ? "Live performance" : "Assistant overview"}</span>
         <h2 class="overview-title">${escapeHtml(overview.title)}</h2>
         <p class="overview-copy">${escapeHtml(overview.copy)}</p>
         <div class="overview-metric-grid">
           <div class="overview-metric">
             <div class="overview-metric-label">Install status</div>
-            <div class="overview-metric-value">${escapeHtml(overview.installStatus.state === "live" ? overview.installStatus.host || "Live" : overview.installStatus.state === "test" ? "Preview only" : "Not live")}</div>
+            <div class="overview-metric-value">${escapeHtml(getInstallSummaryLabel(overview.installStatus))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Visitor questions</div>
@@ -3533,12 +3623,8 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     ...createEmptyActionQueue().peopleSummary,
     ...(actionQueue.peopleSummary || {}),
   };
-  const installStatus = agent.installStatus || {
-    state: "not_detected",
-    label: "Not detected on a live site yet",
-    host: "",
-    lastSeenAt: null,
-  };
+  const installStatus = getDefaultInstallStatus(agent);
+  const widgetMetrics = agent.widgetMetrics || {};
   const opportunityItems = [];
 
   if (setup.knowledgeLimited || setup.knowledgeMissing) {
@@ -3551,13 +3637,23 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     });
   }
 
-  if (installStatus.state !== "live") {
+  if (!isInstallSeen(installStatus)) {
     opportunityItems.push({
       title: "No live install detected yet",
-      copy: installStatus.state === "test"
-        ? "The assistant has been seen in preview or test environments, but not yet on a live external site."
-        : "Vonza has not yet detected the assistant on a live site.",
-      subtle: "Once the widget is loaded from a real external host, this status will update automatically.",
+      copy: installStatus.state === "installed_unseen"
+        ? "The snippet is on the site, but a live widget ping has not been seen yet."
+        : installStatus.state === "domain_mismatch"
+          ? "A different install id or blocked domain was detected on the site."
+          : "Vonza has not yet detected the assistant on a live site.",
+      subtle: "Run verification, then load a real published page that includes the widget snippet.",
+    });
+  }
+
+  if (isInstallDetected(installStatus) && Number(widgetMetrics.conversationsSinceInstall || 0) === 0) {
+    opportunityItems.unshift({
+      title: "0 conversations since install",
+      copy: "The install is present, but no conversation has started since Vonza first detected it.",
+      subtle: "Open the live site in a private window and send a test question to confirm the full path.",
     });
   }
 
@@ -3639,7 +3735,13 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               <div class="analytics-item">
                 <p class="analytics-item-title">Assistant visibility</p>
                 <p class="analytics-item-copy">${escapeHtml(installStatus.label)}</p>
-                <p class="analytics-subtle">${escapeHtml(installStatus.lastSeenAt ? `Last seen ${formatSeenAt(installStatus.lastSeenAt)}.` : "Live detection updates when the widget is seen on a real site or test environment.")}</p>
+                <p class="analytics-subtle">${escapeHtml(
+                  installStatus.lastSeenAt
+                    ? `Last seen ${formatSeenAt(installStatus.lastSeenAt)}.`
+                    : installStatus.lastVerifiedAt
+                      ? `Last verified ${formatSeenAt(installStatus.lastVerifiedAt)}.`
+                      : "Run verification, then wait for a real live page load to ping back."
+                )}</p>
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Recent activity</p>
@@ -3653,8 +3755,20 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Operator signal</p>
-                <p class="analytics-item-copy">${escapeHtml(signals.highValueIntentCount > 0 ? `${signals.highValueIntentCount} high-intent customer signal${signals.highValueIntentCount === 1 ? "" : "s"} have already appeared.` : "There is not a strong lead, booking, pricing, or support signal yet.")}</p>
-                <p class="analytics-subtle">${escapeHtml(signals.weakAnswerCount > 0 ? `${signals.weakAnswerCount} question${signals.weakAnswerCount === 1 ? "" : "s"} may need a better answer path.` : "No weak-answer signal has been detected yet.")}</p>
+                <p class="analytics-item-copy">${escapeHtml(
+                  signals.highValueIntentCount > 0
+                    ? `${signals.highValueIntentCount} high-intent customer signal${signals.highValueIntentCount === 1 ? "" : "s"} have already appeared.`
+                    : Number(widgetMetrics.conversationsSinceInstall || 0) === 0 && isInstallDetected(installStatus)
+                      ? "0 conversations since install. Run a live test flow to confirm visitors can reach the assistant."
+                      : "There is not a strong lead, booking, pricing, or support signal yet."
+                )}</p>
+                <p class="analytics-subtle">${escapeHtml(
+                  signals.weakAnswerCount > 0
+                    ? `${signals.weakAnswerCount} question${signals.weakAnswerCount === 1 ? "" : "s"} may need a better answer path.`
+                    : Number(widgetMetrics.conversationsSinceInstall || 0) > 0
+                      ? `${widgetMetrics.conversationsSinceInstall} conversation${widgetMetrics.conversationsSinceInstall === 1 ? "" : "s"} started since install.`
+                      : "No weak-answer signal has been detected yet."
+                )}</p>
               </div>
             </div>
           </section>
@@ -3772,7 +3886,7 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
             <div class="workspace-badge-row">
               <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
               <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
-              <span class="${getBadgeClass(agent.installStatus?.state === "live" ? "Ready" : agent.installStatus?.state === "test" ? "Limited" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not detected on a live site yet")}</span>
+              <span class="${getBadgeClass(isInstallSeen(getDefaultInstallStatus(agent)) ? "Ready" : getDefaultInstallStatus(agent).state === "installed_unseen" ? "Limited" : getDefaultInstallStatus(agent).state === "domain_mismatch" || getDefaultInstallStatus(agent).state === "verify_failed" ? "Needs attention" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not installed yet")}</span>
             </div>
           </div>
           <div class="workspace-actions">
@@ -3800,11 +3914,24 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
 }
 
 function renderSetupState(agent, messages, setup, actionQueue) {
+  workspaceState = {
+    agent,
+    messages,
+    setup,
+    actionQueue,
+  };
   renderAssistantShell(agent, messages, setup, actionQueue);
 }
 
 function renderReadyState(agent, messages, actionQueue) {
-  renderAssistantShell(agent, messages, inferSetup(agent), actionQueue);
+  const setup = inferSetup(agent);
+  workspaceState = {
+    agent,
+    messages,
+    setup,
+    actionQueue,
+  };
+  renderAssistantShell(agent, messages, setup, actionQueue);
 }
 
 function buildPreviewSection(agent, setup) {
@@ -3856,58 +3983,76 @@ function buildPreviewSection(agent, setup) {
 
 function buildInstallSection(agent, options = {}) {
   const { upcoming = false } = options;
-  const hasInstall = Boolean(trimText(agent.publicAgentKey));
+  const hasInstall = Boolean(trimText(agent.installId));
   const progress = getInstallProgress(agent.id);
-  const script = hasInstall ? buildScript(agent.publicAgentKey) : "";
-  const installStatus = agent.installStatus || {
-    state: "not_detected",
-    label: "Not detected on a live site yet",
-    host: "",
-    lastSeenAt: null,
-  };
-  const statusCopy = installStatus.state === "live"
-    ? `Live install detected on ${installStatus.host}${installStatus.lastSeenAt ? `, last seen ${formatSeenAt(installStatus.lastSeenAt)}` : ""}.`
-    : installStatus.state === "test"
-      ? `Seen on a test or preview site${installStatus.host ? ` (${installStatus.host})` : ""}${installStatus.lastSeenAt ? `, last seen ${formatSeenAt(installStatus.lastSeenAt)}` : ""}.`
-      : "Not detected on a live site yet. Once the real widget is seen on an external host, this status will update automatically.";
+  const script = hasInstall ? buildScript(agent) : "";
+  const installStatus = getDefaultInstallStatus(agent);
+  const allowedDomains = Array.isArray(installStatus.allowedDomains) ? installStatus.allowedDomains : [];
+  const verifyDetails = installStatus.verificationDetails || {};
+  const statusCopy = installStatus.state === "seen_recently"
+    ? `Live install detected on ${installStatus.host || "your website"}${installStatus.lastSeenAt ? `, last seen ${formatSeenAt(installStatus.lastSeenAt)}` : ""}.`
+    : installStatus.state === "seen_stale"
+      ? `Vonza was seen on ${installStatus.host || "your website"}${installStatus.lastSeenAt ? ` ${formatSeenAt(installStatus.lastSeenAt)}` : ""}, but no recent live ping has arrived.`
+      : installStatus.state === "installed_unseen"
+        ? "The snippet was found on the site, but Vonza has not yet received a live widget ping from a visitor page."
+        : installStatus.state === "domain_mismatch"
+          ? "Vonza found embed markup, but it points at a different install or a blocked domain."
+          : installStatus.state === "verify_failed"
+            ? "Verification needs attention. Vonza either could not fetch the site or could not find the expected install snippet yet."
+            : "Not installed yet. Paste the head snippet onto the live site, then run verification.";
+  const publishDone = isInstallDetected(installStatus) || progress.installed;
+  const verifyDone = isInstallSeen(installStatus) || installStatus.state === "installed_unseen";
+  const recentSeenMarkup = installStatus.lastSeenUrl
+    ? `<p class="install-help">Last seen page: ${escapeHtml(installStatus.lastSeenUrl)}</p>`
+    : "";
+  const verificationMarkup = installStatus.lastVerifiedAt
+    ? `<p class="install-help">Last verified ${escapeHtml(formatSeenAt(installStatus.lastVerifiedAt))}${installStatus.verificationTargetUrl ? ` against ${escapeHtml(installStatus.verificationTargetUrl)}` : ""}.</p>`
+    : "";
+  const mismatchMarkup = verifyDetails?.foundInstallIds?.length
+    ? `<p class="install-help">Found install id${verifyDetails.foundInstallIds.length === 1 ? "" : "s"}: ${escapeHtml(verifyDetails.foundInstallIds.join(", "))}</p>`
+    : "";
 
   return `
     ${upcoming ? `<p class="install-upcoming">This becomes the final step once your assistant feels ready to go live.</p>` : ""}
     <p class="section-copy">${escapeHtml(installStatus.label)}</p>
     <p class="install-help">${escapeHtml(statusCopy)}</p>
+    ${allowedDomains.length ? `<p class="install-help">Allowed domains: ${escapeHtml(allowedDomains.join(", "))}</p>` : ""}
+    ${recentSeenMarkup}
+    ${verificationMarkup}
+    ${mismatchMarkup}
     <div class="install-steps">
       <div class="install-step">
         <div class="install-step-number">1</div>
         <div>
           <p class="install-step-title">Copy code</p>
-          <p class="install-step-copy">Use one clean embed snippet to place your assistant on your website.</p>
+          <p class="install-step-copy">Use the stable head snippet with your install id so Vonza can verify the right site.</p>
         </div>
         <div class="step-check ${progress.codeCopied ? "done" : ""}">${progress.codeCopied ? "Done" : "Pending"}</div>
       </div>
       <div class="install-step">
         <div class="install-step-number">2</div>
         <div>
-          <p class="install-step-title">Add it to your site</p>
-          <p class="install-step-copy">Paste it before </body>, or add it in your footer or custom code settings.</p>
+          <p class="install-step-title">Publish it</p>
+          <p class="install-step-copy">Paste it into the live site head, theme layout, or global custom code area.</p>
         </div>
-        <div class="step-check ${progress.installed ? "done" : ""}">${progress.installed ? "Confirmed" : "Pending"}</div>
+        <div class="step-check ${publishDone ? "done" : ""}">${publishDone ? "Detected" : "Pending"}</div>
       </div>
       <div class="install-step">
         <div class="install-step-number">3</div>
         <div>
-          <p class="install-step-title">Test your assistant</p>
-          <p class="install-step-copy">Open a live preview and make sure the experience feels right before you publish.</p>
+          <p class="install-step-title">Verify and watch for live traffic</p>
+          <p class="install-step-copy">Run the server check, then wait for the widget to ping back from a real page load.</p>
         </div>
-        <div class="step-check ${progress.previewOpened ? "done" : ""}">${progress.previewOpened ? "Done" : "Pending"}</div>
+        <div class="step-check ${verifyDone ? "done" : ""}">${verifyDone ? "Ready" : "Pending"}</div>
       </div>
     </div>
     <div class="install-cta-row">
       <button class="primary-button" data-action="copy-install" ${hasInstall ? "" : "disabled"}>Copy install code</button>
       <button class="ghost-button" data-action="copy-install-instructions" ${hasInstall ? "" : "disabled"}>Copy instructions</button>
+      <button class="ghost-button" data-action="verify-install" ${hasInstall ? "" : "disabled"}>Verify installation</button>
       <a class="test-link ${hasInstall ? "" : "disabled"}" data-action="open-preview" href="${hasInstall ? buildWidgetUrl(agent.publicAgentKey) : "#"}" target="_blank" rel="noreferrer">Test assistant</a>
-      <button class="ghost-button" data-action="mark-installed" ${hasInstall ? "" : "disabled"}>${progress.installed ? "Added to site (you confirmed)" : "Confirm added to site"}</button>
     </div>
-    <p class="install-help">${hasInstall ? "Keep it simple: paste the code before </body>, or place it in your site footer or custom code area. Your confirmation is optional and separate from live detection." : "Install will be available as soon as your assistant has a live embed key."}</p>
+    <p class="install-help">${hasInstall ? "Keep it simple: place the script in the live site head. Vonza will verify the snippet server-side and mark the install live once a real page load pings back." : "Install will be available as soon as your assistant has a live install id."}</p>
     <details class="code-toggle">
       <summary>View code</summary>
       <textarea id="install-script-output" readonly>${script}</textarea>
@@ -4052,6 +4197,14 @@ async function loadAgentMessages(agentId) {
   return data.messages || [];
 }
 
+async function loadAgentInstallSnapshot(agentId) {
+  const url = new URL("/agents/install-status", window.location.origin);
+  url.searchParams.set("agent_id", agentId);
+  url.searchParams.set("client_id", getClientId());
+  const data = await fetchJson(url.toString());
+  return data.agent || null;
+}
+
 async function loadActionQueue(agentId) {
   const url = new URL("/agents/action-queue", window.location.origin);
   url.searchParams.set("agent_id", agentId);
@@ -4081,6 +4234,50 @@ async function loadActionQueue(agentId) {
     console.warn("[action queue] Could not load the action queue:", error.message);
     return createEmptyActionQueue();
   }
+}
+
+function renderWorkspaceFromState() {
+  if (!workspaceState?.agent) {
+    return;
+  }
+
+  const setup = workspaceState.setup || inferSetup(workspaceState.agent);
+  if (setup.isReady) {
+    renderReadyState(
+      workspaceState.agent,
+      workspaceState.messages || [],
+      workspaceState.actionQueue || createEmptyActionQueue()
+    );
+    return;
+  }
+
+  renderSetupState(
+    workspaceState.agent,
+    workspaceState.messages || [],
+    setup,
+    workspaceState.actionQueue || createEmptyActionQueue()
+  );
+}
+
+async function refreshAgentInstallState(agentId) {
+  if (!workspaceState?.agent || workspaceState.agent.id !== agentId) {
+    await boot();
+    return;
+  }
+
+  const nextAgent = await loadAgentInstallSnapshot(agentId);
+
+  if (!nextAgent) {
+    await boot();
+    return;
+  }
+
+  workspaceState = {
+    ...workspaceState,
+    agent: nextAgent,
+    setup: inferSetup(nextAgent),
+  };
+  renderWorkspaceFromState();
 }
 
 async function importKnowledge(agent, options = {}) {
@@ -4312,6 +4509,7 @@ async function saveAssistant(event, agent) {
     website_url: getNextValue("website_url", agent.websiteUrl || ""),
     primary_color: getNextValue("primary_color", agent.primaryColor || ""),
     secondary_color: getNextValue("secondary_color", agent.secondaryColor || ""),
+    allowed_domains: getNextValue("allowed_domains", (agent.allowedDomains || []).join("\n")),
   };
 
   submitButton.disabled = true;
@@ -4365,7 +4563,7 @@ async function saveAssistant(event, agent) {
 }
 
 async function copyInstallCode(agent) {
-  const script = buildScript(agent.publicAgentKey);
+  const script = buildScript(agent);
 
   try {
     await navigator.clipboard.writeText(script);
@@ -4383,15 +4581,15 @@ async function copyInstallCode(agent) {
     setStatus("Install code copied. You can paste it into your website when you are ready.");
   }
 
-  await boot();
+  await refreshAgentInstallState(agent.id);
 }
 
 async function copyInstallInstructions(agent) {
   const installBlock = [
-    "Paste this into your website's footer or custom code area.",
-    "If you can edit the site code directly, place it before </body>.",
+    "Paste this into your website head or global custom code area.",
+    "If your CMS uses themes or layouts, place it in the live published theme header.",
     "",
-    buildScript(agent.publicAgentKey),
+    buildScript(agent),
   ].join("\n");
 
   try {
@@ -4405,14 +4603,14 @@ async function copyInstallInstructions(agent) {
       textarea.value = installBlock;
       textarea.select();
       document.execCommand("copy");
-      textarea.value = buildScript(agent.publicAgentKey);
+      textarea.value = buildScript(agent);
     }
     saveInstallProgress(agent.id, { codeCopied: true });
     trackProductEvent("install_instructions_copied", { agentId: agent.id });
     setStatus("Instructions copied with the install code.");
   }
 
-  await boot();
+  await refreshAgentInstallState(agent.id);
 }
 
 function getPreviewFrame() {
@@ -4753,8 +4951,8 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
   const importButtons = document.querySelectorAll('[data-action="import-knowledge"]');
   const copyButtons = document.querySelectorAll('[data-action="copy-install"]');
   const copyInstructionsButtons = document.querySelectorAll('[data-action="copy-install-instructions"]');
+  const verifyInstallButtons = document.querySelectorAll('[data-action="verify-install"]');
   const previewLinks = document.querySelectorAll('[data-action="open-preview"]');
-  const markInstalledButton = document.querySelector('[data-action="mark-installed"]');
   const resetPreviewButton = document.querySelector('[data-action="reset-preview"]');
   const promptButtons = document.querySelectorAll('[data-preview-prompt]');
   const sectionButtons = document.querySelectorAll("[data-shell-target]");
@@ -5151,6 +5349,48 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
     button.addEventListener("click", () => copyInstallInstructions(agent));
   });
 
+  verifyInstallButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      setStatus("Verifying installation...");
+
+      try {
+        const result = await fetchJson("/agents/install/verify", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            client_id: getClientId(),
+            agent_id: agent.id,
+          }),
+        });
+
+        workspaceState = {
+          ...(workspaceState || {}),
+          agent: result.agent || agent,
+          messages,
+          actionQueue,
+          setup: inferSetup(result.agent || agent),
+        };
+        renderWorkspaceFromState();
+        setStatus(
+          result.verification?.status === "found"
+            ? "Install snippet verified."
+            : result.verification?.status === "mismatch"
+              ? "A different Vonza install was detected on the website."
+              : result.verification?.status === "not_found"
+                ? "Snippet not found on the website yet."
+                : "Verification completed."
+        );
+      } catch (error) {
+        setStatus(error.message || "We couldn't verify the installation.");
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
   previewLinks.forEach((link) => {
     link.addEventListener("click", () => {
       saveInstallProgress(agent.id, { previewOpened: true });
@@ -5172,21 +5412,6 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
       sendPromptToPreview(agent, button.dataset.previewPrompt || "");
     });
   });
-
-  if (markInstalledButton) {
-    markInstalledButton.addEventListener("click", async () => {
-      const progress = getInstallProgress(agent.id);
-      saveInstallProgress(agent.id, { installed: !progress.installed });
-      if (!progress.installed) {
-        trackProductEvent("added_to_site_confirmed", {
-          agentId: agent.id,
-          onceKey: `added_to_site_confirmed:${agent.id}`,
-        });
-      }
-      setStatus(!progress.installed ? "Marked as added to your site." : "Added-to-site confirmation reset.");
-      await boot();
-    });
-  }
 
   sectionButtons.forEach((button) => {
     button.addEventListener("click", () => {

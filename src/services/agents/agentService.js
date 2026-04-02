@@ -2,7 +2,14 @@ import { cleanText, slugifyLookupValue } from "../../utils/text.js";
 import { getHostnameFromUrl, normalizeWebsiteUrl } from "../../utils/url.js";
 import { ensureBusinessRecord, findBusinessByIdentifier } from "../business/businessResolution.js";
 import { getAgentMessageStats } from "../chat/messageService.js";
-import { listInstallStatusByAgentIds, recordInstallPresence } from "../install/installPresenceService.js";
+import { listWidgetEventSummaryByAgentIds } from "../analytics/widgetTelemetryService.js";
+import {
+  deriveAllowedDomains,
+  getWidgetInstallContextByInstallId,
+  isOriginAllowed,
+  listInstallStatusByAgentIds,
+  logWidgetInitFailure,
+} from "../install/installPresenceService.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_LANGUAGE,
@@ -136,6 +143,16 @@ function mapWidgetConfigRow(row) {
           secondaryColor: row.secondary_color || DEFAULT_WIDGET_CONFIG.secondaryColor,
           launcherText: row.launcher_text || DEFAULT_WIDGET_CONFIG.launcherText,
           themeMode: row.theme_mode || DEFAULT_WIDGET_CONFIG.themeMode,
+          installId: row.install_id || "",
+          allowedDomains: deriveAllowedDomains(row.allowed_domains, ""),
+          lastVerificationStatus: row.last_verification_status || null,
+          lastVerifiedAt: row.last_verified_at || null,
+          lastVerificationOrigin: row.last_verification_origin || null,
+          lastVerificationTargetUrl: row.last_verification_target_url || null,
+          lastVerificationDetails:
+            row.last_verification_details && typeof row.last_verification_details === "object"
+              ? row.last_verification_details
+              : {},
         }
       : {}),
   };
@@ -171,11 +188,31 @@ function buildKnowledgeSummary(row) {
   };
 }
 
+function buildDefaultInstallStatus(widgetConfig = null, websiteUrl = "") {
+  return {
+    state: "not_installed",
+    label: "Not installed yet",
+    host: "",
+    pageUrl: null,
+    lastSeenAt: null,
+    lastSeenUrl: null,
+    lastVerifiedAt: widgetConfig?.lastVerifiedAt || null,
+    verificationStatus: widgetConfig?.lastVerificationStatus || null,
+    verificationTargetUrl: widgetConfig?.lastVerificationTargetUrl || websiteUrl || null,
+    verificationOrigin: widgetConfig?.lastVerificationOrigin || null,
+    verificationDetails: widgetConfig?.lastVerificationDetails || {},
+    installId: widgetConfig?.installId || "",
+    allowedDomains: deriveAllowedDomains(widgetConfig?.allowedDomains, websiteUrl),
+    expectedDomain: getHostnameFromUrl(websiteUrl || ""),
+    installedAt: null,
+  };
+}
+
 export async function getWidgetConfigForAgent(supabase, agentId) {
   const { data, error } = await supabase
     .from(WIDGET_CONFIGS_TABLE)
     .select(
-      "id, agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, launcher_text, theme_mode"
+      "id, agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, launcher_text, theme_mode, install_id, allowed_domains, last_verification_status, last_verified_at, last_verification_origin, last_verification_target_url, last_verification_details"
     )
     .eq("agent_id", agentId)
     .maybeSingle();
@@ -206,12 +243,13 @@ export async function ensureWidgetConfigForAgent(supabase, agentId) {
         secondary_color: existingConfig.secondaryColor,
         launcher_text: existingConfig.launcherText,
         theme_mode: existingConfig.themeMode,
+        allowed_domains: existingConfig.allowedDomains || [],
         updated_at: new Date().toISOString(),
       },
       { onConflict: "agent_id" }
     )
     .select(
-      "id, agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, launcher_text, theme_mode"
+      "id, agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, launcher_text, theme_mode, install_id, allowed_domains, last_verification_status, last_verified_at, last_verification_origin, last_verification_target_url, last_verification_details"
     )
     .single();
 
@@ -490,17 +528,47 @@ export async function resolveAgentContext(supabase, options = {}) {
 }
 
 export async function getWidgetBootstrap(supabase, options = {}) {
-  const context = await resolveAgentContext(supabase, options);
+  const installId = cleanText(options.installId);
+  const requestedOrigin = cleanText(options.origin);
+  const pageUrl = cleanText(options.pageUrl);
+  let context = null;
 
-  if (context.agent?.id && !String(context.agent.id).startsWith("fallback-") && options.websiteUrl) {
-    try {
-      await recordInstallPresence(supabase, {
-        agentId: context.agent.id,
-        pageUrl: options.websiteUrl,
-      });
-    } catch (error) {
-      console.warn("Vonza install presence logging failed:", error?.message || error);
+  if (installId) {
+    const installContext = await getWidgetInstallContextByInstallId(supabase, installId);
+
+    if (!installContext?.agent || !installContext.business) {
+      const error = new Error("Install not found");
+      error.statusCode = 404;
+      throw error;
     }
+
+    if (requestedOrigin && !isOriginAllowed(requestedOrigin, installContext.allowedDomains)) {
+      logWidgetInitFailure({
+        reason: "domain_blocked",
+        installId,
+        origin: requestedOrigin,
+        pageUrl,
+        allowedDomains: installContext.allowedDomains,
+        message: "Origin is not on the install allowlist.",
+      });
+      const error = new Error("This website origin is not allowed for the current install.");
+      error.statusCode = 403;
+      error.code = "domain_blocked";
+      throw error;
+    }
+
+    context = {
+      agent: {
+        id: installContext.agent.id,
+        publicAgentKey: installContext.agent.public_agent_key || "",
+        name: installContext.agent.name || DEFAULT_AGENT_NAME,
+      },
+      business: installContext.business,
+      widgetConfig: mapWidgetConfigRow(installContext.widgetConfigRow),
+      allowedDomains: installContext.allowedDomains,
+    };
+  } else {
+    context = await resolveAgentContext(supabase, options);
   }
 
   return {
@@ -513,6 +581,10 @@ export async function getWidgetBootstrap(supabase, options = {}) {
     widgetConfig: {
       ...context.widgetConfig,
       assistantName: context.widgetConfig.assistantName || context.agent.name || DEFAULT_WIDGET_CONFIG.assistantName,
+    },
+    install: {
+      installId: context.widgetConfig.installId || installId || "",
+      allowedDomains: context.allowedDomains || context.widgetConfig.allowedDomains || [],
     },
   };
 }
@@ -629,11 +701,12 @@ export async function listAgents(supabase, options = {}) {
   let websiteContentByBusinessId = new Map();
   let messageStatsByAgentId = new Map();
   let installStatusByAgentId = new Map();
+  let widgetMetricsByAgentId = new Map();
 
   if (agentIds.length) {
     const { data: widgetRows, error: widgetError } = await supabase
       .from(WIDGET_CONFIGS_TABLE)
-      .select("agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color")
+      .select("agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, install_id, allowed_domains, last_verification_status, last_verified_at, last_verification_origin, last_verification_target_url, last_verification_details")
       .in("agent_id", agentIds);
 
     if (widgetError) {
@@ -645,13 +718,7 @@ export async function listAgents(supabase, options = {}) {
       widgetConfigsByAgentId = new Map(
         (widgetRows || []).map((row) => [
           row.agent_id,
-          {
-            assistantName: row.assistant_name || DEFAULT_WIDGET_CONFIG.assistantName,
-            welcomeMessage: row.welcome_message || DEFAULT_WIDGET_CONFIG.welcomeMessage,
-            buttonLabel: row.button_label || DEFAULT_WIDGET_CONFIG.buttonLabel,
-            primaryColor: row.primary_color || DEFAULT_WIDGET_CONFIG.primaryColor,
-            secondaryColor: row.secondary_color || DEFAULT_WIDGET_CONFIG.secondaryColor,
-          },
+          mapWidgetConfigRow(row),
         ])
       );
     }
@@ -692,12 +759,18 @@ export async function listAgents(supabase, options = {}) {
   if (agentIds.length) {
     messageStatsByAgentId = await getAgentMessageStats(supabase, agentIds);
     installStatusByAgentId = await listInstallStatusByAgentIds(supabase, agentIds);
+    widgetMetricsByAgentId = await listWidgetEventSummaryByAgentIds(supabase, agentIds, {
+      sinceByAgentId: new Map(
+        agentIds.map((agentId) => [agentId, installStatusByAgentId.get(agentId)?.installedAt || null])
+      ),
+    });
   }
 
   const agents = agentRows.map((row) => {
     const widgetConfig = widgetConfigsByAgentId.get(row.id);
     const knowledge = websiteContentByBusinessId.get(row.business_id) || buildKnowledgeSummary(null);
     const messageStats = messageStatsByAgentId.get(row.id) || {};
+    const websiteUrl = businessesById.get(row.business_id)?.website_url || "";
 
     return {
       id: row.id,
@@ -709,10 +782,12 @@ export async function listAgents(supabase, options = {}) {
       assistantName:
         widgetConfig?.assistantName || row.name || DEFAULT_WIDGET_CONFIG.assistantName,
       publicAgentKey: row.public_agent_key || "",
+      installId: widgetConfig?.installId || "",
+      allowedDomains: deriveAllowedDomains(widgetConfig?.allowedDomains, websiteUrl),
       isActive: row.is_active !== false,
       tone: row.tone || DEFAULT_TONE,
       systemPrompt: row.system_prompt || "",
-      websiteUrl: businessesById.get(row.business_id)?.website_url || "",
+      websiteUrl,
       welcomeMessage:
         widgetConfig?.welcomeMessage || DEFAULT_WIDGET_CONFIG.welcomeMessage,
       buttonLabel:
@@ -723,13 +798,8 @@ export async function listAgents(supabase, options = {}) {
         widgetConfig?.secondaryColor || DEFAULT_WIDGET_CONFIG.secondaryColor,
       hasWidgetConfig: Boolean(widgetConfig),
       knowledge,
-      installStatus: installStatusByAgentId.get(row.id) || {
-        state: "not_detected",
-        label: "Not detected on a live site yet",
-        host: "",
-        pageUrl: null,
-        lastSeenAt: null,
-      },
+      installStatus: installStatusByAgentId.get(row.id) || buildDefaultInstallStatus(widgetConfig, websiteUrl),
+      widgetMetrics: widgetMetricsByAgentId.get(row.id) || null,
       messageCount: messageStats.messageCount || 0,
       lastMessageAt: messageStats.lastMessageAt || null,
     };
@@ -772,11 +842,12 @@ export async function listAllAgents(supabase) {
   let businessesById = new Map();
   let messageStatsByAgentId = new Map();
   let installStatusByAgentId = new Map();
+  let widgetMetricsByAgentId = new Map();
 
   if (agentIds.length) {
     const { data: widgetRows, error: widgetError } = await supabase
       .from(WIDGET_CONFIGS_TABLE)
-      .select("agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color")
+      .select("agent_id, assistant_name, welcome_message, button_label, primary_color, secondary_color, install_id, allowed_domains, last_verification_status, last_verified_at, last_verification_origin, last_verification_target_url, last_verification_details")
       .in("agent_id", agentIds);
 
     if (widgetError) {
@@ -786,16 +857,7 @@ export async function listAllAgents(supabase) {
       }
     } else {
       widgetConfigsByAgentId = new Map(
-        (widgetRows || []).map((row) => [
-          row.agent_id,
-          {
-            assistantName: row.assistant_name || DEFAULT_WIDGET_CONFIG.assistantName,
-            welcomeMessage: row.welcome_message || DEFAULT_WIDGET_CONFIG.welcomeMessage,
-            buttonLabel: row.button_label || DEFAULT_WIDGET_CONFIG.buttonLabel,
-            primaryColor: row.primary_color || DEFAULT_WIDGET_CONFIG.primaryColor,
-            secondaryColor: row.secondary_color || DEFAULT_WIDGET_CONFIG.secondaryColor,
-          },
-        ])
+        (widgetRows || []).map((row) => [row.agent_id, mapWidgetConfigRow(row)])
       );
     }
   }
@@ -817,6 +879,11 @@ export async function listAllAgents(supabase) {
   if (agentIds.length) {
     messageStatsByAgentId = await getAgentMessageStats(supabase, agentIds);
     installStatusByAgentId = await listInstallStatusByAgentIds(supabase, agentIds);
+    widgetMetricsByAgentId = await listWidgetEventSummaryByAgentIds(supabase, agentIds, {
+      sinceByAgentId: new Map(
+        agentIds.map((agentId) => [agentId, installStatusByAgentId.get(agentId)?.installedAt || null])
+      ),
+    });
   }
 
   return agentRows.map((row) => ({
@@ -829,6 +896,11 @@ export async function listAllAgents(supabase) {
     assistantName:
       widgetConfigsByAgentId.get(row.id)?.assistantName || row.name || DEFAULT_WIDGET_CONFIG.assistantName,
     publicAgentKey: row.public_agent_key || "",
+    installId: widgetConfigsByAgentId.get(row.id)?.installId || "",
+    allowedDomains: deriveAllowedDomains(
+      widgetConfigsByAgentId.get(row.id)?.allowedDomains,
+      businessesById.get(row.business_id)?.website_url || ""
+    ),
     isActive: row.is_active !== false,
     tone: row.tone || DEFAULT_TONE,
     systemPrompt: row.system_prompt || "",
@@ -841,21 +913,40 @@ export async function listAllAgents(supabase) {
       widgetConfigsByAgentId.get(row.id)?.primaryColor || DEFAULT_WIDGET_CONFIG.primaryColor,
     secondaryColor:
       widgetConfigsByAgentId.get(row.id)?.secondaryColor || DEFAULT_WIDGET_CONFIG.secondaryColor,
-    installStatus: installStatusByAgentId.get(row.id) || {
-      state: "not_detected",
-      label: "Not detected on a live site yet",
-      host: "",
-      pageUrl: null,
-      lastSeenAt: null,
-    },
+    installStatus: installStatusByAgentId.get(row.id) || buildDefaultInstallStatus(
+      widgetConfigsByAgentId.get(row.id),
+      businessesById.get(row.business_id)?.website_url || ""
+    ),
+    widgetMetrics: widgetMetricsByAgentId.get(row.id) || null,
     messageCount: messageStatsByAgentId.get(row.id)?.messageCount || 0,
     lastMessageAt: messageStatsByAgentId.get(row.id)?.lastMessageAt || null,
   }));
 }
 
+export async function getAgentWorkspaceSnapshot(supabase, agentId) {
+  const normalizedAgentId = cleanText(agentId);
+
+  if (!normalizedAgentId) {
+    const error = new Error("agent_id is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const agents = await listAllAgents(supabase);
+  const agent = agents.find((candidate) => candidate.id === normalizedAgentId) || null;
+
+  if (!agent) {
+    const error = new Error("Agent not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return agent;
+}
+
 export async function updateAgentSettings(
   supabase,
-  { agentId, name, assistantName, tone, systemPrompt, welcomeMessage, buttonLabel, websiteUrl, primaryColor, secondaryColor }
+  { agentId, name, assistantName, tone, systemPrompt, welcomeMessage, buttonLabel, websiteUrl, primaryColor, secondaryColor, allowedDomains }
 ) {
   const normalizedAgentId = cleanText(agentId);
   const providedWebsiteUrl = cleanText(websiteUrl);
@@ -956,6 +1047,8 @@ export async function updateAgentSettings(
     resolvedWebsiteUrl = normalizedWebsiteUrl;
   }
 
+  const resolvedAllowedDomains = deriveAllowedDomains(allowedDomains, resolvedWebsiteUrl);
+
   const { error: widgetError } = await supabase
     .from(WIDGET_CONFIGS_TABLE)
     .upsert(
@@ -968,6 +1061,7 @@ export async function updateAgentSettings(
         secondary_color: cleanText(secondaryColor) || currentWidgetConfig.secondaryColor,
         launcher_text: currentWidgetConfig.launcherText,
         theme_mode: currentWidgetConfig.themeMode,
+        allowed_domains: resolvedAllowedDomains,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "agent_id" }
@@ -996,6 +1090,8 @@ export async function updateAgentSettings(
     buttonLabel: cleanText(buttonLabel) || currentWidgetConfig.buttonLabel,
     primaryColor: cleanText(primaryColor) || currentWidgetConfig.primaryColor,
     secondaryColor: cleanText(secondaryColor) || currentWidgetConfig.secondaryColor,
+    installId: currentWidgetConfig.installId,
+    allowedDomains: resolvedAllowedDomains,
   };
 }
 

@@ -51,6 +51,10 @@
 
     return {
       baseUrl,
+      installId:
+        currentScript?.dataset.installId ||
+        scriptConfig.installId ||
+        "",
       agentId:
         currentScript?.dataset.agentId ||
         scriptConfig.agentId ||
@@ -71,10 +75,18 @@
         currentScript?.dataset.buttonLabel ||
         scriptConfig.buttonLabel ||
         "Chat with Vonza",
+      primaryColor:
+        currentScript?.dataset.primaryColor ||
+        scriptConfig.primaryColor ||
+        "",
+      secondaryColor:
+        currentScript?.dataset.secondaryColor ||
+        scriptConfig.secondaryColor ||
+        "",
       debug:
         currentScript?.dataset.debug === "true" ||
         scriptConfig.debug === true,
-      };
+    };
   }
 
   function cleanBaseUrl(value) {
@@ -84,6 +96,12 @@
   function buildWidgetUrl(baseUrl, config) {
     const url = new URL("/widget", baseUrl);
     url.searchParams.set("embedded", "1");
+    url.searchParams.set("origin", window.location.origin);
+    url.searchParams.set("page_url", window.location.href);
+
+    if (config.installId) {
+      url.searchParams.set("install_id", config.installId);
+    }
 
     if (config.agentId) {
       url.searchParams.set("agent_id", config.agentId);
@@ -99,6 +117,14 @@
 
     if (config.websiteUrl) {
       url.searchParams.set("website_url", config.websiteUrl);
+    }
+
+    if (config.sessionId) {
+      url.searchParams.set("session_id", config.sessionId);
+    }
+
+    if (config.fingerprint) {
+      url.searchParams.set("fingerprint", config.fingerprint);
     }
 
     return url;
@@ -107,6 +133,10 @@
   function buildBootstrapUrl(baseUrl, config) {
     const url = new URL("/widget/bootstrap", baseUrl);
 
+    if (config.installId) {
+      url.searchParams.set("install_id", config.installId);
+    }
+
     if (config.agentId) {
       url.searchParams.set("agent_id", config.agentId);
     }
@@ -123,7 +153,66 @@
       url.searchParams.set("website_url", config.websiteUrl);
     }
 
+    url.searchParams.set("origin", window.location.origin);
+    url.searchParams.set("page_url", window.location.href);
+
     return url;
+  }
+
+  function getStorageScope(config) {
+    return config.installId || config.agentKey || config.agentId || config.businessId || "default";
+  }
+
+  function getPersistentFingerprint(config) {
+    const key = `vonza_widget_fingerprint_${getStorageScope(config)}`;
+    let value = window.localStorage.getItem(key);
+
+    if (!value) {
+      value = window.crypto?.randomUUID?.() || `fp_${Date.now()}`;
+      window.localStorage.setItem(key, value);
+    }
+
+    return value;
+  }
+
+  function getSessionId(config) {
+    const key = `vonza_widget_session_${getStorageScope(config)}`;
+    let value = window.sessionStorage.getItem(key);
+
+    if (!value) {
+      value = window.crypto?.randomUUID?.() || `session_${Date.now()}`;
+      window.sessionStorage.setItem(key, value);
+    }
+
+    return value;
+  }
+
+  async function postInstallRequest(baseUrl, pathname, payload) {
+    const url = new URL(pathname, baseUrl);
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      keepalive: true,
+      body: JSON.stringify(payload),
+    });
+
+    let data = null;
+
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const error = new Error(data?.error || "Request failed");
+      error.statusCode = response.status;
+      throw error;
+    }
+
+    return data;
   }
 
   function createTemplate(buttonLabel, visualConfig = DEFAULT_WIDGET_CONFIG) {
@@ -537,27 +626,82 @@
     `;
   }
 
-  function createWidget() {
+  async function createWidget() {
     const currentScript = resolveCurrentScript();
     const config = getConfig(currentScript);
     const logger = createLogger(config.debug);
-    const widgetUrl = buildWidgetUrl(config.baseUrl, config);
     const bootstrapUrl = buildBootstrapUrl(config.baseUrl, config);
+    const sessionId = getSessionId(config);
+    const fingerprint = getPersistentFingerprint(config);
 
-    if (!config.agentId && !config.agentKey && !config.businessId && !config.websiteUrl) {
+    if (!config.installId && !config.agentId && !config.agentKey && !config.businessId && !config.websiteUrl) {
       logger.warn(
-        "No agent or business identifier was provided. Pass data-agent-id, data-agent-key, data-business-id, or data-website-url on the script tag."
+        "No install or assistant identifier was provided. Pass data-install-id, data-agent-id, data-agent-key, data-business-id, or data-website-url on the script tag."
       );
+      return;
     }
 
     logger.log("Initializing", {
       baseUrl: config.baseUrl,
+      installId: config.installId || null,
       agentId: config.agentId || null,
       agentKey: config.agentKey || null,
       businessId: config.businessId || null,
       websiteUrl: config.websiteUrl || null,
-      widgetUrl: widgetUrl.toString(),
+      pageUrl: window.location.href,
+      origin: window.location.origin,
     });
+
+    let bootstrapData = null;
+
+    try {
+      const response = await fetch(bootstrapUrl.toString(), {
+        headers: {
+          accept: "application/json",
+        },
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const error = new Error(data?.error || "Bootstrap failed");
+        error.statusCode = response.status;
+        throw error;
+      }
+
+      bootstrapData = data;
+    } catch (error) {
+      if (config.installId) {
+        logger.warn("Widget refused to initialize on this page.", error.message || error);
+        return;
+      }
+
+      logger.warn("Bootstrap config unavailable, using defaults.", error);
+    }
+
+    const installId = bootstrapData?.install?.installId || config.installId || "";
+    const visualConfig = {
+      ...DEFAULT_WIDGET_CONFIG,
+      ...(bootstrapData?.widgetConfig || {}),
+      buttonLabel:
+        config.buttonLabel ||
+        bootstrapData?.widgetConfig?.buttonLabel ||
+        DEFAULT_WIDGET_CONFIG.buttonLabel,
+      primaryColor:
+        config.primaryColor ||
+        bootstrapData?.widgetConfig?.primaryColor ||
+        DEFAULT_WIDGET_CONFIG.primaryColor,
+      secondaryColor:
+        config.secondaryColor ||
+        bootstrapData?.widgetConfig?.secondaryColor ||
+        DEFAULT_WIDGET_CONFIG.secondaryColor,
+    };
+    const runtimeConfig = {
+      ...config,
+      installId,
+      sessionId,
+      fingerprint,
+    };
+    const widgetUrl = buildWidgetUrl(config.baseUrl, runtimeConfig);
 
     const host = document.createElement("div");
     host.id = ROOT_ID;
@@ -565,10 +709,6 @@
     window[GLOBAL_FLAG] = true;
 
     const shadowRoot = host.attachShadow({ mode: "open" });
-    const visualConfig = {
-      ...DEFAULT_WIDGET_CONFIG,
-      buttonLabel: config.buttonLabel || DEFAULT_WIDGET_CONFIG.buttonLabel,
-    };
     shadowRoot.innerHTML = createTemplate(visualConfig.buttonLabel, visualConfig);
     host.style.setProperty("--widget-primary", visualConfig.primaryColor);
     host.style.setProperty("--widget-secondary", visualConfig.secondaryColor);
@@ -590,31 +730,65 @@
     let loadTimer = null;
     let previousBodyOverflow = "";
     let previousHtmlOverflow = "";
+    const launcherLabel = shadowRoot.querySelector(".launcher-label");
 
-    fetch(bootstrapUrl.toString())
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        if (!data?.widgetConfig) {
-          return;
-        }
+    launcher.setAttribute("aria-label", visualConfig.buttonLabel);
+    launcher.setAttribute("title", visualConfig.buttonLabel);
+    launcherLabel.textContent = visualConfig.buttonLabel;
+    statusCopy.textContent = `The widget is connecting to ${visualConfig.assistantName}.`;
+    panel.setAttribute("aria-label", visualConfig.assistantName);
+    iframe.setAttribute("title", visualConfig.assistantName);
 
-        const nextConfig = {
-          ...DEFAULT_WIDGET_CONFIG,
-          ...data.widgetConfig,
-        };
+    async function trackEvent(eventName, metadata = {}, options = {}) {
+      if (!installId) {
+        return;
+      }
 
-        host.style.setProperty("--widget-primary", nextConfig.primaryColor);
-        host.style.setProperty("--widget-secondary", nextConfig.secondaryColor);
-        launcher.setAttribute("aria-label", nextConfig.buttonLabel);
-        launcher.setAttribute("title", nextConfig.buttonLabel);
-        shadowRoot.querySelector(".launcher-label").textContent = nextConfig.buttonLabel;
-        statusCopy.textContent = `The widget is connecting to ${nextConfig.assistantName}.`;
-        panel.setAttribute("aria-label", nextConfig.assistantName);
-        iframe.setAttribute("title", nextConfig.assistantName);
-      })
-      .catch((error) => {
-        logger.warn("Bootstrap config unavailable, using defaults.", error);
-      });
+      try {
+        await postInstallRequest(config.baseUrl, "/install/events", {
+          install_id: installId,
+          event_name: eventName,
+          session_id: sessionId,
+          fingerprint,
+          origin: window.location.origin,
+          page_url: window.location.href,
+          dedupe_key: options.dedupeKey || "",
+          metadata,
+        });
+      } catch (error) {
+        logger.warn(`Event '${eventName}' was not recorded.`, error.message || error);
+      }
+    }
+
+    async function pingInstall() {
+      if (!installId) {
+        return;
+      }
+
+      try {
+        await postInstallRequest(config.baseUrl, "/install/ping", {
+          install_id: installId,
+          origin: window.location.origin,
+          page_url: window.location.href,
+          session_id: sessionId,
+          fingerprint,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        logger.warn("Install ping was not recorded.", error.message || error);
+      }
+    }
+
+    void pingInstall();
+    void trackEvent(
+      "widget_loaded",
+      {
+        source: "embed_loader",
+      },
+      {
+        dedupeKey: `${installId}::widget_loaded::${window.location.href}`,
+      }
+    );
 
     function showLoadingState() {
       statusLayer.hidden = false;
@@ -685,6 +859,9 @@
       }
 
       logger.log("Opened widget");
+      void trackEvent("widget_opened", {
+        source: "launcher",
+      });
     }
 
     function closeModal() {

@@ -1,6 +1,10 @@
 const searchParams = new URLSearchParams(window.location.search);
 const EMBEDDED_MODE = searchParams.get("embedded") === "1";
 const STORED_AGENT_KEY = window.localStorage.getItem("vonza_agent_key") || "";
+const INSTALL_ID =
+  searchParams.get("install_id") ||
+  window.VonzaWidgetConfig?.installId ||
+  "";
 const AGENT_ID =
   searchParams.get("agent_id") ||
   window.VonzaWidgetConfig?.agentId ||
@@ -18,6 +22,22 @@ const WEBSITE_URL =
   searchParams.get("website_url") ||
   window.VonzaWidgetConfig?.websiteUrl ||
   "";
+const PAGE_ORIGIN =
+  searchParams.get("origin") ||
+  window.VonzaWidgetConfig?.origin ||
+  "";
+const PAGE_URL =
+  searchParams.get("page_url") ||
+  window.VonzaWidgetConfig?.pageUrl ||
+  "";
+const EMBED_SESSION_ID =
+  searchParams.get("session_id") ||
+  window.VonzaWidgetConfig?.sessionId ||
+  "";
+const EMBED_FINGERPRINT =
+  searchParams.get("fingerprint") ||
+  window.VonzaWidgetConfig?.fingerprint ||
+  "";
 
 const DEFAULT_WIDGET_CONFIG = {
   assistantName: "Vonza AI",
@@ -32,12 +52,17 @@ const DEFAULT_WIDGET_CONFIG = {
 const conversationHistory = [];
 let widgetConfig = { ...DEFAULT_WIDGET_CONFIG };
 let hasHiddenWelcomePanel = false;
+let resolvedAgentId = AGENT_ID;
+let resolvedAgentKey = AGENT_KEY;
+let resolvedBusinessId = BUSINESS_ID;
+const sentTelemetryKeys = new Set();
 
 function getVisitorSessionStorageKey() {
   const assistantScope =
-    trimText(AGENT_ID)
-    || trimText(AGENT_KEY)
-    || trimText(BUSINESS_ID)
+    trimText(INSTALL_ID)
+    || trimText(resolvedAgentId)
+    || trimText(resolvedAgentKey)
+    || trimText(resolvedBusinessId)
     || trimText(WEBSITE_URL)
     || "default";
 
@@ -49,7 +74,7 @@ function getVisitorSessionKey() {
   let sessionKey = window.localStorage.getItem(storageKey);
 
   if (!sessionKey) {
-    sessionKey = window.crypto?.randomUUID?.() || `visitor_${Date.now()}`;
+    sessionKey = EMBED_SESSION_ID || window.crypto?.randomUUID?.() || `visitor_${Date.now()}`;
     window.localStorage.setItem(storageKey, sessionKey);
   }
 
@@ -82,7 +107,59 @@ function getAssistantMark(name = widgetConfig.assistantName) {
 }
 
 function hasAssistantConfig() {
-  return Boolean(AGENT_ID || AGENT_KEY || BUSINESS_ID || WEBSITE_URL);
+  return Boolean(INSTALL_ID || resolvedAgentId || resolvedAgentKey || resolvedBusinessId || WEBSITE_URL);
+}
+
+function getPageOrigin() {
+  return trimText(PAGE_ORIGIN || window.location.origin);
+}
+
+function getPageUrl() {
+  return trimText(PAGE_URL || window.location.href);
+}
+
+function getFingerprint() {
+  return trimText(EMBED_FINGERPRINT);
+}
+
+function detectContactCaptured(message) {
+  const value = trimText(message);
+  return /@/.test(value) || /\+?\d[\d\s().-]{6,}/.test(value);
+}
+
+async function trackWidgetEvent(eventName, metadata = {}, options = {}) {
+  if (!INSTALL_ID) {
+    return;
+  }
+
+  const dedupeKey = trimText(options.dedupeKey)
+    || `${INSTALL_ID}::${eventName}::${options.scope || getVisitorSessionKey()}`;
+
+  if (sentTelemetryKeys.has(dedupeKey)) {
+    return;
+  }
+
+  sentTelemetryKeys.add(dedupeKey);
+
+  try {
+    await fetch("/install/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify({
+        install_id: INSTALL_ID,
+        event_name: eventName,
+        session_id: getVisitorSessionKey(),
+        fingerprint: getFingerprint(),
+        origin: getPageOrigin(),
+        page_url: getPageUrl(),
+        dedupe_key: dedupeKey,
+        metadata,
+      }),
+    });
+  } catch (error) {
+    console.warn("Vonza widget telemetry failed:", error);
+  }
 }
 
 function hideWelcomePanel() {
@@ -136,10 +213,13 @@ async function loadWidgetBootstrap() {
 
   const bootstrapUrl = new URL("/widget/bootstrap", window.location.origin);
 
+  if (INSTALL_ID) bootstrapUrl.searchParams.set("install_id", INSTALL_ID);
   if (AGENT_ID) bootstrapUrl.searchParams.set("agent_id", AGENT_ID);
   if (AGENT_KEY) bootstrapUrl.searchParams.set("agent_key", AGENT_KEY);
   if (BUSINESS_ID) bootstrapUrl.searchParams.set("business_id", BUSINESS_ID);
   if (WEBSITE_URL) bootstrapUrl.searchParams.set("website_url", WEBSITE_URL);
+  if (getPageOrigin()) bootstrapUrl.searchParams.set("origin", getPageOrigin());
+  if (getPageUrl()) bootstrapUrl.searchParams.set("page_url", getPageUrl());
 
   try {
     const response = await fetch(bootstrapUrl.toString());
@@ -150,6 +230,9 @@ async function loadWidgetBootstrap() {
     }
 
     applyWidgetConfig(data.widgetConfig || {});
+    resolvedAgentId = trimText(data.agent?.id || resolvedAgentId);
+    resolvedAgentKey = trimText(data.agent?.publicAgentKey || resolvedAgentKey);
+    resolvedBusinessId = trimText(data.business?.id || resolvedBusinessId);
     setComposerStatus("Your assistant is ready to answer questions using the current website knowledge.");
   } catch (error) {
     console.error("Vonza assistant bootstrap failed:", error);
@@ -198,7 +281,7 @@ async function sendMessage() {
 
   if (!hasAssistantConfig()) {
     console.error(
-      "Vonza assistant configuration error: missing agent_id, agent_key, business_id, and website_url"
+      "Vonza assistant configuration error: missing install_id, agent_id, agent_key, business_id, and website_url"
     );
     appendMessage(
       chat,
@@ -219,16 +302,29 @@ async function sendMessage() {
   const loading = appendMessage(chat, "bot", "", { typing: true });
 
   try {
+    const sessionKey = getVisitorSessionKey();
+    void trackWidgetEvent("first_message_sent", { messageLength: message.length }, {
+      scope: sessionKey,
+    });
+    void trackWidgetEvent("conversation_started", { messageLength: message.length }, {
+      dedupeKey: `${INSTALL_ID}::conversation_started::${sessionKey}`,
+    });
+    if (detectContactCaptured(message)) {
+      void trackWidgetEvent("contact_captured", { messageLength: message.length }, {
+        dedupeKey: `${INSTALL_ID}::contact_captured::${sessionKey}`,
+      });
+    }
+
     const res = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message,
-        agent_id: AGENT_ID,
-        agent_key: AGENT_KEY,
-        business_id: BUSINESS_ID,
+        agent_id: resolvedAgentId,
+        agent_key: resolvedAgentKey,
+        business_id: resolvedBusinessId,
         website_url: WEBSITE_URL,
-        visitor_session_key: getVisitorSessionKey(),
+        visitor_session_key: sessionKey,
         history: historySnapshot,
       }),
     });
@@ -249,8 +345,21 @@ async function sendMessage() {
     }
 
     appendMessage(chat, "bot", data.reply);
+    resolvedAgentId = trimText(data.agentId || resolvedAgentId);
+    resolvedAgentKey = trimText(data.agentKey || resolvedAgentKey);
+    resolvedBusinessId = trimText(data.businessId || resolvedBusinessId);
     addToHistory("user", message);
     addToHistory("assistant", data.reply);
+    void trackWidgetEvent(
+      "message_replied",
+      {
+        replyLength: trimText(data.reply).length,
+        replyHash: trimText(data.reply).slice(0, 48),
+      },
+      {
+        dedupeKey: `${INSTALL_ID}::message_replied::${sessionKey}::${conversationHistory.length}`,
+      }
+    );
     setComposerStatus("Ask a follow-up to keep exploring what your visitors would experience.");
   } catch (err) {
     console.error("Vonza assistant request failed:", err);

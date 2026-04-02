@@ -59,12 +59,22 @@ create table if not exists public.widget_configs (
   secondary_color text,
   launcher_text text,
   theme_mode text,
+  install_id uuid default gen_random_uuid(),
+  allowed_domains text[] not null default '{}',
+  last_verification_status text,
+  last_verified_at timestamp with time zone,
+  last_verification_origin text,
+  last_verification_target_url text,
+  last_verification_details jsonb,
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now()
 );
 
 create unique index if not exists widget_configs_agent_id_idx
   on public.widget_configs (agent_id);
+
+create unique index if not exists widget_configs_install_id_idx
+  on public.widget_configs (install_id);
 
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
@@ -210,7 +220,10 @@ create table if not exists public.agent_installations (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
   host text not null,
+  origin text,
   page_url text,
+  last_session_id text,
+  last_fingerprint text,
   first_seen_at timestamp with time zone default now(),
   last_seen_at timestamp with time zone default now()
 );
@@ -223,3 +236,29 @@ create index if not exists agent_installations_agent_id_idx
 
 create index if not exists agent_installations_last_seen_at_idx
   on public.agent_installations (last_seen_at desc);
+
+create table if not exists public.agent_widget_events (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  install_id uuid,
+  session_id text not null,
+  fingerprint text,
+  event_name text not null,
+  origin text,
+  page_url text,
+  metadata jsonb,
+  dedupe_key text not null,
+  created_at timestamp with time zone default now()
+);
+
+create unique index if not exists agent_widget_events_dedupe_key_idx
+  on public.agent_widget_events (dedupe_key);
+
+create index if not exists agent_widget_events_agent_id_idx
+  on public.agent_widget_events (agent_id);
+
+create index if not exists agent_widget_events_event_name_idx
+  on public.agent_widget_events (event_name);
+
+create index if not exists agent_widget_events_created_at_idx
+  on public.agent_widget_events (created_at desc);

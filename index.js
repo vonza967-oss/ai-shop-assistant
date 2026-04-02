@@ -8,6 +8,8 @@ import {
   getSupabaseClient,
   logSupabaseStartupCheck,
 } from "./src/clients/supabaseClient.js";
+import { assertWidgetTelemetrySchemaReady } from "./src/services/analytics/widgetTelemetryService.js";
+import { assertInstallSchemaReady } from "./src/services/install/installPresenceService.js";
 
 dotenv.config();
 
@@ -60,11 +62,18 @@ const __dirname = path.dirname(__filename);
 logCriticalEnvWarnings();
 
 const app = createApp({ rootDir: __dirname });
+let supabase = null;
 
 try {
-  await logSupabaseStartupCheck(getSupabaseClient());
+  supabase = getSupabaseClient();
+  await logSupabaseStartupCheck(supabase);
+  await assertInstallSchemaReady(supabase);
+  await assertWidgetTelemetrySchemaReady(supabase);
 } catch (error) {
   console.error(error);
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    process.exit(1);
+  }
 }
 
 app.listen(port, "0.0.0.0", () => {
