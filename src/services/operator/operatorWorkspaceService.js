@@ -2602,13 +2602,13 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
       },
       briefing: {
         title: "Operator workspace is off",
-        text: "Operator Workspace v1 is disabled on this deployment, so Vonza is keeping the legacy setup workspace active.",
+        text: "The full operator workspace is disabled on this deployment, so Vonza is keeping the lighter front-desk workspace active.",
       },
       nextAction: {
         key: "legacy_workspace",
-        title: "Continue setup",
-        description: "Overview, Customize, and Analytics stay available while the website front desk continues to work.",
-        buttonLabel: "Continue setup",
+        title: "Open workspace",
+        description: "Today, Customize, and Outcomes stay available while the website front desk continues to work.",
+        buttonLabel: "Open workspace",
         actionType: "open_customize",
         targetSection: "customize",
       },

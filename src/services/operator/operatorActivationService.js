@@ -503,7 +503,7 @@ export function buildOperatorSingleNextAction({
     return {
       key: "run_first_sync",
       title: "Run first sync",
-      description: "Pull in the inbox and calendar now so Overview can show what actually needs attention today.",
+      description: "Pull in the inbox and calendar now so Today can show what actually needs attention.",
       buttonLabel: "Run first sync",
       actionType: "run_first_sync",
       targetSection: "overview",
@@ -602,9 +602,9 @@ export function buildOperatorSingleNextAction({
     key: "operator_overview",
     title: "Review operator overview",
     description: cleanText(summary.operatorLoad) > "0"
-      ? "Overview is ready with the current workload and approvals."
-      : "Overview is connected and ready for the next owner decision.",
-    buttonLabel: "Stay on Overview",
+      ? "Today is ready with the current workload and approvals."
+      : "Today is connected and ready for the next owner decision.",
+    buttonLabel: "Stay on Today",
     actionType: "stay_put",
     targetSection: "overview",
   };
@@ -638,7 +638,7 @@ export function buildOperatorActivationChecklist({
     {
       key: "run_first_sync",
       title: "Run first sync",
-      description: "Pull in the current inbox and calendar so Overview stops feeling empty.",
+      description: "Pull in the current inbox and calendar so Today stops feeling empty.",
       complete: activation.inboxSynced && activation.calendarSynced,
     },
     {
@@ -679,7 +679,7 @@ export function buildOperatorBriefing({
   if (status.featureEnabled === false) {
     return {
       title: "Operator briefing unavailable",
-      text: "Operator Workspace v1 is off, so Vonza is still showing the legacy setup workspace.",
+      text: "The full operator workspace is off on this deployment, so Vonza is still showing the lighter front-desk workspace.",
     };
   }
 
@@ -693,7 +693,7 @@ export function buildOperatorBriefing({
   if (!activation.inboxSynced || !activation.calendarSynced) {
     return {
       title: "Run the first sync",
-      text: "Google is connected, but the first sync has not finished yet, so Overview is still waiting on live inbox and calendar data.",
+      text: "Google is connected, but the first sync has not finished yet, so Today is still waiting on live inbox and calendar data.",
     };
   }
 
