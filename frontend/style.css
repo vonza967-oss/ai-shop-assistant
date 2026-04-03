@@ -401,6 +401,113 @@ h1 {
   padding: 0 22px 22px;
 }
 
+.lead-capture-slot {
+  padding: 0 28px 18px;
+}
+
+.lead-capture-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--brand-primary) 14%, transparent), transparent 42%),
+    linear-gradient(180deg, rgba(17, 26, 45, 0.96), rgba(10, 17, 31, 0.94));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  padding: 18px;
+}
+
+.lead-capture-card.success {
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--brand-primary) 18%, transparent), transparent 42%),
+    linear-gradient(180deg, rgba(13, 35, 33, 0.98), rgba(10, 22, 26, 0.96));
+}
+
+.lead-capture-card.subtle {
+  background: rgba(16, 22, 38, 0.86);
+}
+
+.lead-capture-eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.lead-capture-title {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.lead-capture-copy {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.lead-capture-meta {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.lead-capture-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.lead-capture-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lead-capture-field {
+  display: grid;
+  gap: 6px;
+}
+
+.lead-capture-field label {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
+.lead-capture-field input,
+.lead-capture-field select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font: inherit;
+  padding: 12px 14px;
+}
+
+.lead-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.lead-capture-actions .ghost-button {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+}
+
+.lead-capture-actions .ghost-button:hover {
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.16);
+}
+
+.lead-capture-contact {
+  margin-top: 12px;
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
 .input-area {
   display: flex;
   align-items: center;
@@ -442,6 +549,16 @@ button {
 button:hover {
   transform: translateY(-1px);
   box-shadow: 0 18px 34px rgba(16, 163, 127, 0.28);
+}
+
+.ghost-button {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.ghost-button:hover {
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.14);
 }
 
 button:disabled {
@@ -522,6 +639,10 @@ button:disabled {
     padding: 0 16px 16px;
   }
 
+  .lead-capture-slot {
+    padding: 0 20px 16px;
+  }
+
   .status-pill {
     display: none;
   }
@@ -540,6 +661,10 @@ button:disabled {
 
   .bubble {
     font-size: 0.94rem;
+  }
+
+  .lead-capture-grid {
+    grid-template-columns: 1fr;
   }
 }
 

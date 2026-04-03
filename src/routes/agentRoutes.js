@@ -34,6 +34,10 @@ import {
   updateKnowledgeFixWorkflow,
 } from "../services/knowledge/knowledgeFixService.js";
 import {
+  hydrateActionQueueWithLeadCaptures,
+  listLeadCaptures,
+} from "../services/leads/liveLeadCaptureService.js";
+import {
   createHostedCheckoutSession,
   constructStripeWebhookEvent,
   getStripeCheckoutConfigurationErrorMessage,
@@ -68,6 +72,7 @@ export function createAgentRouter(deps = {}) {
   const updateFollowUpWorkflowImpl = deps.updateFollowUpWorkflow || updateFollowUpWorkflow;
   const syncKnowledgeFixWorkflowsImpl = deps.syncKnowledgeFixWorkflows || syncKnowledgeFixWorkflows;
   const updateKnowledgeFixWorkflowImpl = deps.updateKnowledgeFixWorkflow || updateKnowledgeFixWorkflow;
+  const listLeadCapturesImpl = deps.listLeadCaptures || listLeadCaptures;
   const updateAgentSettingsImpl = deps.updateAgentSettings || updateAgentSettings;
   const deleteAgentImpl = deps.deleteAgent || deleteAgent;
   const resolveAgentContextImpl = deps.resolveAgentContext || resolveAgentContext;
@@ -484,13 +489,23 @@ export function createAgentRouter(deps = {}) {
         ? true
         : latestStatuses?.persistenceAvailable !== false;
 
+      const baseQueue = buildActionQueueImpl(messages, finalPersistedRecords, {
+        persistenceAvailable: finalPersistenceAvailable,
+        followUps: followUpSync?.records || [],
+        knowledgeFixes: knowledgeFixSync?.records || [],
+        followUpWorkflowAvailable: followUpSync?.persistenceAvailable !== false,
+        knowledgeFixWorkflowAvailable: knowledgeFixSync?.persistenceAvailable !== false,
+      });
+      const leadCaptures = await listLeadCapturesImpl(supabase, {
+        agentId,
+        ownerUserId: user?.id || null,
+      });
+
       res.json(
-        buildActionQueueImpl(messages, finalPersistedRecords, {
-          persistenceAvailable: finalPersistenceAvailable,
+        hydrateActionQueueWithLeadCaptures(baseQueue, {
+          records: leadCaptures.records || [],
           followUps: followUpSync?.records || [],
-          knowledgeFixes: knowledgeFixSync?.records || [],
-          followUpWorkflowAvailable: followUpSync?.persistenceAvailable !== false,
-          knowledgeFixWorkflowAvailable: knowledgeFixSync?.persistenceAvailable !== false,
+          persistenceAvailable: leadCaptures.persistenceAvailable !== false,
         })
       );
     } catch (err) {
