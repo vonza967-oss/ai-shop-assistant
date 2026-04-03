@@ -949,6 +949,28 @@ function renderErrorState(title, copy) {
   });
 }
 
+function renderLoadingState(message = "Loading your Vonza workspace now.") {
+  renderTopbarMeta();
+  rootEl.innerHTML = `
+    <section class="auth-card">
+      <span class="eyebrow">Loading</span>
+      <h1 class="headline">Loading your Vonza workspace</h1>
+      <p class="auth-copy">${escapeHtml(message)}</p>
+    </section>
+  `;
+}
+
+function handleFatalDashboardError(error, stage = "boot") {
+  clearLaunchState();
+  const message = error?.message || "We couldn't load your Vonza workspace right now.";
+  console.error(`[dashboard ${stage}]`, error);
+  setStatus(message);
+  renderErrorState(
+    "We couldn't load your Vonza workspace.",
+    message || "Please refresh and try again. If the issue continues, your account and payment state are still safe."
+  );
+}
+
 async function confirmPaymentReturn() {
   const paymentState = getPaymentState();
 
@@ -990,6 +1012,30 @@ async function waitForActiveAccessAfterPayment() {
   }
 
   return { activated: false, timedOut: true };
+}
+
+function createEmptyWorkspaceDiagnostics() {
+  return {
+    warnings: [],
+  };
+}
+
+function buildWorkspaceDiagnosticsMarkup(diagnostics = createEmptyWorkspaceDiagnostics()) {
+  const warnings = Array.isArray(diagnostics?.warnings)
+    ? diagnostics.warnings.map((warning) => trimText(warning)).filter(Boolean)
+    : [];
+
+  if (!warnings.length) {
+    return "";
+  }
+
+  return `
+    <div class="workspace-diagnostics" data-workspace-diagnostics>
+      ${warnings.map((warning) => `
+        <div class="workspace-warning-banner">${escapeHtml(warning)}</div>
+      `).join("")}
+    </div>
+  `;
 }
 
 // Entry states and shell rendering
@@ -1599,7 +1645,7 @@ function buildCustomizePanel(agent, setup) {
                 <div class="field">
                   <label for="assistant-success-snippet">Optional success ping snippet</label>
                   <textarea id="assistant-success-snippet" readonly>fetch("${getPublicAppUrl()}/install/outcomes/ping", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ install_id: "${escapeHtml(agent.installId || "")}", cta_event_id: new URLSearchParams(window.location.search).get("vz_cta_event_id"), page_url: window.location.href }) });</textarea>
-                  <p class="field-help">Use this on a thank-you page only if Vonza cannot load there. The tracked redirect adds `vz_cta_event_id` automatically.</p>
+                  <p class="field-help">Use this on a thank-you page only if Vonza cannot load there. The tracked redirect adds <code>vz_cta_event_id</code> automatically.</p>
                 </div>
               </div>
             </section>
@@ -4396,7 +4442,13 @@ function buildCalendarPanel() {
   `;
 }
 
-function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
+function renderAssistantShell(
+  agent,
+  messages,
+  setup,
+  actionQueue = createEmptyActionQueue(),
+  diagnostics = createEmptyWorkspaceDiagnostics()
+) {
   renderTopbarMeta();
   const activeSection = getActiveShellSection(setup);
   const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
@@ -4436,6 +4488,8 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
         </div>
       ` : ""}
 
+      ${buildWorkspaceDiagnosticsMarkup(diagnostics)}
+
       ${buildOverviewPanel(agent, messages, setup, actionQueue)}
       ${buildCustomizePanel(agent, setup)}
       ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
@@ -4445,27 +4499,40 @@ function renderAssistantShell(agent, messages, setup, actionQueue = createEmptyA
   bindSharedDashboardEvents(agent, messages, setup, actionQueue);
 }
 
-function renderSetupState(agent, messages, setup, actionQueue) {
+function renderSetupState(
+  agent,
+  messages,
+  setup,
+  actionQueue,
+  diagnostics = createEmptyWorkspaceDiagnostics()
+) {
   workspaceState = {
     agent,
     messages,
     setup,
     actionQueue,
+    diagnostics,
   };
   bindWorkspaceAutoRefresh(agent.id);
-  renderAssistantShell(agent, messages, setup, actionQueue);
+  renderAssistantShell(agent, messages, setup, actionQueue, diagnostics);
 }
 
-function renderReadyState(agent, messages, actionQueue) {
+function renderReadyState(
+  agent,
+  messages,
+  actionQueue,
+  diagnostics = createEmptyWorkspaceDiagnostics()
+) {
   const setup = inferSetup(agent);
   workspaceState = {
     agent,
     messages,
     setup,
     actionQueue,
+    diagnostics,
   };
   bindWorkspaceAutoRefresh(agent.id);
-  renderAssistantShell(agent, messages, setup, actionQueue);
+  renderAssistantShell(agent, messages, setup, actionQueue, diagnostics);
 }
 
 function buildPreviewSection(agent, setup) {
@@ -4697,6 +4764,85 @@ function buildCustomizationForm(agent, compact) {
 }
 
 // Data loading and persistence helpers
+function getPlainTextResponseMessage(value) {
+  return trimText(String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
+}
+
+async function readResponsePayload(response) {
+  if (!response) {
+    return {
+      data: null,
+      rawText: "",
+    };
+  }
+
+  if (typeof response.text === "function") {
+    const rawText = await response.text();
+
+    if (!rawText) {
+      return {
+        data: null,
+        rawText,
+      };
+    }
+
+    const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+    const shouldParseJson = contentType.includes("json") || /^[\[{]/.test(rawText.trim());
+
+    if (shouldParseJson) {
+      try {
+        return {
+          data: JSON.parse(rawText),
+          rawText,
+        };
+      } catch {
+        // Fall through so we can surface a readable text error instead.
+      }
+    }
+
+    return {
+      data: {
+        error: getPlainTextResponseMessage(rawText) || null,
+      },
+      rawText,
+    };
+  }
+
+  if (typeof response.json === "function") {
+    return {
+      data: await response.json(),
+      rawText: "",
+    };
+  }
+
+  if (response && typeof response.json === "object") {
+    return {
+      data: response.json,
+      rawText: "",
+    };
+  }
+
+  return {
+    data: response.body || null,
+    rawText: "",
+  };
+}
+
+function getResponseErrorMessage(response, data, rawText = "") {
+  const message = trimText(
+    data?.error
+      || data?.message
+      || (typeof data === "string" ? data : "")
+      || getPlainTextResponseMessage(rawText)
+  );
+
+  if (message) {
+    return message;
+  }
+
+  return response?.status ? `Request failed (${response.status}).` : "Something went wrong.";
+}
+
 async function fetchJson(url, options) {
   const nextOptions = { ...(options || {}) };
   nextOptions.headers = options?.auth === false
@@ -4704,21 +4850,10 @@ async function fetchJson(url, options) {
     : getAuthHeaders(options?.headers || {});
 
   const response = await fetch(url, nextOptions);
-  let data = null;
-
-  if (typeof response?.json === "function") {
-    data = await response.json();
-  } else if (response && typeof response.json === "object") {
-    data = response.json;
-  } else if (typeof response?.text === "function") {
-    const text = await response.text();
-    data = text ? JSON.parse(text) : null;
-  } else if (response && typeof response === "object" && "ok" in response) {
-    data = response.body || null;
-  }
+  const { data, rawText } = await readResponsePayload(response);
 
   if (!response.ok) {
-    throw new Error(data.error || "Something went wrong.");
+    throw new Error(getResponseErrorMessage(response, data, rawText));
   }
 
   return data;
@@ -4799,6 +4934,52 @@ async function loadActionQueue(agentId) {
   };
 }
 
+function createWorkspaceWarning(label, error) {
+  const detail = trimText(error?.message || "");
+  return detail ? `${label} ${detail}` : label;
+}
+
+async function loadWorkspaceSupplementalData(agentId) {
+  const diagnostics = createEmptyWorkspaceDiagnostics();
+  const [messagesResult, actionQueueResult] = await Promise.allSettled([
+    loadAgentMessages(agentId),
+    loadActionQueue(agentId),
+  ]);
+
+  const messages = messagesResult.status === "fulfilled"
+    ? messagesResult.value
+    : [];
+  const actionQueue = actionQueueResult.status === "fulfilled"
+    ? actionQueueResult.value
+    : createEmptyActionQueue();
+
+  if (messagesResult.status === "rejected") {
+    console.error("[dashboard data] Failed to load messages:", messagesResult.reason);
+    diagnostics.warnings.push(
+      createWorkspaceWarning(
+        "Recent conversations are unavailable right now. The rest of the dashboard is still usable.",
+        messagesResult.reason
+      )
+    );
+  }
+
+  if (actionQueueResult.status === "rejected") {
+    console.error("[dashboard data] Failed to load action queue:", actionQueueResult.reason);
+    diagnostics.warnings.push(
+      createWorkspaceWarning(
+        "Analytics and action queue data are unavailable right now. Setup and install controls are still usable.",
+        actionQueueResult.reason
+      )
+    );
+  }
+
+  return {
+    messages,
+    actionQueue,
+    diagnostics,
+  };
+}
+
 function renderWorkspaceFromState() {
   if (!workspaceState?.agent) {
     return;
@@ -4809,7 +4990,8 @@ function renderWorkspaceFromState() {
     renderReadyState(
       workspaceState.agent,
       workspaceState.messages || [],
-      workspaceState.actionQueue || createEmptyActionQueue()
+      workspaceState.actionQueue || createEmptyActionQueue(),
+      workspaceState.diagnostics || createEmptyWorkspaceDiagnostics()
     );
     return;
   }
@@ -4818,7 +5000,8 @@ function renderWorkspaceFromState() {
     workspaceState.agent,
     workspaceState.messages || [],
     setup,
-    workspaceState.actionQueue || createEmptyActionQueue()
+    workspaceState.actionQueue || createEmptyActionQueue(),
+    workspaceState.diagnostics || createEmptyWorkspaceDiagnostics()
   );
 }
 
@@ -4828,22 +5011,21 @@ async function refreshAgentInstallState(agentId) {
     return;
   }
 
-  const [nextAgent, messages, actionQueue] = await Promise.all([
-    loadAgentInstallSnapshot(agentId),
-    loadAgentMessages(agentId),
-    loadActionQueue(agentId),
-  ]);
+  const nextAgent = await loadAgentInstallSnapshot(agentId);
 
   if (!nextAgent) {
     await boot();
     return;
   }
 
+  const { messages, actionQueue, diagnostics } = await loadWorkspaceSupplementalData(agentId);
+
   workspaceState = {
     ...workspaceState,
     agent: nextAgent,
     messages,
     actionQueue,
+    diagnostics,
     setup: inferSetup(nextAgent),
   };
   renderWorkspaceFromState();
@@ -6143,63 +6325,65 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue) {
 
 // Dashboard bootstrapping
 async function boot() {
-  trackProductEvent("dashboard_arrived", {
-    onceKey: "dashboard_arrived",
-    metadata: {
-      path: window.location.pathname,
-    },
-  });
-
-  if (!hasAuthConfig()) {
-    setStatus("Supabase Auth is not configured yet.");
-    renderAuthEntry();
-    return;
-  }
-
-  await ensureAuthClient();
-  renderTopbarMeta();
-
-  if (!authSession || !authUser) {
-    clearLaunchState();
-    renderAuthEntry();
-    return;
-  }
-
-  if (getAuthFlowType() === "recovery") {
-    authViewMode = AUTH_VIEW_MODES.UPDATE_PASSWORD;
-    renderAuthEntry();
-    return;
-  }
-
-  setAuthFeedback(null, "");
-
-  const paymentState = getPaymentState();
-
-  if (paymentState.payment === "cancel") {
-    setStatus("Checkout was canceled. You can unlock Vonza whenever you're ready.");
-    clearPaymentStateFromUrl();
-  } else if (paymentState.payment === "success") {
-    try {
-      await confirmPaymentReturn();
-    } catch (error) {
-      clearPaymentStateFromUrl();
-      setStatus(error.message || "Payment completed, but we could not activate access yet.");
-    }
-  }
-
-  const launchState = getLaunchState();
-
-  if (launchState?.status === "running") {
-    renderLaunchSequence({
-      ...launchState,
-      recovering: true,
-      headline: "We’re checking your assistant setup.",
-      detail: "If your website import was still in progress, we’ll reconnect you to the right next step.",
-      note: "You do not need to start over unless the assistant was never created.",
-    });
-  }
-
   try {
+    renderLoadingState();
+
+    trackProductEvent("dashboard_arrived", {
+      onceKey: "dashboard_arrived",
+      metadata: {
+        path: window.location.pathname,
+      },
+    });
+
+    if (!hasAuthConfig()) {
+      setStatus("Supabase Auth is not configured yet.");
+      renderAuthEntry();
+      return;
+    }
+
+    await ensureAuthClient();
+    renderTopbarMeta();
+
+    if (!authSession || !authUser) {
+      clearLaunchState();
+      renderAuthEntry();
+      return;
+    }
+
+    if (getAuthFlowType() === "recovery") {
+      authViewMode = AUTH_VIEW_MODES.UPDATE_PASSWORD;
+      renderAuthEntry();
+      return;
+    }
+
+    setAuthFeedback(null, "");
+
+    const paymentState = getPaymentState();
+
+    if (paymentState.payment === "cancel") {
+      setStatus("Checkout was canceled. You can unlock Vonza whenever you're ready.");
+      clearPaymentStateFromUrl();
+    } else if (paymentState.payment === "success") {
+      try {
+        await confirmPaymentReturn();
+      } catch (error) {
+        clearPaymentStateFromUrl();
+        setStatus(error.message || "Payment completed, but we could not activate access yet.");
+      }
+    }
+
+    const launchState = getLaunchState();
+
+    if (launchState?.status === "running") {
+      renderLaunchSequence({
+        ...launchState,
+        recovering: true,
+        headline: "We’re checking your assistant setup.",
+        detail: "If your website import was still in progress, we’ll reconnect you to the right next step.",
+        note: "You do not need to start over unless the assistant was never created.",
+      });
+    }
+
     let data = null;
 
     if (paymentState.payment === "success" && paymentState.sessionId) {
@@ -6242,26 +6426,22 @@ async function boot() {
       return;
     }
 
-    const messages = await loadAgentMessages(agent.id);
-    const actionQueue = await loadActionQueue(agent.id);
+    const { messages, actionQueue, diagnostics } = await loadWorkspaceSupplementalData(agent.id);
     const setup = inferSetup(agent);
 
     clearLaunchState();
 
     if (setup.isReady) {
-      renderReadyState(agent, messages, actionQueue);
+      renderReadyState(agent, messages, actionQueue, diagnostics);
       return;
     }
 
-    renderSetupState(agent, messages, setup, actionQueue);
+    renderSetupState(agent, messages, setup, actionQueue, diagnostics);
   } catch (error) {
-    clearLaunchState();
-    setStatus(error.message || "We couldn't load your Vonza workspace right now.");
-    renderErrorState(
-      "We couldn't load your Vonza workspace.",
-      error.message || "Please refresh and try again. If the issue continues, your account and payment state are still safe."
-    );
+    handleFatalDashboardError(error);
   }
 }
 
-boot();
+boot().catch((error) => {
+  handleFatalDashboardError(error, "boot-unhandled");
+});

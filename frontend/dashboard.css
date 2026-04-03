@@ -1039,6 +1039,21 @@ button:disabled {
   font-size: 14px;
 }
 
+.workspace-diagnostics {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-warning-banner {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
 .question-list {
   display: grid;
   gap: 10px;
