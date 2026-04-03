@@ -24,7 +24,7 @@ import {
 import { listLeadCaptures } from "../leads/liveLeadCaptureService.js";
 import { listFollowUpWorkflows } from "../followup/followUpService.js";
 import { updateActionQueueStatus } from "../analytics/actionQueueService.js";
-import { listConversionOutcomesForAgent } from "../conversion/conversionOutcomeService.js";
+import { listConversionOutcomesForAgent, recordOutcomeEvent } from "../conversion/conversionOutcomeService.js";
 import {
   buildOperatorActivationChecklist,
   buildOperatorBriefing,
@@ -125,6 +125,7 @@ const INBOX_THREAD_SELECT = [
   "risk_level",
   "unread_count",
   "participants",
+  "contact_id",
   "related_lead_id",
   "related_follow_up_id",
   "related_action_key",
@@ -175,6 +176,7 @@ const CALENDAR_EVENT_SELECT = [
   "end_at",
   "timezone",
   "location",
+  "contact_id",
   "lead_id",
   "related_action_key",
   "conflict_state",
@@ -229,6 +231,7 @@ const CAMPAIGN_RECIPIENT_SELECT = [
   "business_id",
   "owner_user_id",
   "lead_id",
+  "contact_id",
   "person_key",
   "contact_name",
   "contact_email",
@@ -256,6 +259,7 @@ const TASK_SELECT = [
   "status",
   "priority",
   "approval_required",
+  "contact_id",
   "related_thread_id",
   "related_event_id",
   "related_campaign_id",
@@ -565,6 +569,7 @@ function mapInboxThreadRow(row) {
     riskLevel: cleanText(row.risk_level) || "normal",
     unreadCount: Number(row.unread_count || 0) || 0,
     participants: Array.isArray(row.participants) ? row.participants : [],
+    contactId: cleanText(row.contact_id),
     relatedLeadId: cleanText(row.related_lead_id),
     relatedFollowUpId: cleanText(row.related_follow_up_id),
     relatedActionKey: cleanText(row.related_action_key),
@@ -627,6 +632,7 @@ function mapCalendarEventRow(row) {
     endAt: row.end_at || null,
     timezone: cleanText(row.timezone),
     location: cleanText(row.location),
+    contactId: cleanText(row.contact_id),
     leadId: cleanText(row.lead_id),
     relatedActionKey: cleanText(row.related_action_key),
     conflictState: cleanText(row.conflict_state) || "clear",
@@ -694,6 +700,7 @@ function mapCampaignRecipientRow(row) {
     campaignId: cleanText(row.campaign_id),
     agentId: cleanText(row.agent_id),
     ownerUserId: cleanText(row.owner_user_id),
+    contactId: cleanText(row.contact_id),
     leadId: cleanText(row.lead_id),
     personKey: cleanText(row.person_key),
     contactName: cleanText(row.contact_name),
@@ -725,6 +732,7 @@ function mapTaskRow(row) {
     status: cleanText(row.status) || "open",
     priority: cleanText(row.priority) || "normal",
     approvalRequired: row.approval_required === true,
+    contactId: cleanText(row.contact_id),
     relatedThreadId: cleanText(row.related_thread_id),
     relatedEventId: cleanText(row.related_event_id),
     relatedCampaignId: cleanText(row.related_campaign_id),
@@ -948,6 +956,43 @@ function matchLeadForThread(leads = [], thread = {}) {
     const contactEmail = normalizeEmail(lead.contactEmail);
     return contactEmail && emails.includes(contactEmail);
   }) || null;
+}
+
+function getThreadContactEmails(thread = {}) {
+  return uniqueText(
+    (thread.messages || []).flatMap((message) => [
+      message.senderEmail,
+      ...(message.recipients || []),
+      ...(message.cc || []),
+    ]).concat(thread.participants || []).map(normalizeEmail)
+  );
+}
+
+function getLatestInboundMessage(thread = {}) {
+  return (thread.messages || [])
+    .slice()
+    .reverse()
+    .find((message) => cleanText(message.direction) === "inbound") || null;
+}
+
+function findCampaignRecipientForThread(campaigns = [], thread = {}) {
+  const emails = new Set(getThreadContactEmails(thread));
+
+  if (!emails.size) {
+    return { campaign: null, recipient: null };
+  }
+
+  for (const campaign of campaigns) {
+    for (const recipient of campaign.recipients || []) {
+      if (!emails.has(normalizeEmail(recipient.contactEmail))) {
+        continue;
+      }
+
+      return { campaign, recipient };
+    }
+  }
+
+  return { campaign: null, recipient: null };
 }
 
 function buildComplaintTask(thread, lead) {
@@ -2068,6 +2113,10 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
     ownerUserId,
   });
   const leads = leadCaptureResult.records || [];
+  const campaigns = await listStoredCampaigns(supabase, {
+    agentId: agent.id,
+    ownerUserId,
+  }).catch(() => []);
   const googleThreads = await googleApi.listInboxThreads({
     accessToken,
     mailbox: account.selectedMailbox,
@@ -2078,6 +2127,8 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
   for (const googleThread of googleThreads) {
     const normalizedThread = buildNormalizedGmailThread(googleThread, account.accountEmail);
     const relatedLead = matchLeadForThread(leads, normalizedThread);
+    const { campaign: relatedCampaign, recipient: relatedRecipient } = findCampaignRecipientForThread(campaigns, normalizedThread);
+    const latestInbound = getLatestInboundMessage(normalizedThread);
     const classification = classifyInboxThread(normalizedThread);
     const needsReply = (normalizedThread.messages || []).length
       ? normalizedThread.messages[normalizedThread.messages.length - 1].direction === "inbound"
@@ -2105,6 +2156,7 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
       }),
       unread_count: normalizedThread.unreadCount,
       participants: normalizedThread.participants,
+      contact_id: relatedLead?.contactId || relatedRecipient?.contactId || null,
       related_lead_id: relatedLead?.id || null,
       related_follow_up_id: relatedLead?.relatedFollowUpId || null,
       related_action_key: relatedLead?.latestActionKey || null,
@@ -2140,6 +2192,33 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
     if (complaintTask) {
       const task = await upsertOperatorTask(supabase, agent, ownerUserId, complaintTask);
 
+      await recordOutcomeEvent(supabase, {
+        agentId: agent.id,
+        businessId: agent.businessId,
+        ownerUserId,
+        outcomeType: "complaint_opened",
+        sourceType: "inbox_thread",
+        confirmationLevel: "confirmed",
+        contactId: thread.contactId || relatedLead?.contactId || relatedRecipient?.contactId || "",
+        leadId: relatedLead?.id || "",
+        followUpId: thread.relatedFollowUpId || relatedLead?.relatedFollowUpId || "",
+        actionKey: thread.relatedActionKey || relatedLead?.latestActionKey || "",
+        inboxThreadId: thread.id,
+        operatorTaskId: task?.id || "",
+        pageUrl: "",
+        occurredAt: thread.lastMessageAt || new Date().toISOString(),
+        dedupeKey: [
+          agent.id,
+          thread.id,
+          "complaint_opened",
+        ].join("::"),
+        sourceRecordType: "operator_inbox_thread",
+        sourceRecordId: thread.id,
+        metadata: {
+          classification,
+        },
+      });
+
       if (task?.relatedActionKey) {
         try {
           await updateActionQueueStatus(supabase, {
@@ -2159,6 +2238,73 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
     const followUpTask = buildFollowUpTask(thread, relatedLead);
     if (followUpTask) {
       await upsertOperatorTask(supabase, agent, ownerUserId, followUpTask);
+    }
+
+    if (needsReply && thread.relatedFollowUpId) {
+      await recordOutcomeEvent(supabase, {
+        agentId: agent.id,
+        businessId: agent.businessId,
+        ownerUserId,
+        outcomeType: "follow_up_replied",
+        sourceType: "inbox_thread",
+        confirmationLevel: "confirmed",
+        contactId: thread.contactId || relatedLead?.contactId || relatedRecipient?.contactId || "",
+        leadId: relatedLead?.id || "",
+        followUpId: thread.relatedFollowUpId,
+        actionKey: thread.relatedActionKey || relatedLead?.latestActionKey || "",
+        inboxThreadId: thread.id,
+        occurredAt: latestInbound?.sentAt || thread.lastMessageAt || new Date().toISOString(),
+        dedupeKey: [
+          agent.id,
+          thread.id,
+          thread.relatedFollowUpId,
+          "follow_up_replied",
+        ].join("::"),
+        attributionPath: "follow_up_assisted",
+        sourceRecordType: "operator_inbox_thread",
+        sourceRecordId: thread.id,
+      });
+    }
+
+    if (needsReply && relatedCampaign?.id && relatedRecipient?.id) {
+      const { error: campaignRecipientError } = await supabase
+        .from(OPERATOR_CAMPAIGN_RECIPIENT_TABLE)
+        .update({
+          reply_state: "replied",
+          last_thread_id: thread.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", relatedRecipient.id);
+
+      if (campaignRecipientError && !isMissingRelationError(campaignRecipientError, OPERATOR_CAMPAIGN_RECIPIENT_TABLE)) {
+        throw campaignRecipientError;
+      }
+
+      await recordOutcomeEvent(supabase, {
+        agentId: agent.id,
+        businessId: agent.businessId,
+        ownerUserId,
+        outcomeType: "campaign_replied",
+        sourceType: "campaign",
+        confirmationLevel: "confirmed",
+        contactId: relatedRecipient.contactId || thread.contactId || relatedLead?.contactId || "",
+        leadId: relatedRecipient.leadId || relatedLead?.id || "",
+        actionKey: thread.relatedActionKey || relatedLead?.latestActionKey || cleanText(relatedRecipient.metadata?.latestActionKey),
+        inboxThreadId: thread.id,
+        campaignId: relatedCampaign.id,
+        campaignRecipientId: relatedRecipient.id,
+        occurredAt: latestInbound?.sentAt || thread.lastMessageAt || new Date().toISOString(),
+        dedupeKey: [
+          agent.id,
+          thread.id,
+          relatedCampaign.id,
+          relatedRecipient.id,
+          "campaign_replied",
+        ].join("::"),
+        attributionPath: "campaign",
+        sourceRecordType: "operator_campaign_recipient",
+        sourceRecordId: relatedRecipient.id,
+      });
     }
 
     syncedThreads.push({
@@ -2249,6 +2395,7 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
       end_at: googleEvent.end?.dateTime || googleEvent.end?.date || null,
       timezone: cleanText(googleEvent.start?.timeZone || googleEvent.end?.timeZone) || "UTC",
       location: cleanText(googleEvent.location) || null,
+      contact_id: relatedLead?.contactId || null,
       lead_id: relatedLead?.id || null,
       related_action_key: relatedLead?.latestActionKey || null,
       conflict_state: "clear",
@@ -2256,6 +2403,30 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
         htmlLink: cleanText(googleEvent.htmlLink),
       },
     });
+
+    if (cleanText(event.status) !== "cancelled") {
+      await recordOutcomeEvent(supabase, {
+        agentId: agent.id,
+        businessId: agent.businessId,
+        ownerUserId,
+        outcomeType: "booking_confirmed",
+        sourceType: "calendar_event",
+        confirmationLevel: "confirmed",
+        contactId: event.contactId || relatedLead?.contactId || "",
+        leadId: event.leadId || relatedLead?.id || "",
+        actionKey: event.relatedActionKey || relatedLead?.latestActionKey || "",
+        calendarEventId: event.id,
+        occurredAt: event.startAt || event.updatedAt || new Date().toISOString(),
+        dedupeKey: [
+          agent.id,
+          event.id,
+          "booking_confirmed",
+        ].join("::"),
+        attributionPath: "calendar_booking",
+        sourceRecordType: "operator_calendar_event",
+        sourceRecordId: event.id,
+      });
+    }
     syncedEvents.push(event);
   }
 
@@ -2728,6 +2899,9 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     suggestedSlots,
     campaigns,
     followUps: followUpResult.records || [],
+    outcomesSummary: conversionOutcomeResult.summary || {},
+    recentOutcomes: conversionOutcomeResult.recentOutcomes || [],
+    contacts: contactsWorkspace.list || [],
     contactsSummary: contactsWorkspace.summary,
   });
 
@@ -2781,6 +2955,11 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
       tasks,
       campaigns,
       followUps: followUpResult.records || [],
+    },
+    outcomes: {
+      summary: conversionOutcomeResult.summary || null,
+      recentOutcomes: conversionOutcomeResult.recentOutcomes || [],
+      persistenceAvailable: conversionOutcomeResult.persistenceAvailable !== false,
     },
     contacts: contactsWorkspace,
     summary,
@@ -3065,6 +3244,7 @@ export async function draftCalendarAction(supabase, options = {}) {
     end_at: endAt || existingEvent?.endAt || null,
     timezone: cleanText(options.timezone) || existingEvent?.timezone || "UTC",
     location: cleanText(options.location) || existingEvent?.location || null,
+    contact_id: cleanText(options.contactId) || existingEvent?.contactId || null,
     lead_id: cleanText(options.leadId) || existingEvent?.leadId || null,
     related_action_key: cleanText(options.relatedActionKey) || existingEvent?.relatedActionKey || null,
     conflict_state: existingEvent?.conflictState || "clear",
@@ -3206,6 +3386,32 @@ export async function approveCalendarAction(supabase, options = {}, deps = {}) {
     throw updateError;
   }
 
+  const updatedEvent = mapCalendarEventRow(updatedRow);
+
+  if (cleanText(updatedEvent.status) !== "cancelled") {
+    await recordOutcomeEvent(supabase, {
+      agentId: agent.id,
+      businessId: agent.businessId,
+      ownerUserId,
+      outcomeType: "booking_confirmed",
+      sourceType: "calendar_event",
+      confirmationLevel: "confirmed",
+      contactId: updatedEvent.contactId || "",
+      leadId: updatedEvent.leadId || "",
+      actionKey: updatedEvent.relatedActionKey || "",
+      calendarEventId: updatedEvent.id,
+      occurredAt: updatedEvent.startAt || updatedEvent.updatedAt || new Date().toISOString(),
+      dedupeKey: [
+        agent.id,
+        updatedEvent.id,
+        "booking_confirmed",
+      ].join("::"),
+      attributionPath: "calendar_booking",
+      sourceRecordType: "operator_calendar_event",
+      sourceRecordId: updatedEvent.id,
+    });
+  }
+
   await writeAuditLog(supabase, {
     agentId: agent.id,
     businessId: agent.businessId,
@@ -3231,7 +3437,7 @@ export async function approveCalendarAction(supabase, options = {}, deps = {}) {
   });
 
   return {
-    event: mapCalendarEventRow(updatedRow),
+    event: updatedEvent,
   };
 }
 
@@ -3241,6 +3447,7 @@ export async function createCampaignDraft(supabase, options = {}) {
   const goal = cleanText(options.goal).toLowerCase();
   const directContactEmail = normalizeEmail(options.contactEmail || options.contact_email);
   const directContactName = cleanText(options.contactName || options.contact_name);
+  const directContactId = cleanText(options.contactId || options.contact_id);
   const directLeadId = cleanText(options.leadId || options.lead_id);
   const directPersonKey = cleanText(options.personKey || options.person_key);
 
@@ -3271,6 +3478,7 @@ export async function createCampaignDraft(supabase, options = {}) {
   const recipients = directContactEmail
     ? [{
       id: "",
+      contactId: directContactId || null,
       leadId: directLeadId || null,
       personKey: directPersonKey || null,
       contactName: directContactName || null,
@@ -3341,6 +3549,7 @@ export async function createCampaignDraft(supabase, options = {}) {
           agent_id: agent.id,
           business_id: agent.businessId || null,
           owner_user_id: ownerUserId,
+          contact_id: lead.contactId || null,
           lead_id: lead.leadId || lead.id,
           person_key: lead.personKey || null,
           contact_name: lead.contactName || null,
@@ -3583,7 +3792,33 @@ export async function sendDueCampaignSteps(supabase, options = {}, deps = {}) {
       throw error;
     }
 
-    sentRecipients.push(mapCampaignRecipientRow(data));
+    const sentRecipient = mapCampaignRecipientRow(data);
+    sentRecipients.push(sentRecipient);
+
+    await recordOutcomeEvent(supabase, {
+      agentId: agent.id,
+      businessId: agent.businessId,
+      ownerUserId,
+      outcomeType: "campaign_sent",
+      sourceType: "campaign",
+      confirmationLevel: "observed",
+      contactId: sentRecipient.contactId || "",
+      leadId: sentRecipient.leadId || "",
+      actionKey: cleanText(sentRecipient.metadata?.latestActionKey),
+      campaignId: campaign.id,
+      campaignRecipientId: sentRecipient.id,
+      occurredAt: sentRecipient.lastContactedAt || new Date().toISOString(),
+      dedupeKey: [
+        agent.id,
+        campaign.id,
+        sentRecipient.id,
+        sentRecipient.currentStepIndex,
+        "campaign_sent",
+      ].join("::"),
+      attributionPath: "campaign",
+      sourceRecordType: "operator_campaign_recipient",
+      sourceRecordId: sentRecipient.id,
+    });
   }
 
   await writeAuditLog(supabase, {
@@ -3633,5 +3868,35 @@ export async function updateOperatorTaskStatus(supabase, options = {}) {
     throw error;
   }
 
-  return mapTaskRow(data);
+  const task = mapTaskRow(data);
+
+  if (
+    status === "resolved"
+    && ["complaint_queue", "support_follow_up"].includes(cleanText(task.taskType))
+  ) {
+    await recordOutcomeEvent(supabase, {
+      agentId,
+      businessId: cleanText(data.business_id),
+      ownerUserId,
+      outcomeType: "complaint_resolved",
+      sourceType: "operator_task",
+      confirmationLevel: "manual",
+      contactId: task.contactId || "",
+      leadId: task.relatedLeadId || "",
+      actionKey: task.relatedActionKey || "",
+      inboxThreadId: task.relatedThreadId || "",
+      operatorTaskId: task.id,
+      occurredAt: task.resolvedAt || new Date().toISOString(),
+      dedupeKey: [
+        agentId,
+        task.id,
+        "complaint_resolved",
+      ].join("::"),
+      attributionPath: cleanText(task.relatedThreadId) ? "inbox_thread" : "manual_owner",
+      sourceRecordType: "operator_task",
+      sourceRecordId: task.id,
+    });
+  }
+
+  return task;
 }

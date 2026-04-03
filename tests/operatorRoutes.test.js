@@ -174,6 +174,53 @@ test("operator workspace route exposes inbox, calendar, and automations surfaces
   }
 });
 
+test("action queue route stays visible when outcome reporting fails", async () => {
+  const server = await startServer(createApp(buildRouteDeps({
+    assertMessagesSchemaReady: async () => {},
+    assertWidgetTelemetrySchemaReady: async () => {},
+    assertLeadCaptureSchemaReady: async () => {},
+    assertConversionOutcomeSchemaReady: async () => {},
+    listAgentMessages: async () => [],
+    listActionQueueStatuses: async () => ({ records: [], persistenceAvailable: true }),
+    buildActionQueue: () => ({
+      items: [],
+      summary: { attentionNeeded: 0 },
+      conversionSummary: {},
+      outcomeSummary: {},
+      recentOutcomes: [],
+      recentLeadCaptures: [],
+      persistenceAvailable: true,
+    }),
+    syncFollowUpWorkflows: async () => ({ records: [], persistenceAvailable: true }),
+    syncKnowledgeFixWorkflows: async () => ({ records: [], persistenceAvailable: true }),
+    listLeadCaptures: async () => ({ records: [], persistenceAvailable: true }),
+    listWidgetRoutingEventsByAgentId: async () => [],
+    listAgents: async () => ({
+      agents: [{ id: "agent-1", businessId: "business-1" }],
+    }),
+    getStoredWebsiteContent: async () => null,
+    listConversionOutcomesForAgent: async () => {
+      throw new Error("Outcome query failed");
+    },
+    getAgentWorkspaceSnapshot: async () => ({
+      id: "agent-1",
+      businessId: "business-1",
+      widgetMetrics: {},
+      installStatus: {},
+    }),
+  })));
+
+  try {
+    const response = await requestJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+
+    assert.equal(response.status, 200);
+    assert.equal(Array.isArray(response.json.items), true);
+    assert.equal(response.json.analyticsSummary.assistedOutcomes, 0);
+  } finally {
+    await server.close();
+  }
+});
+
 test("operator activation route persists onboarding progress for the owner scope", async () => {
   const server = await startServer(createApp(buildRouteDeps()));
 

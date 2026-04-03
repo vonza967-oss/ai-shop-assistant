@@ -40,12 +40,19 @@ create table if not exists public.agent_conversion_outcomes (
   conversation_id text,
   person_key text,
   lead_id uuid,
+  contact_id uuid,
   action_key text,
   follow_up_id uuid,
+  inbox_thread_id uuid,
+  calendar_event_id uuid,
+  campaign_id uuid,
+  campaign_recipient_id uuid,
+  operator_task_id uuid,
   page_url text,
   origin text,
   target_url text,
   success_url text,
+  attribution_path text,
   metadata jsonb not null default '{}'::jsonb,
   occurred_at timestamp with time zone default now(),
   created_at timestamp with time zone default now(),
@@ -69,3 +76,17 @@ create index if not exists agent_conversion_outcomes_type_idx
 
 create index if not exists agent_conversion_outcomes_occurred_at_idx
   on public.agent_conversion_outcomes (occurred_at desc);
+create index if not exists agent_conversion_outcomes_contact_idx
+  on public.agent_conversion_outcomes (contact_id);
+create index if not exists agent_conversion_outcomes_inbox_thread_idx
+  on public.agent_conversion_outcomes (inbox_thread_id);
+create index if not exists agent_conversion_outcomes_calendar_event_idx
+  on public.agent_conversion_outcomes (calendar_event_id);
+create index if not exists agent_conversion_outcomes_campaign_idx
+  on public.agent_conversion_outcomes (campaign_id);
+create index if not exists agent_conversion_outcomes_campaign_recipient_idx
+  on public.agent_conversion_outcomes (campaign_recipient_id);
+create index if not exists agent_conversion_outcomes_operator_task_idx
+  on public.agent_conversion_outcomes (operator_task_id);
+create index if not exists agent_conversion_outcomes_attribution_path_idx
+  on public.agent_conversion_outcomes (attribution_path);

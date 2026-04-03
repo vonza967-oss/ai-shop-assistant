@@ -27,7 +27,7 @@ const EDITABLE_FOLLOW_UP_STATUSES = new Set(["draft", "ready", "failed", "missin
 const ACTIVE_FOLLOW_UP_STATUSES = new Set(["draft", "ready", "failed", "missing_contact"]);
 const FOLLOW_UP_CHANNELS = new Set(["email", "phone", "manual"]);
 const FOLLOW_UP_SELECT =
-  "id, agent_id, owner_user_id, dedupe_key, source_action_key, linked_action_keys, action_type, person_key, status, channel, contact_name, contact_email, contact_phone, subject, draft_content, last_generated_subject, last_generated_content, draft_edited_manually, evidence, why_prepared, topic, page_hint, source_hash, last_error, sent_at, dismissed_at, created_at, updated_at";
+  "id, agent_id, owner_user_id, dedupe_key, source_action_key, linked_action_keys, action_type, person_key, contact_id, status, channel, contact_name, contact_email, contact_phone, subject, draft_content, last_generated_subject, last_generated_content, draft_edited_manually, evidence, why_prepared, topic, page_hint, source_hash, last_error, sent_at, dismissed_at, created_at, updated_at";
 
 function isMissingRelationError(error, relationName) {
   const message = cleanText(error?.message || "");
@@ -386,6 +386,7 @@ function normalizeFollowUpWorkflow(record = {}) {
     linkedActionKeys: normalizeLinkedActionKeys(record.linkedActionKeys || record.linked_action_keys),
     actionType: normalizeActionType(record.actionType || record.action_type),
     personKey: cleanText(record.personKey || record.person_key),
+    contactId: cleanText(record.contactId || record.contact_id),
     status: normalizeFollowUpStatus(record.status),
     channel: normalizeChannel(record.channel),
     contactName: cleanText(record.contactName || record.contact_name),
@@ -695,6 +696,7 @@ async function insertFollowUpWorkflow(supabase, workflow) {
     linked_action_keys: workflow.linkedActionKeys,
     action_type: workflow.actionType,
     person_key: workflow.personKey || null,
+    contact_id: workflow.contactId || null,
     status: workflow.status,
     channel: workflow.channel || null,
     contact_name: workflow.contactName || null,
@@ -735,6 +737,7 @@ async function updateFollowUpWorkflowRecord(supabase, workflow) {
     linked_action_keys: workflow.linkedActionKeys,
     action_type: workflow.actionType,
     person_key: workflow.personKey || null,
+    contact_id: workflow.contactId || null,
     status: workflow.status,
     channel: workflow.channel || null,
     contact_name: workflow.contactName || null,
@@ -913,6 +916,7 @@ export async function createManualFollowUpWorkflow(supabase, options = {}) {
     phone: options.contactPhone || options.phone,
   });
   const personKey = cleanText(options.personKey);
+  const contactId = cleanText(options.contactId || options.contact_id);
   const linkedActionKeys = normalizeLinkedActionKeys(options.linkedActionKeys || options.linked_action_keys || []);
   const sourceActionKey = cleanText(options.sourceActionKey || options.source_action_key)
     || `manual_contact:${personKey || contact.email || contact.phoneNormalized || businessName.toLowerCase().replace(/\s+/g, "_")}:${actionType}`;
@@ -980,6 +984,7 @@ export async function createManualFollowUpWorkflow(supabase, options = {}) {
     linkedActionKeys: uniqueText([sourceActionKey, ...linkedActionKeys, ...(existing?.linkedActionKeys || [])]),
     actionType,
     personKey: personKey || existing?.personKey,
+    contactId: contactId || existing?.contactId,
     status: "draft",
     channel: getPreferredChannel(contact),
     contactName: contact.name || existing?.contactName,

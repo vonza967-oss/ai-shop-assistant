@@ -5,6 +5,7 @@ import {
   detectConversionOutcomesForPage,
   listConversionOutcomesForAgent,
   markManualConversionOutcome,
+  recordOutcomeEvent,
   recordTrackedCtaClick,
 } from "../src/services/conversion/conversionOutcomeService.js";
 
@@ -255,6 +256,7 @@ function createOutcomeState() {
         latest_action_key: "action-1",
         related_action_keys: ["action-1"],
         related_follow_up_id: null,
+        contact_id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
       },
       {
         id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -267,6 +269,7 @@ function createOutcomeState() {
         latest_action_key: "action-2",
         related_action_keys: ["action-2"],
         related_follow_up_id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        contact_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
       },
     ],
   });
@@ -293,10 +296,11 @@ test("tracked booking CTA click is persisted and keeps attribution context", asy
   assert.equal(supabase.state.agent_conversion_outcomes[0].outcome_type, "booking_started");
   assert.equal(supabase.state.agent_conversion_outcomes[0].action_key, "action-1");
   assert.equal(supabase.state.agent_conversion_outcomes[0].lead_id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+  assert.equal(supabase.state.agent_conversion_outcomes[0].contact_id, "dddddddd-dddd-dddd-dddd-dddddddddddd");
   assert.match(result.redirectUrl, /vz_cta_event_id=/);
 });
 
-test("booking success page creates booking_completed and resolves the related queue state", async () => {
+test("booking success page creates booking_confirmed and resolves the related queue state", async () => {
   const supabase = createOutcomeState();
   const click = await recordTrackedCtaClick(supabase, {
     installId: "11111111-1111-1111-1111-111111111111",
@@ -318,7 +322,7 @@ test("booking success page creates booking_completed and resolves the related qu
   });
 
   assert.equal(detected.matched, true);
-  assert.equal(detected.detectedOutcomes[0].outcomeType, "booking_completed");
+  assert.equal(detected.detectedOutcomes[0].outcomeType, "booking_confirmed");
   assert.equal(supabase.state.agent_conversion_outcomes.length, 2);
   assert.equal(supabase.state.agent_action_queue_statuses.length, 1);
   assert.equal(supabase.state.agent_action_queue_statuses[0].status, "done");
@@ -371,6 +375,7 @@ test("quote and checkout success paths create the right canonical outcomes", asy
     ownerUserId: "owner-1",
   });
 
+  assert.equal(summary.summary.bookingConfirmed, 0);
   assert.equal(summary.summary.quoteRequested, 1);
   assert.equal(summary.summary.checkoutCompleted, 1);
   assert.equal(summary.summary.followUpAssistedOutcomeCount, 1);
@@ -430,4 +435,53 @@ test("manual outcome marking dedupes repeated marks and keeps reload-safe report
 
   assert.equal(summary.summary.checkoutCompleted, 1);
   assert.equal(summary.recentOutcomes.length, 1);
+});
+
+test("cross-channel operator outcomes persist contact-linked context and dedupe safely", async () => {
+  const supabase = createOutcomeState();
+
+  const first = await recordOutcomeEvent(supabase, {
+    agentId: "agent-1",
+    businessId: "business-1",
+    ownerUserId: "owner-1",
+    outcomeType: "campaign_replied",
+    sourceType: "campaign",
+    confirmationLevel: "confirmed",
+    contactId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+    leadId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    campaignId: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    campaignRecipientId: "99999999-9999-9999-9999-999999999999",
+    inboxThreadId: "88888888-8888-8888-8888-888888888888",
+    dedupeKey: "campaign-reply-1",
+  });
+  const duplicate = await recordOutcomeEvent(supabase, {
+    agentId: "agent-1",
+    businessId: "business-1",
+    ownerUserId: "owner-1",
+    outcomeType: "campaign_replied",
+    sourceType: "campaign",
+    confirmationLevel: "confirmed",
+    contactId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+    leadId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    campaignId: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    campaignRecipientId: "99999999-9999-9999-9999-999999999999",
+    inboxThreadId: "88888888-8888-8888-8888-888888888888",
+    dedupeKey: "campaign-reply-1",
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(duplicate.ok, true);
+  assert.equal(supabase.state.agent_conversion_outcomes.length, 1);
+  assert.equal(supabase.state.agent_conversion_outcomes[0].contact_id, "dddddddd-dddd-dddd-dddd-dddddddddddd");
+  assert.equal(supabase.state.agent_conversion_outcomes[0].campaign_id, "ffffffff-ffff-ffff-ffff-ffffffffffff");
+  assert.equal(supabase.state.agent_conversion_outcomes[0].campaign_recipient_id, "99999999-9999-9999-9999-999999999999");
+  assert.equal(supabase.state.agent_conversion_outcomes[0].inbox_thread_id, "88888888-8888-8888-8888-888888888888");
+
+  const summary = await listConversionOutcomesForAgent(supabase, {
+    agentId: "agent-1",
+    ownerUserId: "owner-1",
+  });
+
+  assert.equal(summary.summary.campaignReplied, 1);
+  assert.equal(summary.summary.pathCounts.campaign, 1);
 });

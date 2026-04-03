@@ -1667,6 +1667,7 @@ function buildContactQuickActions(contact = {}, operatorWorkspace = createEmptyO
         data-contact-name="${escapeHtml(contact.name || "")}"
         data-contact-email="${escapeHtml(contact.email || "")}"
         data-contact-phone="${escapeHtml(contact.phone || "")}"
+        data-contact-id="${escapeHtml(contact.id || "")}"
         data-person-key="${escapeHtml(contact.personKey || "")}"
         data-lead-id="${escapeHtml(contact.leadId || "")}"
         data-lifecycle-state="${escapeHtml(contact.lifecycleState || "")}"
@@ -1685,6 +1686,7 @@ function buildContactQuickActions(contact = {}, operatorWorkspace = createEmptyO
         data-contact-name="${escapeHtml(contact.name || "")}"
         data-contact-email="${escapeHtml(contact.email || "")}"
         data-contact-phone="${escapeHtml(contact.phone || "")}"
+        data-contact-id="${escapeHtml(contact.id || "")}"
         data-lead-id="${escapeHtml(contact.leadId || "")}"
         data-slot-start="${escapeHtml(suggestedSlot.startAt || "")}"
         data-slot-end="${escapeHtml(suggestedSlot.endAt || "")}"
@@ -1702,6 +1704,7 @@ function buildContactQuickActions(contact = {}, operatorWorkspace = createEmptyO
         data-draft-contact-campaign
         data-contact-name="${escapeHtml(contact.name || "")}"
         data-contact-email="${escapeHtml(contact.email || "")}"
+        data-contact-id="${escapeHtml(contact.id || "")}"
         data-person-key="${escapeHtml(contact.personKey || "")}"
         data-lead-id="${escapeHtml(contact.leadId || "")}"
         data-goal="${escapeHtml(nextAction.recommendedGoal || getRecommendedCampaignGoal(contact))}"
@@ -1741,6 +1744,16 @@ function buildContactsAttentionStrip(operatorWorkspace = createEmptyOperatorWork
         <p class="overview-label">Customers awaiting follow-up</p>
         <p class="overview-value">${escapeHtml(formatOperatorCount(summary.customersAwaitingFollowUp, "customer"))}</p>
         <p class="overview-card-copy">Customer records that would benefit from the next owner touchpoint.</p>
+      </div>
+      <div class="overview-card">
+        <p class="overview-label">Contacts with outcomes</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.contactsWithOutcomes, "contact"))}</p>
+        <p class="overview-card-copy">People records where Vonza can already point to a real cross-channel result.</p>
+      </div>
+      <div class="overview-card">
+        <p class="overview-label">High-value without proof</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.highValueWithoutOutcome, "contact"))}</p>
+        <p class="overview-card-copy">Qualified or active leads that still need an actual outcome, not just activity.</p>
       </div>
     </div>
   `;
@@ -1841,7 +1854,17 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
                     `${contact.counts?.inboxThreads || 0} inbox`,
                     `${contact.counts?.calendarEvents || 0} calendar`,
                     `${contact.counts?.followUps || 0} follow-ups`,
+                    `${contact.counts?.outcomes || 0} outcomes`,
                   ].join(" · "))}</strong>
+                </div>
+                <div class="contact-meta-block">
+                  <span class="action-queue-detail-label">Latest outcome</span>
+                  <strong class="action-queue-detail-value">${escapeHtml(contact.latestOutcome?.label || "No proven outcome yet")}</strong>
+                  <p class="action-queue-copy">${escapeHtml([
+                    trimText(contact.latestOutcome?.sourceLabel),
+                    trimText(contact.latestOutcome?.contextLabel),
+                    contact.latestOutcome?.occurredAt ? formatSeenAt(contact.latestOutcome.occurredAt) : "",
+                  ].filter(Boolean).join(" · ") || "This contact still needs proof of progression, not just process.")}</p>
                 </div>
                 <div class="contact-meta-block">
                   <span class="action-queue-detail-label">Lifecycle override</span>
@@ -1858,6 +1881,29 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
               <div class="inline-actions">
                 ${buildContactQuickActions(contact, operatorWorkspace)}
               </div>
+              <form class="action-queue-follow-up-form" data-manual-outcome-form data-contact-id="${escapeHtml(contact.id || "")}" data-lead-id="${escapeHtml(contact.leadId || "")}" data-follow-up-id="${escapeHtml(contact.primaryFollowUpId || "")}" data-inbox-thread-id="${escapeHtml(contact.primaryThreadId || "")}" data-calendar-event-id="${escapeHtml(contact.primaryEventId || "")}" data-person-key="${escapeHtml(contact.personKey || "")}">
+                <div class="form-grid two-col">
+                  <div class="field">
+                    <label for="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}">Outcome mark</label>
+                    <select id="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}" name="outcome_type" ${agent.manualOutcomeMode === true ? "" : "disabled"}>
+                      <option value="booking_confirmed">booked</option>
+                      <option value="quote_requested">quote requested</option>
+                      <option value="quote_accepted">quote accepted</option>
+                      <option value="follow_up_replied">follow-up successful</option>
+                      <option value="complaint_resolved">complaint resolved</option>
+                      <option value="manual_outcome_marked">no outcome / manual note</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}">Context note</label>
+                    <input id="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}" name="note" type="text" placeholder="Owner confirmed this outside an automatic proof path." ${agent.manualOutcomeMode === true ? "" : "disabled"}>
+                  </div>
+                </div>
+                <div class="action-queue-form-actions">
+                  <button class="ghost-button" type="submit" ${agent.manualOutcomeMode === true ? "" : "disabled"}>Record outcome</button>
+                  <span class="action-queue-meta-inline">Manual marks stay attached to this contact’s lead, thread, follow-up, and calendar context when available.</span>
+                </div>
+              </form>
               <div class="contact-timeline">
                 <div class="person-subsection">
                   <span class="action-queue-detail-label">Timeline</span>
@@ -1961,6 +2007,11 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
           <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.followUpsNeedingApproval, "follow-up")} still need approval.`)}</p>
         </div>
         <div class="overview-card">
+          <p class="overview-label">Recent proven outcomes</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.assistedOutcomes, "outcome"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${today.bookingsConfirmed || 0} bookings confirmed · ${today.quoteRequests || 0} quote requests · ${today.followUpReplies || 0} follow-up replies`)}</p>
+        </div>
+        <div class="overview-card">
           <p class="overview-label">Automations and campaigns</p>
           <p class="overview-value">${escapeHtml(formatOperatorCount(today.activeCampaigns, "active automation"))}</p>
           <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(today.campaignsAwaitingApproval, "campaign awaiting approval", "campaigns awaiting approval")} across draft and live work.`)}</p>
@@ -1970,7 +2021,58 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
           <p class="overview-value">${escapeHtml(today.topTask || "No urgent queue item")}</p>
           <p class="overview-card-copy">${escapeHtml(dailySummary)}</p>
         </div>
+        <div class="overview-card">
+          <p class="overview-label">Outcome gaps</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.highValueWithoutOutcome, "contact"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(today.overdueHighValueContacts, "high-value contact")} still need a real result and ${formatOperatorCount(today.complaintRiskContacts, "complaint-risk contact")} remain in play.`)}</p>
+        </div>
       </div>
+      <div class="overview-grid operator-metric-grid operator-people-grid">
+        <div class="overview-card">
+          <p class="overview-label">Direct vs follow-up</p>
+          <p class="overview-value">${escapeHtml(`${today.directVsFollowUpSplit.direct || 0} / ${today.directVsFollowUpSplit.followUp || 0}`)}</p>
+          <p class="overview-card-copy">Direct-route outcomes on the left, follow-up-assisted outcomes on the right.</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Campaign replies</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.campaignReplies, "reply"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(today.campaignConversions, "conversion")} have been tied back to campaign work so far.`)}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Complaint resolutions</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.complaintResolutions, "resolution"))}</p>
+          <p class="overview-card-copy">Resolved complaint and recovery work now counts as proof, not just inbox activity.</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Lifecycle progression</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.contactsWithProgression, "contact"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${today.lifecycleCounts.customer || 0} customers · ${today.lifecycleCounts.qualified || 0} qualified · ${today.lifecycleCounts.activeLead || 0} active leads`)}</p>
+        </div>
+      </div>
+      <section class="workspace-card-soft" style="margin-top:20px;">
+        <div class="workspace-panel-header">
+          <div>
+            <p class="studio-kicker">Proof</p>
+            <h3 class="workspace-panel-title">Recent successful outcomes</h3>
+            <p class="workspace-panel-copy">These are the clearest recent results Vonza could tie back to a real contact, thread, workflow, campaign, or booking path.</p>
+          </div>
+        </div>
+        ${Array.isArray(today.recentSuccessfulOutcomes) && today.recentSuccessfulOutcomes.length ? `
+          <div class="analytics-list">
+            ${today.recentSuccessfulOutcomes.map((outcome) => `
+              <div class="analytics-item">
+                <p class="analytics-item-title">${escapeHtml(getOutcomeTypeLabel(outcome.outcomeType))}</p>
+                <p class="analytics-item-copy">${escapeHtml(trimText(outcome.pageUrl || outcome.successUrl || outcome.sourceLabel || "Cross-channel result"))}</p>
+                <p class="analytics-subtle">${escapeHtml([
+                  trimText(outcome.sourceLabel),
+                  trimText(outcome.relatedIntentType),
+                  outcome.occurredAt ? formatSeenAt(outcome.occurredAt) : "",
+                ].filter(Boolean).join(" · "))}</p>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="placeholder-card">As soon as Vonza can prove bookings, quote requests, complaint resolutions, campaign replies, or follow-up results, they will appear here with source context.</div>`}
+      </section>
       ${buildContactsAttentionStrip(operatorWorkspace)}
     </section>
   `;
@@ -2888,9 +2990,11 @@ function createEmptyActionQueue() {
       directOutcomeCount: 0,
       followUpAssistedOutcomeCount: 0,
       bookingStarted: 0,
+      bookingConfirmed: 0,
       bookingCompleted: 0,
-      quoteStarted: 0,
       quoteRequested: 0,
+      quoteSent: 0,
+      quoteAccepted: 0,
       checkoutStarted: 0,
       checkoutCompleted: 0,
       contactClicked: 0,
@@ -2898,11 +3002,25 @@ function createEmptyActionQueue() {
       phoneClicked: 0,
       followUpSent: 0,
       followUpReplied: 0,
+      complaintOpened: 0,
+      complaintResolved: 0,
+      campaignSent: 0,
+      campaignReplied: 0,
+      campaignConverted: 0,
       manualMarked: 0,
       directVsFollowUpSplit: {
         direct: 0,
         followUp: 0,
+        operator: 0,
         manual: 0,
+      },
+      pathCounts: {
+        directRoute: 0,
+        followUpAssisted: 0,
+        inboxThread: 0,
+        calendarBooking: 0,
+        campaign: 0,
+        manualOwner: 0,
       },
       topPages: [],
       topIntents: [],
@@ -2980,10 +3098,37 @@ function createEmptyOperatorWorkspace() {
       openAvailabilityCount: 0,
       campaignCount: 0,
       followUpCount: 0,
+      assistedOutcomes: 0,
+      bookingsStarted: 0,
+      bookingsConfirmed: 0,
+      quoteRequests: 0,
+      followUpReplies: 0,
+      complaintResolutions: 0,
+      campaignReplies: 0,
+      campaignConversions: 0,
+      directVsFollowUpSplit: {
+        direct: 0,
+        followUp: 0,
+        operator: 0,
+        manual: 0,
+      },
+      recentSuccessfulOutcomes: [],
+      contactsWithProgression: 0,
+      highValueWithoutOutcome: 0,
       contactsNeedingAttention: 0,
       complaintRiskContacts: 0,
       leadsWithoutNextStep: 0,
       customersAwaitingFollowUp: 0,
+      lifecycleCounts: {
+        new: 0,
+        activeLead: 0,
+        qualified: 0,
+        customer: 0,
+        supportIssue: 0,
+        complaintRisk: 0,
+        dormant: 0,
+      },
+      overdueHighValueContacts: 0,
       topTask: "",
     },
     contextOptions: {
@@ -3024,6 +3169,11 @@ function createEmptyOperatorWorkspace() {
       campaigns: [],
       followUps: [],
     },
+    outcomes: {
+      summary: null,
+      recentOutcomes: [],
+      persistenceAvailable: true,
+    },
     contacts: {
       list: [],
       filters: {
@@ -3036,6 +3186,17 @@ function createEmptyOperatorWorkspace() {
         complaintRiskContacts: 0,
         leadsWithoutNextStep: 0,
         customersAwaitingFollowUp: 0,
+        contactsWithOutcomes: 0,
+        highValueWithoutOutcome: 0,
+        lifecycleCounts: {
+          new: 0,
+          activeLead: 0,
+          qualified: 0,
+          customer: 0,
+          supportIssue: 0,
+          complaintRisk: 0,
+          dormant: 0,
+        },
       },
       health: {
         persistenceAvailable: true,
@@ -3548,12 +3709,14 @@ function getOutcomeTypeLabel(value) {
   switch (trimText(value).toLowerCase()) {
     case "booking_started":
       return "Booking started";
-    case "booking_completed":
-      return "Booking completed";
-    case "quote_started":
-      return "Quote started";
+    case "booking_confirmed":
+      return "Booking confirmed";
     case "quote_requested":
       return "Quote requested";
+    case "quote_sent":
+      return "Quote sent";
+    case "quote_accepted":
+      return "Quote accepted";
     case "checkout_started":
       return "Checkout started";
     case "checkout_completed":
@@ -3568,7 +3731,17 @@ function getOutcomeTypeLabel(value) {
       return "Follow-up sent";
     case "follow_up_replied":
       return "Follow-up replied";
-    case "conversion_marked_manual":
+    case "complaint_opened":
+      return "Complaint opened";
+    case "complaint_resolved":
+      return "Complaint resolved";
+    case "campaign_sent":
+      return "Campaign sent";
+    case "campaign_replied":
+      return "Campaign replied";
+    case "campaign_converted":
+      return "Campaign converted";
+    case "manual_outcome_marked":
       return "Manual outcome";
     default:
       return "Outcome";
@@ -3850,12 +4023,13 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             <div class="field">
               <label for="manual-outcome-type-${escapeHtml(item.key || "")}">Manual outcome mark</label>
               <select id="manual-outcome-type-${escapeHtml(item.key || "")}" name="outcome_type" ${agent.manualOutcomeMode === true ? "" : "disabled"}>
-                <option value="booking_completed">booking completed</option>
+                <option value="booking_confirmed">booking confirmed</option>
                 <option value="quote_requested">quote requested</option>
+                <option value="quote_accepted">quote accepted</option>
                 <option value="checkout_completed">checkout completed</option>
-                <option value="contact_clicked">contact action taken</option>
                 <option value="follow_up_replied">follow-up replied</option>
-                <option value="conversion_marked_manual">manual catch-all</option>
+                <option value="complaint_resolved">complaint resolved</option>
+                <option value="manual_outcome_marked">manual catch-all / no outcome</option>
               </select>
               <p class="field-help">${escapeHtml(agent.manualOutcomeMode === true ? "Use this only when automatic confirmation is unavailable." : "Enable manual outcome mode in Customize before using this fallback.")}</p>
             </div>
@@ -4928,7 +5102,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
             <div class="analytics-item">
               <p class="analytics-item-title">Confirmed outcomes</p>
               <p class="analytics-item-copy">${escapeHtml(`${outcomeSummary.confirmedBusinessOutcomes || 0} confirmed business outcomes`)}</p>
-              <p class="analytics-subtle">${escapeHtml(`${outcomeSummary.bookingCompleted || 0} booking completed · ${outcomeSummary.quoteRequested || 0} quote requested · ${outcomeSummary.checkoutCompleted || 0} checkout completed`)}</p>
+              <p class="analytics-subtle">${escapeHtml(`${outcomeSummary.bookingConfirmed || outcomeSummary.bookingCompleted || 0} booking confirmed · ${outcomeSummary.quoteRequested || 0} quote requested · ${outcomeSummary.checkoutCompleted || 0} checkout completed`)}</p>
             </div>
           </div>
         </section>
@@ -4941,9 +5115,9 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               ${recentOutcomes.map((outcome) => `
                 <div class="analytics-item">
                   <p class="analytics-item-title">${escapeHtml(getOutcomeTypeLabel(outcome.outcomeType))}</p>
-                  <p class="analytics-item-copy">${escapeHtml(trimText(outcome.pageUrl || outcome.successUrl || "No page captured"))}</p>
+                  <p class="analytics-item-copy">${escapeHtml(trimText(outcome.pageUrl || outcome.successUrl || outcome.sourceLabel || "No page captured"))}</p>
                   <p class="analytics-subtle">${escapeHtml([
-                    trimText(outcome.attributionPath) ? `${trimText(outcome.attributionPath).replaceAll("_", " ")} path` : "",
+                    trimText(outcome.sourceLabel || outcome.attributionPath) ? `${trimText(outcome.sourceLabel || outcome.attributionPath).replaceAll("_", " ")}` : "",
                     trimText(outcome.relatedCtaType) ? `${trimText(outcome.relatedCtaType)} CTA` : "",
                     trimText(outcome.relatedIntentType) || "",
                     outcome.occurredAt ? formatSeenAt(outcome.occurredAt) : "",
@@ -4975,6 +5149,16 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
                   : "No outcome-linked intents yet."
               )}</p>
               <p class="analytics-subtle">This helps answer which customer intents are producing the most value, not just the most chat activity.</p>
+            </div>
+            <div class="analytics-item">
+              <p class="analytics-item-title">Campaign proof</p>
+              <p class="analytics-item-copy">${escapeHtml(`${outcomeSummary.campaignReplied || 0} replies · ${outcomeSummary.campaignConverted || 0} conversions`)}</p>
+              <p class="analytics-subtle">Campaign work only counts here when Vonza can tie a reply or later conversion back to the recipient path.</p>
+            </div>
+            <div class="analytics-item">
+              <p class="analytics-item-title">Complaint proof</p>
+              <p class="analytics-item-copy">${escapeHtml(`${outcomeSummary.complaintResolved || 0} complaint resolutions`)}</p>
+              <p class="analytics-subtle">Resolved support or complaint work is now tracked as an actual operator result.</p>
             </div>
           </div>
         </section>
@@ -5960,6 +6144,11 @@ async function loadOperatorWorkspace(agentId, options = {}) {
       tasks: Array.isArray(data?.automations?.tasks) ? data.automations.tasks : [],
       campaigns: Array.isArray(data?.automations?.campaigns) ? data.automations.campaigns : [],
       followUps: Array.isArray(data?.automations?.followUps) ? data.automations.followUps : [],
+    },
+    outcomes: {
+      ...createEmptyOperatorWorkspace().outcomes,
+      ...(data?.outcomes || {}),
+      recentOutcomes: Array.isArray(data?.outcomes?.recentOutcomes) ? data.outcomes.recentOutcomes : [],
     },
     contacts: {
       ...createEmptyOperatorWorkspace().contacts,
@@ -7039,6 +7228,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
           client_id: getClientId(),
           agent_id: agent.id,
           action_type: trimText(button.dataset.lifecycleState) === "customer" ? "lead_follow_up" : "lead_follow_up",
+          contact_id: button.dataset.contactId,
           contact_name: button.dataset.contactName,
           contact_email: button.dataset.contactEmail,
           contact_phone: button.dataset.contactPhone,
@@ -7069,6 +7259,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
           client_id: getClientId(),
           agent_id: agent.id,
           goal: trimText(button.dataset.goal) || "quote_follow_up",
+          contact_id: button.dataset.contactId,
           contact_name: button.dataset.contactName,
           contact_email: button.dataset.contactEmail,
           person_key: button.dataset.personKey,
@@ -7104,6 +7295,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
           start_at: button.dataset.slotStart,
           end_at: button.dataset.slotEnd,
           attendee_emails: trimText(button.dataset.contactEmail) ? [button.dataset.contactEmail] : [],
+          contact_id: button.dataset.contactId || undefined,
           lead_id: button.dataset.leadId || undefined,
         }),
       });
@@ -7177,9 +7369,15 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
           agent_id: agent.id,
           outcome_type: trimText(formData.get("outcome_type")),
           note: trimText(formData.get("note")),
+          contact_id: form.dataset.contactId,
           action_key: form.dataset.actionKey,
           lead_id: form.dataset.leadId,
           follow_up_id: form.dataset.followUpId,
+          inbox_thread_id: form.dataset.inboxThreadId,
+          calendar_event_id: form.dataset.calendarEventId,
+          campaign_id: form.dataset.campaignId,
+          campaign_recipient_id: form.dataset.campaignRecipientId,
+          operator_task_id: form.dataset.operatorTaskId,
           session_id: form.dataset.sessionId,
           person_key: form.dataset.personKey,
           related_intent_type: form.dataset.intentType,
@@ -7187,7 +7385,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
         }),
       });
 
-      setDashboardFocus("action-queue");
+      setDashboardFocus(form.dataset.contactId ? "contacts" : "action-queue");
       setStatus(result.outcome?.label ? `${result.outcome.label} recorded.` : "Manual outcome recorded.");
       await boot();
     } catch (error) {

@@ -747,6 +747,9 @@ export function buildOperatorTodaySummary({
   suggestedSlots = [],
   campaigns = [],
   followUps = [],
+  outcomesSummary = {},
+  recentOutcomes = [],
+  contacts = [],
   contactsSummary = {},
 } = {}) {
   const taskCounts = getOpenTaskCounts(tasks);
@@ -770,10 +773,41 @@ export function buildOperatorTodaySummary({
     openAvailabilityCount: Number(summary.openAvailabilityCount || suggestedSlots.length || 0),
     campaignCount: (campaigns || []).length,
     followUpCount: (followUps || []).length,
+    assistedOutcomes: Number(outcomesSummary.assistedConversions || 0),
+    bookingsStarted: Number(outcomesSummary.bookingStarted || 0),
+    bookingsConfirmed: Number(outcomesSummary.bookingConfirmed || outcomesSummary.bookingCompleted || 0),
+    quoteRequests: Number(outcomesSummary.quoteRequested || 0),
+    followUpReplies: Number(outcomesSummary.followUpReplied || 0),
+    complaintResolutions: Number(outcomesSummary.complaintResolved || 0),
+    campaignReplies: Number(outcomesSummary.campaignReplied || 0),
+    campaignConversions: Number(outcomesSummary.campaignConverted || 0),
+    directVsFollowUpSplit: outcomesSummary.directVsFollowUpSplit || {
+      direct: 0,
+      followUp: 0,
+      operator: 0,
+      manual: 0,
+    },
+    recentSuccessfulOutcomes: Array.isArray(recentOutcomes) ? recentOutcomes.slice(0, 5) : [],
+    contactsWithProgression: Number(contactsSummary.contactsWithOutcomes || 0),
+    highValueWithoutOutcome: Number(contactsSummary.highValueWithoutOutcome || 0),
     contactsNeedingAttention: Number(contactsSummary.contactsNeedingAttention || 0),
     complaintRiskContacts: Number(contactsSummary.complaintRiskContacts || 0),
     leadsWithoutNextStep: Number(contactsSummary.leadsWithoutNextStep || 0),
     customersAwaitingFollowUp: Number(contactsSummary.customersAwaitingFollowUp || 0),
+    lifecycleCounts: contactsSummary.lifecycleCounts || {
+      new: 0,
+      activeLead: 0,
+      qualified: 0,
+      customer: 0,
+      supportIssue: 0,
+      complaintRisk: 0,
+      dormant: 0,
+    },
+    overdueHighValueContacts: (contacts || []).filter((contact) =>
+      ["active_lead", "qualified"].includes(cleanText(contact.lifecycleState))
+      && cleanText(contact.nextAction?.key) !== "no_action_needed"
+      && contact.hasMeaningfulOutcome !== true
+    ).length,
     topTask: getOpenTaskHeadline(tasks),
   };
 }

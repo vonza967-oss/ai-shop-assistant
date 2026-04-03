@@ -69,6 +69,17 @@ const CONTACT_EMPTY_STATE = Object.freeze({
   complaintRiskContacts: 0,
   leadsWithoutNextStep: 0,
   customersAwaitingFollowUp: 0,
+  contactsWithOutcomes: 0,
+  highValueWithoutOutcome: 0,
+  lifecycleCounts: {
+    new: 0,
+    activeLead: 0,
+    qualified: 0,
+    customer: 0,
+    supportIssue: 0,
+    complaintRisk: 0,
+    dormant: 0,
+  },
 });
 
 function isMissingRelationError(error, relationName = "") {
@@ -175,6 +186,7 @@ function mapStoredIdentityRow(row = {}) {
 
 function createIdentityMaps() {
   return {
+    contact_id: new Map(),
     email: new Map(),
     phone: new Map(),
     person_key: new Map(),
@@ -454,12 +466,16 @@ function getOutcomeFlags(outcome = {}) {
   const flags = [];
   const outcomeType = cleanText(outcome.outcomeType);
 
-  if (["booking_completed", "quote_requested", "checkout_completed"].includes(outcomeType)) {
+  if (["booking_confirmed", "quote_requested", "quote_sent", "quote_accepted", "checkout_completed", "campaign_converted"].includes(outcomeType)) {
     flags.push("customer");
   }
 
-  if (["booking_started", "booking_completed"].includes(outcomeType)) {
+  if (["booking_started", "booking_confirmed"].includes(outcomeType)) {
     flags.push("booked");
+  }
+
+  if (["complaint_opened"].includes(outcomeType)) {
+    flags.push("complaint");
   }
 
   return flags;
@@ -549,7 +565,10 @@ function buildTimelineEntries(group = {}) {
       at: outcome.occurredAt || outcome.createdAt || null,
       source: "conversion",
       label: cleanText(outcome.label || outcome.outcomeType || "Outcome"),
-      summary: cleanText(outcome.attributionPath || outcome.sourceType || "Conversion outcome"),
+      summary: cleanText([
+        outcome.sourceLabel || outcome.attributionPath || outcome.sourceType,
+        outcome.pageUrl || outcome.successUrl || outcome.relatedIntentType || "",
+      ].filter(Boolean).join(" · ") || "Conversion outcome"),
       outcomeId: outcome.id,
     });
   });
@@ -603,9 +622,12 @@ function buildSuggestedLifecycleState(group = {}, now = Date.now()) {
 
   if (
     hasBookedEvent
-    || latestOutcomeTypes.has("booking_completed")
+    || latestOutcomeTypes.has("booking_confirmed")
     || latestOutcomeTypes.has("quote_requested")
+    || latestOutcomeTypes.has("quote_sent")
+    || latestOutcomeTypes.has("quote_accepted")
     || latestOutcomeTypes.has("checkout_completed")
+    || latestOutcomeTypes.has("campaign_converted")
     || flagSet.has("customer")
   ) {
     return "customer";
@@ -744,6 +766,9 @@ function buildNextAction(contact = {}, group = {}) {
 
 function buildContactSummary(group = {}, options = {}) {
   const timeline = buildTimelineEntries(group);
+  const latestOutcome = group.outcomes
+    .slice()
+    .sort((left, right) => parseTimestamp(right.occurredAt || right.createdAt) - parseTimestamp(left.occurredAt || left.createdAt))[0] || null;
   const lastActivityAt = timeline[0]?.at || group.lastActivityAt || group.persistedContact?.lastActivityAt || null;
   const sourceSet = new Set(group.sourceKinds.concat(
     group.threads.length ? ["inbox"] : [],
@@ -786,6 +811,20 @@ function buildContactSummary(group = {}, options = {}) {
     primaryFollowUpId: cleanText(group.followUps[0]?.id),
     leadId: cleanText(group.leads[0]?.id),
     personKey: cleanText(group.personKeys[0]),
+    latestOutcome: latestOutcome ? {
+      id: cleanText(latestOutcome.id),
+      outcomeType: cleanText(latestOutcome.outcomeType),
+      label: cleanText(latestOutcome.label || latestOutcome.outcomeType),
+      sourceLabel: cleanText(latestOutcome.sourceLabel || latestOutcome.attributionPath || latestOutcome.sourceType),
+      occurredAt: latestOutcome.occurredAt || latestOutcome.createdAt || null,
+      contextLabel: cleanText(
+        latestOutcome.pageUrl
+        || latestOutcome.successUrl
+        || latestOutcome.relatedIntentType
+        || latestOutcome.sourceLabel
+      ),
+    } : null,
+    hasMeaningfulOutcome: Boolean(latestOutcome),
     timeline: timeline.slice(0, 12),
     counts: {
       leads: group.leads.length,
@@ -839,6 +878,36 @@ function buildFilterSummary(contacts = []) {
 }
 
 function buildContactsSummary(contacts = []) {
+  const lifecycleCounts = contacts.reduce((counts, contact) => {
+    const state = cleanText(contact.lifecycleState);
+
+    if (state === "active_lead") {
+      counts.activeLead += 1;
+    } else if (state === "support_issue") {
+      counts.supportIssue += 1;
+    } else if (state === "complaint_risk") {
+      counts.complaintRisk += 1;
+    } else if (state === "customer") {
+      counts.customer += 1;
+    } else if (state === "qualified") {
+      counts.qualified += 1;
+    } else if (state === "dormant") {
+      counts.dormant += 1;
+    } else {
+      counts.new += 1;
+    }
+
+    return counts;
+  }, {
+    new: 0,
+    activeLead: 0,
+    qualified: 0,
+    customer: 0,
+    supportIssue: 0,
+    complaintRisk: 0,
+    dormant: 0,
+  });
+
   return {
     totalContacts: contacts.length,
     contactsNeedingAttention: contacts.filter((contact) => cleanText(contact.nextAction?.key) !== "no_action_needed").length,
@@ -854,6 +923,12 @@ function buildContactsSummary(contacts = []) {
       cleanText(contact.lifecycleState) === "customer"
       && ["add_review_request_campaign", "send_quote_follow_up"].includes(cleanText(contact.nextAction?.key))
     ).length,
+    contactsWithOutcomes: contacts.filter((contact) => contact.hasMeaningfulOutcome === true).length,
+    highValueWithoutOutcome: contacts.filter((contact) =>
+      ["active_lead", "qualified"].includes(cleanText(contact.lifecycleState))
+      && contact.hasMeaningfulOutcome !== true
+    ).length,
+    lifecycleCounts,
   };
 }
 
@@ -888,6 +963,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
 
     groups.push(group);
 
+    registerIdentity(identityMaps, group, "contact_id", storedContact.id);
     registerIdentity(identityMaps, group, "email", storedContact.primaryEmail);
     registerIdentity(identityMaps, group, "phone", storedContact.primaryPhoneNormalized || storedContact.primaryPhone);
     registerIdentity(identityMaps, group, "person_key", storedContact.primaryPersonKey);
@@ -930,6 +1006,9 @@ export function buildContactWorkspaceFromRecords(options = {}) {
   };
 
   normalizeArray(options.leads).forEach((lead) => {
+    const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(lead.contactId)),
+    ].filter(Boolean);
     const strongIdentities = [
       { type: "email", value: lead.contactEmail },
       { type: "phone", value: lead.contactPhoneNormalized || lead.contactPhone },
@@ -939,7 +1018,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
     const weakIdentities = [
       { type: "session_key", value: lead.visitorSessionKey },
     ].filter((entry) => cleanText(entry.value));
-    const group = findOrCreateGroup({ strongIdentities, weakIdentities });
+    const group = findOrCreateGroup({ explicitGroups, strongIdentities, weakIdentities });
 
     addToGroupCollection(group, "leads", lead);
     addIdentityValues(group, {
@@ -963,6 +1042,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
 
   normalizeArray(options.followUps).forEach((followUp) => {
     const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(followUp.contactId)),
       identityMaps.follow_up_id.get(cleanText(followUp.id)),
       identityMaps.person_key.get(cleanText(followUp.personKey)),
       normalizeArray(followUp.linkedLeadIds || []).map((leadId) => identityMaps.lead_id.get(cleanText(leadId))),
@@ -994,6 +1074,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
   normalizeArray(options.threads).forEach((thread) => {
     const threadEmails = getThreadContactEmails(thread);
     const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(thread.contactId)),
       identityMaps.thread_id.get(cleanText(thread.id)),
       identityMaps.lead_id.get(cleanText(thread.relatedLeadId)),
       identityMaps.follow_up_id.get(cleanText(thread.relatedFollowUpId)),
@@ -1017,6 +1098,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
 
   normalizeArray(options.events).forEach((event) => {
     const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(event.contactId)),
       identityMaps.event_id.get(cleanText(event.id)),
       identityMaps.lead_id.get(cleanText(event.leadId)),
     ].filter(Boolean);
@@ -1046,6 +1128,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
         campaignTitle: campaign.title,
       };
       const explicitGroups = [
+        identityMaps.contact_id.get(cleanText(recipient.contactId)),
         identityMaps.campaign_recipient_id.get(cleanText(recipient.id)),
         identityMaps.lead_id.get(cleanText(recipient.leadId)),
         identityMaps.person_key.get(cleanText(recipient.personKey)),
@@ -1075,6 +1158,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
 
   normalizeArray(options.tasks).forEach((task) => {
     const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(task.contactId)),
       identityMaps.thread_id.get(cleanText(task.relatedThreadId)),
       identityMaps.event_id.get(cleanText(task.relatedEventId)),
       identityMaps.lead_id.get(cleanText(task.relatedLeadId)),
@@ -1102,6 +1186,7 @@ export function buildContactWorkspaceFromRecords(options = {}) {
 
   normalizeArray(options.outcomes).forEach((outcome) => {
     const explicitGroups = [
+      identityMaps.contact_id.get(cleanText(outcome.contactId)),
       identityMaps.lead_id.get(cleanText(outcome.leadId)),
       identityMaps.follow_up_id.get(cleanText(outcome.followUpId)),
       identityMaps.person_key.get(cleanText(outcome.personKey)),

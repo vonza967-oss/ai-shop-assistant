@@ -780,7 +780,7 @@ export function createAgentRouter(deps = {}) {
         followUpWorkflowAvailable: followUpSync?.persistenceAvailable !== false,
         knowledgeFixWorkflowAvailable: knowledgeFixSync?.persistenceAvailable !== false,
       });
-      const [leadCaptures, conversionOutcomes] = await Promise.all([
+      const [leadCapturesResult, conversionOutcomesResult] = await Promise.allSettled([
         listLeadCapturesImpl(supabase, {
           agentId,
           ownerUserId: user?.id || null,
@@ -790,6 +790,12 @@ export function createAgentRouter(deps = {}) {
           ownerUserId: user?.id || null,
         }),
       ]);
+      const leadCaptures = leadCapturesResult.status === "fulfilled"
+        ? leadCapturesResult.value
+        : { records: [], persistenceAvailable: false };
+      const conversionOutcomes = conversionOutcomesResult.status === "fulfilled"
+        ? conversionOutcomesResult.value
+        : { records: [], summary: null, recentOutcomes: [], persistenceAvailable: false };
       const routingEvents = await listWidgetRoutingEventsByAgentIdImpl(supabase, {
         agentId,
       });
@@ -1010,6 +1016,7 @@ export function createAgentRouter(deps = {}) {
         endAt: req.body.end_at || req.body.endAt,
         timezone: req.body.timezone,
         location: req.body.location,
+        contactId: req.body.contact_id || req.body.contactId,
         attendeeEmails: req.body.attendee_emails || req.body.attendeeEmails,
         leadId: req.body.lead_id || req.body.leadId,
         relatedActionKey: req.body.related_action_key || req.body.relatedActionKey,
@@ -1071,6 +1078,7 @@ export function createAgentRouter(deps = {}) {
         goal: req.body.goal,
         recipientSource: req.body.recipient_source || req.body.recipientSource,
         sendWindowHour: req.body.send_window_hour || req.body.sendWindowHour,
+        contactId: req.body.contact_id || req.body.contactId,
         contactName: req.body.contact_name || req.body.contactName,
         contactEmail: req.body.contact_email || req.body.contactEmail,
         personKey: req.body.person_key || req.body.personKey,
@@ -1223,6 +1231,7 @@ export function createAgentRouter(deps = {}) {
         businessName: agent.assistantName || agent.name,
         assistantName: agent.assistantName || agent.name,
         actionType: req.body.action_type || req.body.actionType,
+        contactId: req.body.contact_id || req.body.contactId,
         contactName: req.body.contact_name || req.body.contactName,
         contactEmail: req.body.contact_email || req.body.contactEmail,
         contactPhone: req.body.contact_phone || req.body.contactPhone,
@@ -1383,8 +1392,17 @@ export function createAgentRouter(deps = {}) {
         conversationId: req.body.conversation_id || req.body.conversationId,
         personKey: req.body.person_key || req.body.personKey,
         leadId: req.body.lead_id || req.body.leadId,
+        contactId: req.body.contact_id || req.body.contactId,
         actionKey: req.body.action_key || req.body.actionKey,
         followUpId: req.body.follow_up_id || req.body.followUpId,
+        inboxThreadId: req.body.inbox_thread_id || req.body.inboxThreadId,
+        calendarEventId: req.body.calendar_event_id || req.body.calendarEventId,
+        campaignId: req.body.campaign_id || req.body.campaignId,
+        campaignRecipientId: req.body.campaign_recipient_id || req.body.campaignRecipientId,
+        operatorTaskId: req.body.operator_task_id || req.body.operatorTaskId,
+        manualOutcomeLabel: req.body.manual_outcome_label || req.body.manualOutcomeLabel,
+        manualResolution: req.body.manual_resolution || req.body.manualResolution,
+        attributionPath: req.body.attribution_path || req.body.attributionPath,
         note: req.body.note,
       });
 

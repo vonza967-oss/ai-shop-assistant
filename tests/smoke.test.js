@@ -354,9 +354,11 @@ function createAgentTestDeps(state) {
       directOutcomeCount: 0,
       followUpAssistedOutcomeCount: 0,
       bookingStarted: 0,
+      bookingConfirmed: 0,
       bookingCompleted: 0,
-      quoteStarted: 0,
       quoteRequested: 0,
+      quoteSent: 0,
+      quoteAccepted: 0,
       checkoutStarted: 0,
       checkoutCompleted: 0,
       contactClicked: 0,
@@ -364,11 +366,25 @@ function createAgentTestDeps(state) {
       phoneClicked: 0,
       followUpSent: 0,
       followUpReplied: 0,
+      complaintOpened: 0,
+      complaintResolved: 0,
+      campaignSent: 0,
+      campaignReplied: 0,
+      campaignConverted: 0,
       manualMarked: 0,
       directVsFollowUpSplit: {
         direct: 0,
         followUp: 0,
+        operator: 0,
         manual: 0,
+      },
+      pathCounts: {
+        directRoute: 0,
+        followUpAssisted: 0,
+        inboxThread: 0,
+        calendarBooking: 0,
+        campaign: 0,
+        manualOwner: 0,
       },
       topPages: [],
       topIntents: [],
@@ -379,16 +395,24 @@ function createAgentTestDeps(state) {
         case "booking_started":
           summary.bookingStarted += 1;
           break;
-        case "booking_completed":
+        case "booking_confirmed":
+          summary.bookingConfirmed += 1;
           summary.bookingCompleted += 1;
           summary.confirmedBusinessOutcomes += 1;
           summary.assistedConversions += 1;
           break;
-        case "quote_started":
-          summary.quoteStarted += 1;
-          break;
         case "quote_requested":
           summary.quoteRequested += 1;
+          summary.confirmedBusinessOutcomes += 1;
+          summary.assistedConversions += 1;
+          break;
+        case "quote_sent":
+          summary.quoteSent += 1;
+          summary.confirmedBusinessOutcomes += 1;
+          summary.assistedConversions += 1;
+          break;
+        case "quote_accepted":
+          summary.quoteAccepted += 1;
           summary.confirmedBusinessOutcomes += 1;
           summary.assistedConversions += 1;
           break;
@@ -419,7 +443,27 @@ function createAgentTestDeps(state) {
           summary.followUpReplied += 1;
           summary.assistedConversions += 1;
           break;
-        case "conversion_marked_manual":
+        case "complaint_opened":
+          summary.complaintOpened += 1;
+          break;
+        case "complaint_resolved":
+          summary.complaintResolved += 1;
+          summary.confirmedBusinessOutcomes += 1;
+          summary.assistedConversions += 1;
+          break;
+        case "campaign_sent":
+          summary.campaignSent += 1;
+          break;
+        case "campaign_replied":
+          summary.campaignReplied += 1;
+          summary.assistedConversions += 1;
+          break;
+        case "campaign_converted":
+          summary.campaignConverted += 1;
+          summary.confirmedBusinessOutcomes += 1;
+          summary.assistedConversions += 1;
+          break;
+        case "manual_outcome_marked":
           summary.manualMarked += 1;
           summary.assistedConversions += 1;
           break;
@@ -427,15 +471,27 @@ function createAgentTestDeps(state) {
           break;
       }
 
-      if (["booking_completed", "quote_requested", "checkout_completed", "contact_clicked", "email_clicked", "phone_clicked", "follow_up_replied", "conversion_marked_manual"].includes(outcome.outcomeType)) {
-        if (outcome.attributionPath === "follow_up") {
+      if (["booking_started", "booking_confirmed", "quote_requested", "quote_sent", "quote_accepted", "checkout_started", "checkout_completed", "contact_clicked", "email_clicked", "phone_clicked", "follow_up_replied", "complaint_resolved", "campaign_replied", "campaign_converted", "manual_outcome_marked"].includes(outcome.outcomeType)) {
+        if (outcome.attributionPath === "follow_up_assisted") {
           summary.followUpAssistedOutcomeCount += 1;
           summary.directVsFollowUpSplit.followUp += 1;
-        } else if (outcome.attributionPath === "manual") {
+          summary.pathCounts.followUpAssisted += 1;
+        } else if (outcome.attributionPath === "manual_owner") {
           summary.directVsFollowUpSplit.manual += 1;
+          summary.pathCounts.manualOwner += 1;
+        } else if (outcome.attributionPath === "inbox_thread") {
+          summary.directVsFollowUpSplit.operator += 1;
+          summary.pathCounts.inboxThread += 1;
+        } else if (outcome.attributionPath === "calendar_booking") {
+          summary.directVsFollowUpSplit.operator += 1;
+          summary.pathCounts.calendarBooking += 1;
+        } else if (outcome.attributionPath === "campaign") {
+          summary.directVsFollowUpSplit.operator += 1;
+          summary.pathCounts.campaign += 1;
         } else {
           summary.directOutcomeCount += 1;
           summary.directVsFollowUpSplit.direct += 1;
+          summary.pathCounts.directRoute += 1;
         }
       }
     });
@@ -447,7 +503,7 @@ function createAgentTestDeps(state) {
     const outcome = {
       id: payload.id || nextConversionOutcomeId(),
       label: payload.label || payload.outcomeType,
-      attributionPath: payload.attributionPath || (payload.followUpId ? "follow_up" : payload.sourceType === "manual_mark" ? "manual" : "direct"),
+      attributionPath: payload.attributionPath || (payload.followUpId ? "follow_up_assisted" : payload.sourceType === "manual_owner" ? "manual_owner" : "direct_route"),
       occurredAt: payload.occurredAt || new Date().toISOString(),
       ...payload,
     };
@@ -807,7 +863,7 @@ function createAgentTestDeps(state) {
       const outcomeType = payload.ctaType === "booking"
         ? "booking_started"
         : payload.ctaType === "quote"
-          ? "quote_started"
+          ? "quote_requested"
           : payload.ctaType === "checkout"
             ? "checkout_started"
             : payload.targetType === "email"
@@ -817,7 +873,7 @@ function createAgentTestDeps(state) {
                 : "contact_clicked";
       const outcome = pushOutcome({
         outcomeType,
-        sourceType: payload.followUpId ? "follow_up" : "direct_cta",
+        sourceType: payload.followUpId ? "follow_up_workflow" : "direct_route",
         ctaEventId: "cta-event-1",
         actionKey: payload.actionKey || "",
         leadId: payload.leadId || "",
@@ -836,7 +892,7 @@ function createAgentTestDeps(state) {
     detectConversionOutcomesForPage: async (_supabase, payload) => {
       const explicitType = payload.outcomeType;
       const inferredType = explicitType
-        || (String(payload.pageUrl || "").includes("quote") ? "quote_requested" : String(payload.pageUrl || "").includes("checkout") ? "checkout_completed" : "booking_completed");
+        || (String(payload.pageUrl || "").includes("quote") ? "quote_requested" : String(payload.pageUrl || "").includes("checkout") ? "checkout_completed" : "booking_confirmed");
       const outcome = pushOutcome({
         outcomeType: inferredType,
         sourceType: payload.source === "ping" ? "external_success_ping" : "success_url_match",
@@ -845,7 +901,7 @@ function createAgentTestDeps(state) {
         followUpId: payload.followUpId || "",
         pageUrl: payload.pageUrl || "",
         relatedIntentType: payload.relatedIntentType || "",
-        attributionPath: payload.followUpId ? "follow_up" : "direct",
+        attributionPath: payload.followUpId ? "follow_up_assisted" : "direct_route",
       });
       return {
         ok: true,
@@ -857,13 +913,13 @@ function createAgentTestDeps(state) {
     markManualConversionOutcome: async (_supabase, payload) => {
       const outcome = pushOutcome({
         outcomeType: payload.outcomeType,
-        sourceType: "manual_mark",
+        sourceType: "manual_owner",
         actionKey: payload.actionKey || "",
         leadId: payload.leadId || "",
         followUpId: payload.followUpId || "",
         pageUrl: payload.pageUrl || "",
         relatedIntentType: payload.relatedIntentType || "",
-        attributionPath: payload.followUpId ? "follow_up" : "manual",
+        attributionPath: payload.followUpId ? "follow_up_assisted" : "manual_owner",
         label: payload.outcomeType,
       });
       if (payload.actionKey) {
@@ -887,7 +943,7 @@ function createAgentTestDeps(state) {
         actionKey: payload.actionKey || "",
         leadId: payload.leadId || "",
         followUpId: payload.followUpId || "",
-        attributionPath: "follow_up",
+        attributionPath: "follow_up_assisted",
       }),
       persistenceAvailable: true,
     }),

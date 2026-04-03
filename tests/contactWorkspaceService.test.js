@@ -193,10 +193,12 @@ test("per-contact timeline is chronological across chat, inbox, and outcomes", (
     outcomes: [
       {
         id: "outcome-1",
+        contactId: "contact-1",
         personKey: "",
         leadId: "lead-1",
         outcomeType: "quote_requested",
         label: "Quote requested",
+        sourceLabel: "Direct route",
         occurredAt: "2026-04-03T12:00:00.000Z",
       },
     ],
@@ -205,6 +207,35 @@ test("per-contact timeline is chronological across chat, inbox, and outcomes", (
   assert.equal(result.list[0].timeline[0].source, "conversion");
   assert.equal(result.list[0].timeline[1].source, "inbox");
   assert.equal(result.list[0].timeline[2].source, "chat");
+  assert.equal(result.list[0].latestOutcome?.label, "Quote requested");
+  assert.equal(result.summary.contactsWithOutcomes, 1);
+});
+
+test("contact-linked outcomes stitch by contact_id even without email or lead identity", () => {
+  const result = buildContactWorkspaceFromRecords({
+    storedContacts: [
+      {
+        id: "contact-1",
+        displayName: "Casey North",
+        primaryEmail: "casey@example.com",
+        lifecycleState: "active_lead",
+      },
+    ],
+    outcomes: [
+      {
+        id: "outcome-1",
+        contactId: "contact-1",
+        outcomeType: "campaign_replied",
+        label: "Campaign replied",
+        sourceLabel: "Campaign",
+        occurredAt: "2026-04-03T12:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(result.list.length, 1);
+  assert.equal(result.list[0].latestOutcome?.label, "Campaign replied");
+  assert.equal(result.list[0].counts.outcomes, 1);
 });
 
 test("lifecycle and next-action logic stays deterministic for complaint-risk contacts", () => {

@@ -3,7 +3,14 @@ import { randomUUID } from "node:crypto";
 import {
   ACTION_QUEUE_STATUS_TABLE,
   CONVERSION_OUTCOME_TABLE,
+  FOLLOW_UP_WORKFLOW_TABLE,
   LEAD_CAPTURE_TABLE,
+  OPERATOR_CALENDAR_EVENT_TABLE,
+  OPERATOR_CAMPAIGN_RECIPIENT_TABLE,
+  OPERATOR_CAMPAIGN_TABLE,
+  OPERATOR_CONTACT_TABLE,
+  OPERATOR_INBOX_THREAD_TABLE,
+  OPERATOR_TASK_TABLE,
 } from "../../config/constants.js";
 import { cleanText } from "../../utils/text.js";
 import { normalizeWebsiteUrl } from "../../utils/url.js";
@@ -12,9 +19,10 @@ import { updateActionQueueStatus } from "../analytics/actionQueueService.js";
 
 export const CONVERSION_OUTCOME_TYPES = [
   "booking_started",
-  "booking_completed",
-  "quote_started",
+  "booking_confirmed",
   "quote_requested",
+  "quote_sent",
+  "quote_accepted",
   "checkout_started",
   "checkout_completed",
   "contact_clicked",
@@ -22,16 +30,25 @@ export const CONVERSION_OUTCOME_TYPES = [
   "phone_clicked",
   "follow_up_sent",
   "follow_up_replied",
-  "conversion_marked_manual",
+  "complaint_opened",
+  "complaint_resolved",
+  "campaign_sent",
+  "campaign_replied",
+  "campaign_converted",
+  "manual_outcome_marked",
 ];
 
 export const CONVERSION_SOURCE_TYPES = [
-  "direct_cta",
-  "follow_up",
-  "manual_mark",
+  "direct_route",
+  "follow_up_workflow",
+  "manual_owner",
   "success_url_match",
   "external_success_ping",
   "workflow_sync",
+  "inbox_thread",
+  "calendar_event",
+  "campaign",
+  "operator_task",
 ];
 
 export const CONVERSION_CONFIRMATION_LEVELS = [
@@ -43,26 +60,64 @@ export const CONVERSION_CONFIRMATION_LEVELS = [
 
 export const SUCCESS_URL_MATCH_MODES = ["exact", "path_prefix"];
 
+export const OUTCOME_ATTRIBUTION_PATHS = [
+  "direct_route",
+  "follow_up_assisted",
+  "inbox_thread",
+  "calendar_booking",
+  "campaign",
+  "manual_owner",
+];
+
+const OUTCOME_TYPE_ALIASES = Object.freeze({
+  booking_completed: "booking_confirmed",
+  quote_started: "quote_requested",
+  conversion_marked_manual: "manual_outcome_marked",
+});
+
+const SOURCE_TYPE_ALIASES = Object.freeze({
+  direct_cta: "direct_route",
+  follow_up: "follow_up_workflow",
+  manual_mark: "manual_owner",
+});
+
+const ATTRIBUTION_PATH_ALIASES = Object.freeze({
+  direct: "direct_route",
+  follow_up: "follow_up_assisted",
+  manual: "manual_owner",
+});
+
 const COMPLETED_OUTCOME_TYPES = new Set([
-  "booking_completed",
+  "booking_started",
+  "booking_confirmed",
   "quote_requested",
+  "quote_sent",
+  "quote_accepted",
+  "checkout_started",
   "checkout_completed",
   "contact_clicked",
   "email_clicked",
   "phone_clicked",
   "follow_up_replied",
-  "conversion_marked_manual",
+  "complaint_resolved",
+  "campaign_replied",
+  "campaign_converted",
+  "manual_outcome_marked",
 ]);
 
 const BUSINESS_SUCCESS_OUTCOME_TYPES = new Set([
-  "booking_completed",
+  "booking_confirmed",
   "quote_requested",
+  "quote_sent",
+  "quote_accepted",
   "checkout_completed",
+  "complaint_resolved",
+  "campaign_converted",
 ]);
 
 const CLICK_OUTCOME_TYPES = new Set([
   "booking_started",
-  "quote_started",
+  "quote_requested",
   "checkout_started",
   "contact_clicked",
   "email_clicked",
@@ -82,6 +137,7 @@ const LEAD_SELECT = [
   "latest_action_key",
   "related_action_keys",
   "related_follow_up_id",
+  "contact_id",
   "contact_email",
   "contact_phone",
 ].join(", ");
@@ -107,12 +163,19 @@ const OUTCOME_SELECT = [
   "conversation_id",
   "person_key",
   "lead_id",
+  "contact_id",
   "action_key",
   "follow_up_id",
+  "inbox_thread_id",
+  "calendar_event_id",
+  "campaign_id",
+  "campaign_recipient_id",
+  "operator_task_id",
   "page_url",
   "origin",
   "target_url",
   "success_url",
+  "attribution_path",
   "metadata",
   "occurred_at",
   "created_at",
@@ -127,7 +190,8 @@ function isMissingRelationError(error, relationName) {
     error?.code === "42703" ||
     error?.code === "42P01" ||
     message.includes(`'public.${relationName}'`) ||
-    message.includes(`${relationName} was not found`)
+    message.includes(`${relationName} was not found`) ||
+    (message.includes("column") && message.includes("does not exist"))
   );
 }
 
@@ -208,17 +272,51 @@ function normalizeTargetUrl(value) {
 
 function normalizeOutcomeType(value) {
   const normalized = cleanText(value).toLowerCase();
-  return CONVERSION_OUTCOME_TYPES.includes(normalized) ? normalized : "";
+  const canonical = OUTCOME_TYPE_ALIASES[normalized] || normalized;
+  return CONVERSION_OUTCOME_TYPES.includes(canonical) ? canonical : "";
 }
 
 function normalizeSourceType(value) {
   const normalized = cleanText(value).toLowerCase();
-  return CONVERSION_SOURCE_TYPES.includes(normalized) ? normalized : "";
+  const canonical = SOURCE_TYPE_ALIASES[normalized] || normalized;
+  return CONVERSION_SOURCE_TYPES.includes(canonical) ? canonical : "";
+}
+
+function normalizeSourceTypeWithFallback(value, fallbackValue = "workflow_sync") {
+  return normalizeSourceType(value) || fallbackValue;
+}
+
+function normalizeAttributionPath(value, fallbackValue = "direct_route") {
+  const normalized = cleanText(value).toLowerCase();
+  const canonical = ATTRIBUTION_PATH_ALIASES[normalized] || normalized;
+  return OUTCOME_ATTRIBUTION_PATHS.includes(canonical) ? canonical : fallbackValue;
 }
 
 function normalizeConfirmationLevel(value, fallbackValue = "observed") {
   const normalized = cleanText(value).toLowerCase();
   return CONVERSION_CONFIRMATION_LEVELS.includes(normalized) ? normalized : fallbackValue;
+}
+
+function getConfirmationLevelRank(value) {
+  switch (normalizeConfirmationLevel(value, "clicked")) {
+    case "manual":
+      return 4;
+    case "confirmed":
+      return 3;
+    case "observed":
+      return 2;
+    case "clicked":
+    default:
+      return 1;
+  }
+}
+
+function pickStrongerConfirmationLevel(currentValue, nextValue) {
+  const currentLevel = normalizeConfirmationLevel(currentValue, "clicked");
+  const nextLevel = normalizeConfirmationLevel(nextValue, "observed");
+  return getConfirmationLevelRank(nextLevel) >= getConfirmationLevelRank(currentLevel)
+    ? nextLevel
+    : currentLevel;
 }
 
 export function normalizeSuccessUrlMatchMode(value, fallbackValue = "path_prefix") {
@@ -280,6 +378,47 @@ function normalizeMetadata(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function getDefaultAttributionPath(options = {}) {
+  if (cleanUuid(options.campaignRecipientId) || cleanUuid(options.campaignId)) {
+    return "campaign";
+  }
+
+  if (cleanUuid(options.calendarEventId)) {
+    return "calendar_booking";
+  }
+
+  if (cleanUuid(options.inboxThreadId)) {
+    return "inbox_thread";
+  }
+
+  if (cleanUuid(options.followUpId)) {
+    return "follow_up_assisted";
+  }
+
+  if (normalizeSourceType(options.sourceType) === "manual_owner") {
+    return "manual_owner";
+  }
+
+  return "direct_route";
+}
+
+function getOutcomeSourceLabel(attributionPath = "") {
+  switch (normalizeAttributionPath(attributionPath)) {
+    case "follow_up_assisted":
+      return "Follow-up";
+    case "inbox_thread":
+      return "Inbox";
+    case "calendar_booking":
+      return "Calendar";
+    case "campaign":
+      return "Campaign";
+    case "manual_owner":
+      return "Manual owner mark";
+    default:
+      return "Direct route";
+  }
+}
+
 function mapContactClickOutcome(targetType = "") {
   switch (cleanText(targetType).toLowerCase()) {
     case "email":
@@ -296,7 +435,7 @@ function mapCtaClickToOutcomeType(ctaType = "", targetType = "") {
     case "booking":
       return "booking_started";
     case "quote":
-      return "quote_started";
+      return "quote_requested";
     case "checkout":
       return "checkout_started";
     case "contact":
@@ -309,9 +448,7 @@ function mapCtaClickToOutcomeType(ctaType = "", targetType = "") {
 function mapStartedOutcomeToCompletedType(outcomeType = "") {
   switch (normalizeOutcomeType(outcomeType)) {
     case "booking_started":
-      return "booking_completed";
-    case "quote_started":
-      return "quote_requested";
+      return "booking_confirmed";
     case "checkout_started":
       return "checkout_completed";
     default:
@@ -323,12 +460,14 @@ function mapOutcomeTypeToLabel(outcomeType = "") {
   switch (normalizeOutcomeType(outcomeType)) {
     case "booking_started":
       return "Booking started";
-    case "booking_completed":
-      return "Booking completed";
-    case "quote_started":
-      return "Quote started";
+    case "booking_confirmed":
+      return "Booking confirmed";
     case "quote_requested":
       return "Quote requested";
+    case "quote_sent":
+      return "Quote sent";
+    case "quote_accepted":
+      return "Quote accepted";
     case "checkout_started":
       return "Checkout started";
     case "checkout_completed":
@@ -343,7 +482,17 @@ function mapOutcomeTypeToLabel(outcomeType = "") {
       return "Follow-up sent";
     case "follow_up_replied":
       return "Follow-up replied";
-    case "conversion_marked_manual":
+    case "complaint_opened":
+      return "Complaint opened";
+    case "complaint_resolved":
+      return "Complaint resolved";
+    case "campaign_sent":
+      return "Campaign sent";
+    case "campaign_replied":
+      return "Campaign replied";
+    case "campaign_converted":
+      return "Campaign converted";
+    case "manual_outcome_marked":
       return "Manual outcome";
     default:
       return "Outcome";
@@ -389,7 +538,7 @@ function getMatchedConfiguredOutcomes(settings, pageUrl, options = {}) {
   const includeStartMatches = options.includeStartMatches === true;
 
   if (matchConfiguredUrl(pageUrl, settings.bookingSuccessUrl, mode)) {
-    outcomes.push({ outcomeType: "booking_completed", successUrl: settings.bookingSuccessUrl });
+    outcomes.push({ outcomeType: "booking_confirmed", successUrl: settings.bookingSuccessUrl });
   }
 
   if (matchConfiguredUrl(pageUrl, settings.quoteSuccessUrl, mode)) {
@@ -405,7 +554,7 @@ function getMatchedConfiguredOutcomes(settings, pageUrl, options = {}) {
   }
 
   if (includeStartMatches && matchConfiguredUrl(pageUrl, settings.quoteStartUrl, mode)) {
-    outcomes.push({ outcomeType: "quote_started", successUrl: settings.quoteStartUrl });
+    outcomes.push({ outcomeType: "quote_requested", successUrl: settings.quoteStartUrl });
   }
 
   return outcomes;
@@ -456,6 +605,7 @@ function normalizeLeadRecord(row = {}) {
     latestActionKey: cleanText(row.latest_action_key || row.latestActionKey),
     relatedActionKeys: uniqueText(row.related_action_keys || row.relatedActionKeys || []),
     relatedFollowUpId: cleanUuid(row.related_follow_up_id || row.relatedFollowUpId),
+    contactId: cleanUuid(row.contact_id || row.contactId),
     contactEmail: cleanText(row.contact_email || row.contactEmail).toLowerCase(),
     contactPhone: cleanText(row.contact_phone || row.contactPhone),
   };
@@ -465,12 +615,22 @@ function normalizeOutcomeRecord(row = {}) {
   const metadata = normalizeMetadata(row.metadata);
   const outcomeType = normalizeOutcomeType(row.outcome_type || row.outcomeType);
   const sourceType = normalizeSourceType(row.source_type || row.sourceType);
-  const inferredPath = cleanText(metadata.attributionPath)
-    || (cleanUuid(row.follow_up_id || row.followUpId) ? "follow_up" : "")
-    || (sourceType === "manual_mark" ? "manual" : "direct");
+  const inferredPath = normalizeAttributionPath(
+    row.attribution_path
+      || row.attributionPath
+      || metadata.attributionPath,
+    getDefaultAttributionPath({
+      sourceType,
+      followUpId: row.follow_up_id || row.followUpId,
+      inboxThreadId: row.inbox_thread_id || row.inboxThreadId,
+      calendarEventId: row.calendar_event_id || row.calendarEventId,
+      campaignId: row.campaign_id || row.campaignId,
+      campaignRecipientId: row.campaign_recipient_id || row.campaignRecipientId,
+    })
+  );
 
   return {
-    id: cleanUuid(row.id),
+    id: cleanText(row.id),
     agentId: cleanText(row.agent_id || row.agentId),
     businessId: cleanText(row.business_id || row.businessId),
     ownerUserId: cleanText(row.owner_user_id || row.ownerUserId),
@@ -490,8 +650,14 @@ function normalizeOutcomeRecord(row = {}) {
     conversationId: cleanText(row.conversation_id || row.conversationId),
     personKey: cleanText(row.person_key || row.personKey),
     leadId: cleanUuid(row.lead_id || row.leadId),
+    contactId: cleanUuid(row.contact_id || row.contactId),
     actionKey: cleanText(row.action_key || row.actionKey),
     followUpId: cleanUuid(row.follow_up_id || row.followUpId),
+    inboxThreadId: cleanUuid(row.inbox_thread_id || row.inboxThreadId),
+    calendarEventId: cleanUuid(row.calendar_event_id || row.calendarEventId),
+    campaignId: cleanUuid(row.campaign_id || row.campaignId),
+    campaignRecipientId: cleanUuid(row.campaign_recipient_id || row.campaignRecipientId),
+    operatorTaskId: cleanUuid(row.operator_task_id || row.operatorTaskId),
     pageUrl: cleanText(row.page_url || row.pageUrl),
     origin: cleanText(row.origin),
     targetUrl: cleanText(row.target_url || row.targetUrl),
@@ -502,6 +668,7 @@ function normalizeOutcomeRecord(row = {}) {
     createdAt: row.created_at || row.createdAt || null,
     updatedAt: row.updated_at || row.updatedAt || null,
     label: mapOutcomeTypeToLabel(outcomeType),
+    sourceLabel: getOutcomeSourceLabel(inferredPath),
   };
 }
 
@@ -669,7 +836,7 @@ async function getLatestSourceOutcomeForSession(supabase, options = {}) {
     .select(OUTCOME_SELECT)
     .eq("install_id", installId)
     .eq("session_id", sessionId)
-    .in("outcome_type", ["booking_started", "quote_started", "checkout_started"])
+    .in("outcome_type", ["booking_started", "quote_requested", "checkout_started"])
     .order("occurred_at", { ascending: false })
     .limit(8);
 
@@ -686,14 +853,14 @@ async function getLatestSourceOutcomeForSession(supabase, options = {}) {
 
 function buildAttributionPath(sourceOutcome = null, followUpId = "") {
   if (cleanUuid(followUpId) || cleanUuid(sourceOutcome?.followUpId)) {
-    return "follow_up";
+    return "follow_up_assisted";
   }
 
-  if (normalizeSourceType(sourceOutcome?.sourceType) === "manual_mark") {
-    return "manual";
+  if (normalizeSourceType(sourceOutcome?.sourceType) === "manual_owner") {
+    return "manual_owner";
   }
 
-  return "direct";
+  return "direct_route";
 }
 
 async function syncOutcomeIntoOperationalState(supabase, outcome) {
@@ -703,7 +870,7 @@ async function syncOutcomeIntoOperationalState(supabase, outcome) {
     return null;
   }
 
-  if (normalized.outcomeType === "booking_completed" || normalized.outcomeType === "checkout_completed") {
+  if (normalized.outcomeType === "booking_confirmed" || normalized.outcomeType === "checkout_completed") {
     return await updateActionQueueStatus(supabase, {
       agentId: normalized.agentId,
       ownerUserId: normalized.ownerUserId,
@@ -744,7 +911,7 @@ function buildOutcomePayload(base = {}) {
     owner_user_id: cleanText(base.ownerUserId) || null,
     install_id: cleanText(base.installId) || null,
     outcome_type: normalizeOutcomeType(base.outcomeType),
-    source_type: normalizeSourceType(base.sourceType),
+    source_type: normalizeSourceTypeWithFallback(base.sourceType),
     confirmation_level: normalizeConfirmationLevel(base.confirmationLevel),
     dedupe_key: cleanText(base.dedupeKey),
     cta_event_id: cleanUuid(base.ctaEventId) || null,
@@ -758,12 +925,29 @@ function buildOutcomePayload(base = {}) {
     conversation_id: cleanText(base.conversationId) || null,
     person_key: cleanText(base.personKey) || null,
     lead_id: cleanUuid(base.leadId) || null,
+    contact_id: cleanUuid(base.contactId) || null,
     action_key: cleanText(base.actionKey) || null,
     follow_up_id: cleanUuid(base.followUpId) || null,
+    inbox_thread_id: cleanUuid(base.inboxThreadId) || null,
+    calendar_event_id: cleanUuid(base.calendarEventId) || null,
+    campaign_id: cleanUuid(base.campaignId) || null,
+    campaign_recipient_id: cleanUuid(base.campaignRecipientId) || null,
+    operator_task_id: cleanUuid(base.operatorTaskId) || null,
     page_url: normalizePageUrl(base.pageUrl) || null,
     origin: normalizeOrigin(base.origin || base.pageUrl) || null,
     target_url: normalizeTargetUrl(base.targetUrl) || null,
     success_url: normalizePageUrl(base.successUrl) || null,
+    attribution_path: normalizeAttributionPath(
+      base.attributionPath,
+      getDefaultAttributionPath({
+        sourceType: base.sourceType,
+        followUpId: base.followUpId,
+        inboxThreadId: base.inboxThreadId,
+        calendarEventId: base.calendarEventId,
+        campaignId: base.campaignId,
+        campaignRecipientId: base.campaignRecipientId,
+      })
+    ),
     metadata,
     occurred_at: occurredAt,
     created_at: occurredAt,
@@ -835,7 +1019,7 @@ export async function recordTrackedCtaClick(supabase, input = {}) {
     || cleanText(leadRecord?.relatedActionKeys?.[0])
     || "";
   const resolvedPersonKey = cleanText(input.personKey) || cleanText(leadRecord?.personKey);
-  const sourceType = resolvedFollowUpId ? "follow_up" : "direct_cta";
+  const sourceType = resolvedFollowUpId ? "follow_up_workflow" : "direct_route";
   const attributionPath = buildAttributionPath(null, resolvedFollowUpId);
   const dedupeKey = [
     installId,
@@ -864,6 +1048,7 @@ export async function recordTrackedCtaClick(supabase, input = {}) {
     conversationId: cleanText(input.conversationId),
     personKey: resolvedPersonKey,
     leadId: cleanUuid(input.leadId) || cleanUuid(leadRecord?.id),
+    contactId: cleanUuid(input.contactId) || cleanUuid(leadRecord?.contactId),
     actionKey: resolvedActionKey,
     followUpId: resolvedFollowUpId,
     pageUrl: input.pageUrl,
@@ -985,7 +1170,52 @@ export async function detectConversionOutcomesForPage(supabase, input = {}) {
       cleanText(match.successUrl || pageUrl),
     ].join("::");
     const sourceType = input.source === "ping" ? "external_success_ping" : "success_url_match";
-    const outcome = await upsertOutcomeRecord(supabase, buildOutcomePayload({
+    const matchingExistingOutcome = existingCtaOutcomes.find((entry) => entry.outcomeType === finalOutcomeType)
+      || (sourceOutcome?.outcomeType === finalOutcomeType ? sourceOutcome : null);
+    let outcome = null;
+
+    if (matchingExistingOutcome?.id) {
+      outcome = await updateOutcomeRecord(supabase, matchingExistingOutcome.id, {
+        business_id: matchingExistingOutcome.businessId || context.business?.id || null,
+        install_id: matchingExistingOutcome.installId || installId || null,
+        source_type: matchingExistingOutcome.sourceType || sourceType,
+        confirmation_level: pickStrongerConfirmationLevel(
+          matchingExistingOutcome.confirmationLevel,
+          requestedOutcomeType ? "confirmed" : "observed"
+        ),
+        related_cta_type: cleanText(matchingExistingOutcome.relatedCtaType) || cleanText(input.ctaType) || cleanText(sourceOutcome?.relatedCtaType) || null,
+        related_target_type: cleanText(matchingExistingOutcome.relatedTargetType) || cleanText(input.targetType) || cleanText(sourceOutcome?.relatedTargetType) || null,
+        related_action_type: cleanText(matchingExistingOutcome.relatedActionType) || cleanText(input.relatedActionType) || cleanText(sourceOutcome?.relatedActionType) || cleanText(leadRecord?.latestActionType) || null,
+        related_intent_type: cleanText(matchingExistingOutcome.relatedIntentType) || cleanText(input.relatedIntentType) || cleanText(sourceOutcome?.relatedIntentType) || null,
+        visitor_id: cleanText(matchingExistingOutcome.visitorId) || cleanText(input.visitorId) || cleanText(sourceOutcome?.visitorId) || cleanText(input.fingerprint) || sessionId || null,
+        session_id: cleanText(matchingExistingOutcome.sessionId) || sessionId || cleanText(sourceOutcome?.sessionId) || null,
+        fingerprint: cleanText(matchingExistingOutcome.fingerprint) || cleanText(input.fingerprint) || cleanText(sourceOutcome?.fingerprint) || null,
+        conversation_id: cleanText(matchingExistingOutcome.conversationId) || cleanText(input.conversationId) || cleanText(sourceOutcome?.conversationId) || null,
+        person_key: cleanText(matchingExistingOutcome.personKey) || cleanText(input.personKey) || cleanText(sourceOutcome?.personKey) || cleanText(leadRecord?.personKey) || null,
+        lead_id: cleanUuid(matchingExistingOutcome.leadId) || cleanUuid(input.leadId) || cleanUuid(sourceOutcome?.leadId) || cleanUuid(leadRecord?.id) || null,
+        contact_id: cleanUuid(matchingExistingOutcome.contactId) || cleanUuid(input.contactId) || cleanUuid(sourceOutcome?.contactId) || cleanUuid(leadRecord?.contactId) || null,
+        action_key: cleanText(matchingExistingOutcome.actionKey) || actionKey || null,
+        follow_up_id: cleanUuid(matchingExistingOutcome.followUpId) || followUpId || null,
+        inbox_thread_id: cleanUuid(matchingExistingOutcome.inboxThreadId) || cleanUuid(input.inboxThreadId) || null,
+        calendar_event_id: cleanUuid(matchingExistingOutcome.calendarEventId) || cleanUuid(input.calendarEventId) || null,
+        campaign_id: cleanUuid(matchingExistingOutcome.campaignId) || cleanUuid(input.campaignId) || null,
+        campaign_recipient_id: cleanUuid(matchingExistingOutcome.campaignRecipientId) || cleanUuid(input.campaignRecipientId) || null,
+        operator_task_id: cleanUuid(matchingExistingOutcome.operatorTaskId) || cleanUuid(input.operatorTaskId) || null,
+        page_url: normalizePageUrl(pageUrl) || normalizePageUrl(matchingExistingOutcome.pageUrl) || null,
+        origin: normalizeOrigin(input.origin || pageUrl || matchingExistingOutcome.origin) || null,
+        success_url: normalizePageUrl(match.successUrl || pageUrl || matchingExistingOutcome.successUrl) || null,
+        attribution_path: normalizeAttributionPath(matchingExistingOutcome.attributionPath, attributionPath),
+        metadata: {
+          ...normalizeMetadata(matchingExistingOutcome.metadata),
+          attributionPath,
+          matchedBy: requestedOutcomeType ? "explicit" : "configured_success_url",
+          matchedPageUrl: pageUrl,
+          sourceOutcomeType: cleanText(sourceOutcome?.outcomeType),
+          confirmationSourceType: sourceType,
+        },
+      });
+    } else {
+      outcome = await upsertOutcomeRecord(supabase, buildOutcomePayload({
       agentId: context.agent.id,
       businessId: context.business?.id || "",
       ownerUserId: context.agent.owner_user_id || "",
@@ -1005,8 +1235,14 @@ export async function detectConversionOutcomesForPage(supabase, input = {}) {
       conversationId: cleanText(input.conversationId) || cleanText(sourceOutcome?.conversationId),
       personKey: cleanText(input.personKey) || cleanText(sourceOutcome?.personKey) || cleanText(leadRecord?.personKey),
       leadId: cleanUuid(input.leadId) || cleanUuid(sourceOutcome?.leadId) || cleanUuid(leadRecord?.id),
+      contactId: cleanUuid(input.contactId) || cleanUuid(sourceOutcome?.contactId) || cleanUuid(leadRecord?.contactId),
       actionKey,
       followUpId,
+      inboxThreadId: input.inboxThreadId,
+      calendarEventId: input.calendarEventId,
+      campaignId: input.campaignId,
+      campaignRecipientId: input.campaignRecipientId,
+      operatorTaskId: input.operatorTaskId,
       pageUrl,
       origin: input.origin,
       targetUrl: cleanText(sourceOutcome?.targetUrl),
@@ -1017,7 +1253,8 @@ export async function detectConversionOutcomesForPage(supabase, input = {}) {
         matchedPageUrl: pageUrl,
         sourceOutcomeType: cleanText(sourceOutcome?.outcomeType),
       },
-    }));
+      }));
+    }
 
     if (outcome) {
       detected.push(outcome);
@@ -1074,7 +1311,7 @@ export async function markManualConversionOutcome(supabase, input = {}) {
     ownerUserId,
     installId,
     outcomeType: normalizedOutcomeType,
-    sourceType: "manual_mark",
+    sourceType: "manual_owner",
     confirmationLevel: "manual",
     dedupeKey,
     ctaEventId: input.ctaEventId,
@@ -1088,13 +1325,31 @@ export async function markManualConversionOutcome(supabase, input = {}) {
     conversationId: input.conversationId,
     personKey: input.personKey || leadRecord?.personKey,
     leadId: input.leadId || leadRecord?.id,
+    contactId: input.contactId || leadRecord?.contactId,
     actionKey,
     followUpId,
+    inboxThreadId: input.inboxThreadId,
+    calendarEventId: input.calendarEventId,
+    campaignId: input.campaignId,
+    campaignRecipientId: input.campaignRecipientId,
+    operatorTaskId: input.operatorTaskId,
     pageUrl: input.pageUrl,
     origin: input.origin,
     successUrl: input.successUrl || input.pageUrl,
     metadata: {
-      attributionPath: buildAttributionPath(null, followUpId),
+      attributionPath: normalizeAttributionPath(
+        input.attributionPath,
+        getDefaultAttributionPath({
+          sourceType: "manual_owner",
+          followUpId,
+          inboxThreadId: input.inboxThreadId,
+          calendarEventId: input.calendarEventId,
+          campaignId: input.campaignId,
+          campaignRecipientId: input.campaignRecipientId,
+        })
+      ),
+      manualOutcomeLabel: cleanText(input.manualOutcomeLabel),
+      manualResolution: cleanText(input.manualResolution),
       note: cleanText(input.note),
     },
   }));
@@ -1150,16 +1405,125 @@ export async function trackFollowUpOutcome(supabase, input = {}) {
     conversationId: input.conversationId,
     personKey: input.personKey,
     leadId: input.leadId,
+    contactId: input.contactId,
     actionKey: input.actionKey,
     followUpId: input.followUpId,
     pageUrl: input.pageUrl,
     successUrl: input.successUrl,
     metadata: {
-      attributionPath: "follow_up",
+      attributionPath: "follow_up_assisted",
     },
   }));
 
   if (outcome && normalizedOutcomeType === "follow_up_replied") {
+    await syncOutcomeIntoOperationalState(supabase, outcome);
+  }
+
+  return {
+    ok: true,
+    persistenceAvailable: Boolean(outcome),
+    outcome,
+  };
+}
+
+export async function recordOutcomeEvent(supabase, input = {}) {
+  const agentId = cleanText(input.agentId);
+  const ownerUserId = cleanText(input.ownerUserId);
+  const normalizedOutcomeType = assertCanonicalOutcomeType(input.outcomeType);
+  const leadRecord = await findLikelyLeadRecord(supabase, {
+    leadId: input.leadId,
+    agentId,
+    ownerUserId,
+    personKey: input.personKey,
+    sessionId: input.sessionId,
+  });
+  const resolvedLeadId = cleanUuid(input.leadId) || cleanUuid(leadRecord?.id);
+  const resolvedContactId = cleanUuid(input.contactId) || cleanUuid(leadRecord?.contactId);
+  const resolvedFollowUpId =
+    cleanUuid(input.followUpId) ||
+    cleanUuid(leadRecord?.relatedFollowUpId) ||
+    "";
+  const resolvedActionKey = cleanText(input.actionKey)
+    || cleanText(leadRecord?.latestActionKey)
+    || cleanText(leadRecord?.relatedActionKeys?.[0])
+    || "";
+  const attributionPath = normalizeAttributionPath(
+    input.attributionPath,
+    getDefaultAttributionPath({
+      sourceType: input.sourceType,
+      followUpId: resolvedFollowUpId,
+      inboxThreadId: input.inboxThreadId,
+      calendarEventId: input.calendarEventId,
+      campaignId: input.campaignId,
+      campaignRecipientId: input.campaignRecipientId,
+    })
+  );
+  const dedupeKey = cleanText(input.dedupeKey) || [
+    agentId,
+    ownerUserId,
+    normalizedOutcomeType,
+    cleanText(
+      resolvedContactId
+      || resolvedLeadId
+      || input.inboxThreadId
+      || input.calendarEventId
+      || input.campaignRecipientId
+      || input.operatorTaskId
+      || input.ctaEventId
+      || resolvedActionKey
+      || input.pageUrl
+      || input.successUrl
+      || input.note
+      || input.occurredAt
+      || "outcome"
+    ),
+  ].join("::");
+  const outcome = await upsertOutcomeRecord(supabase, buildOutcomePayload({
+    agentId,
+    businessId: input.businessId,
+    ownerUserId,
+    installId: input.installId,
+    outcomeType: normalizedOutcomeType,
+    sourceType: normalizeSourceTypeWithFallback(input.sourceType),
+    confirmationLevel: input.confirmationLevel,
+    dedupeKey,
+    ctaEventId: input.ctaEventId,
+    relatedCtaType: input.ctaType,
+    relatedTargetType: input.targetType,
+    relatedActionType: input.relatedActionType || leadRecord?.latestActionType,
+    relatedIntentType: input.relatedIntentType,
+    visitorId: input.visitorId || input.sessionId,
+    sessionId: input.sessionId,
+    fingerprint: input.fingerprint,
+    conversationId: input.conversationId,
+    personKey: input.personKey || leadRecord?.personKey,
+    leadId: resolvedLeadId,
+    contactId: resolvedContactId,
+    actionKey: resolvedActionKey,
+    followUpId: resolvedFollowUpId,
+    inboxThreadId: input.inboxThreadId,
+    calendarEventId: input.calendarEventId,
+    campaignId: input.campaignId,
+    campaignRecipientId: input.campaignRecipientId,
+    operatorTaskId: input.operatorTaskId,
+    pageUrl: input.pageUrl,
+    origin: input.origin,
+    targetUrl: input.targetUrl,
+    successUrl: input.successUrl || input.pageUrl,
+    attributionPath,
+    occurredAt: input.occurredAt,
+    metadata: {
+      ...normalizeMetadata(input.metadata),
+      attributionPath,
+      sourceRecordType: cleanText(input.sourceRecordType),
+      sourceRecordId: cleanText(input.sourceRecordId),
+      manualOutcomeLabel: cleanText(input.manualOutcomeLabel),
+      manualResolution: cleanText(input.manualResolution),
+      note: cleanText(input.note),
+    },
+  }));
+
+  if (outcome && input.syncOperationalState !== false) {
     await syncOutcomeIntoOperationalState(supabase, outcome);
   }
 
@@ -1178,9 +1542,11 @@ function buildEmptyOutcomeSummary() {
     directOutcomeCount: 0,
     followUpAssistedOutcomeCount: 0,
     bookingStarted: 0,
+    bookingConfirmed: 0,
     bookingCompleted: 0,
-    quoteStarted: 0,
     quoteRequested: 0,
+    quoteSent: 0,
+    quoteAccepted: 0,
     checkoutStarted: 0,
     checkoutCompleted: 0,
     contactClicked: 0,
@@ -1188,11 +1554,25 @@ function buildEmptyOutcomeSummary() {
     phoneClicked: 0,
     followUpSent: 0,
     followUpReplied: 0,
+    complaintOpened: 0,
+    complaintResolved: 0,
+    campaignSent: 0,
+    campaignReplied: 0,
+    campaignConverted: 0,
     manualMarked: 0,
     directVsFollowUpSplit: {
       direct: 0,
       followUp: 0,
+      operator: 0,
       manual: 0,
+    },
+    pathCounts: {
+      directRoute: 0,
+      followUpAssisted: 0,
+      inboxThread: 0,
+      calendarBooking: 0,
+      campaign: 0,
+      manualOwner: 0,
     },
     topPages: [],
     topIntents: [],
@@ -1201,6 +1581,45 @@ function buildEmptyOutcomeSummary() {
 
 function incrementCounter(summary, key) {
   summary[key] = Number(summary[key] || 0) + 1;
+}
+
+function incrementAttributedPath(summary, attributionPath = "") {
+  const normalized = normalizeAttributionPath(attributionPath);
+
+  if (normalized === "follow_up_assisted") {
+    summary.followUpAssistedOutcomeCount += 1;
+    summary.directVsFollowUpSplit.followUp += 1;
+    summary.pathCounts.followUpAssisted += 1;
+    return;
+  }
+
+  if (normalized === "manual_owner") {
+    summary.directVsFollowUpSplit.manual += 1;
+    summary.pathCounts.manualOwner += 1;
+    return;
+  }
+
+  if (normalized === "inbox_thread") {
+    summary.directVsFollowUpSplit.operator += 1;
+    summary.pathCounts.inboxThread += 1;
+    return;
+  }
+
+  if (normalized === "calendar_booking") {
+    summary.directVsFollowUpSplit.operator += 1;
+    summary.pathCounts.calendarBooking += 1;
+    return;
+  }
+
+  if (normalized === "campaign") {
+    summary.directVsFollowUpSplit.operator += 1;
+    summary.pathCounts.campaign += 1;
+    return;
+  }
+
+  summary.directOutcomeCount += 1;
+  summary.directVsFollowUpSplit.direct += 1;
+  summary.pathCounts.directRoute += 1;
 }
 
 function buildRecentOutcome(entry = {}) {
@@ -1214,10 +1633,17 @@ function buildRecentOutcome(entry = {}) {
     relatedIntentType: entry.relatedIntentType,
     actionKey: entry.actionKey,
     leadId: entry.leadId,
+    contactId: entry.contactId,
     followUpId: entry.followUpId,
+    inboxThreadId: entry.inboxThreadId,
+    calendarEventId: entry.calendarEventId,
+    campaignId: entry.campaignId,
+    campaignRecipientId: entry.campaignRecipientId,
+    operatorTaskId: entry.operatorTaskId,
     pageUrl: entry.pageUrl,
     successUrl: entry.successUrl,
     occurredAt: entry.occurredAt,
+    sourceLabel: entry.sourceLabel,
   };
 }
 
@@ -1269,14 +1695,18 @@ export async function listConversionOutcomesForAgent(supabase, options = {}) {
       case "booking_started":
         incrementCounter(summary, "bookingStarted");
         break;
-      case "booking_completed":
+      case "booking_confirmed":
+        incrementCounter(summary, "bookingConfirmed");
         incrementCounter(summary, "bookingCompleted");
-        break;
-      case "quote_started":
-        incrementCounter(summary, "quoteStarted");
         break;
       case "quote_requested":
         incrementCounter(summary, "quoteRequested");
+        break;
+      case "quote_sent":
+        incrementCounter(summary, "quoteSent");
+        break;
+      case "quote_accepted":
+        incrementCounter(summary, "quoteAccepted");
         break;
       case "checkout_started":
         incrementCounter(summary, "checkoutStarted");
@@ -1299,7 +1729,22 @@ export async function listConversionOutcomesForAgent(supabase, options = {}) {
       case "follow_up_replied":
         incrementCounter(summary, "followUpReplied");
         break;
-      case "conversion_marked_manual":
+      case "complaint_opened":
+        incrementCounter(summary, "complaintOpened");
+        break;
+      case "complaint_resolved":
+        incrementCounter(summary, "complaintResolved");
+        break;
+      case "campaign_sent":
+        incrementCounter(summary, "campaignSent");
+        break;
+      case "campaign_replied":
+        incrementCounter(summary, "campaignReplied");
+        break;
+      case "campaign_converted":
+        incrementCounter(summary, "campaignConverted");
+        break;
+      case "manual_outcome_marked":
         incrementCounter(summary, "manualMarked");
         break;
       default:
@@ -1312,15 +1757,7 @@ export async function listConversionOutcomesForAgent(supabase, options = {}) {
 
     if (COMPLETED_OUTCOME_TYPES.has(record.outcomeType)) {
       summary.assistedConversions += 1;
-      if (record.attributionPath === "follow_up") {
-        summary.followUpAssistedOutcomeCount += 1;
-        summary.directVsFollowUpSplit.followUp += 1;
-      } else if (record.attributionPath === "manual") {
-        summary.directVsFollowUpSplit.manual += 1;
-      } else {
-        summary.directOutcomeCount += 1;
-        summary.directVsFollowUpSplit.direct += 1;
-      }
+      incrementAttributedPath(summary, record.attributionPath);
 
       if (record.pageUrl) {
         pageCounts.set(record.pageUrl, Number(pageCounts.get(record.pageUrl) || 0) + 1);
