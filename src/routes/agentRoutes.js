@@ -17,9 +17,14 @@ import {
   updateOwnedAccessStatus,
   updateAgentSettings,
 } from "../services/agents/agentService.js";
-import { listAgentMessages } from "../services/chat/messageService.js";
+import {
+  assertMessagesSchemaReady,
+  listAgentMessages,
+} from "../services/chat/messageService.js";
+import { buildAnalyticsSummary } from "../services/analytics/analyticsSummaryService.js";
 import { getProductFunnelSummary, trackProductEvent } from "../services/analytics/productEventService.js";
 import {
+  assertWidgetTelemetrySchemaReady,
   listWidgetRoutingEventsByAgentId,
   trackWidgetEvent,
 } from "../services/analytics/widgetTelemetryService.js";
@@ -37,6 +42,7 @@ import {
   updateKnowledgeFixWorkflow,
 } from "../services/knowledge/knowledgeFixService.js";
 import {
+  assertConversionOutcomeSchemaReady,
   detectConversionOutcomesForPage,
   listConversionOutcomesForAgent,
   markManualConversionOutcome,
@@ -44,6 +50,7 @@ import {
   trackFollowUpOutcome,
 } from "../services/conversion/conversionOutcomeService.js";
 import {
+  assertLeadCaptureSchemaReady,
   hydrateActionQueueWithLeadCaptures,
   listLeadCaptures,
 } from "../services/leads/liveLeadCaptureService.js";
@@ -74,6 +81,13 @@ export function createAgentRouter(deps = {}) {
   const createAgentForBusinessNameImpl = deps.createAgentForBusinessName || createAgentForBusinessName;
   const requireAgentAccessImpl = deps.requireAgentAccess || requireAgentAccess;
   const requireActiveAgentAccessImpl = deps.requireActiveAgentAccess || requireActiveAgentAccess;
+  const assertMessagesSchemaReadyImpl = deps.assertMessagesSchemaReady || assertMessagesSchemaReady;
+  const assertWidgetTelemetrySchemaReadyImpl =
+    deps.assertWidgetTelemetrySchemaReady || assertWidgetTelemetrySchemaReady;
+  const assertLeadCaptureSchemaReadyImpl =
+    deps.assertLeadCaptureSchemaReady || assertLeadCaptureSchemaReady;
+  const assertConversionOutcomeSchemaReadyImpl =
+    deps.assertConversionOutcomeSchemaReady || assertConversionOutcomeSchemaReady;
   const listAgentMessagesImpl = deps.listAgentMessages || listAgentMessages;
   const buildActionQueueImpl = deps.buildActionQueue || buildActionQueue;
   const listActionQueueStatusesImpl = deps.listActionQueueStatuses || listActionQueueStatuses;
@@ -460,6 +474,7 @@ export function createAgentRouter(deps = {}) {
         ownerUserId: user?.id || null,
         clientId: req.query.client_id || req.query.clientId,
       });
+      await assertMessagesSchemaReadyImpl(supabase, { phase: "request" });
       const messages = await listAgentMessagesImpl(
         supabase,
         req.query.agent_id || req.query.agentId
@@ -575,6 +590,12 @@ export function createAgentRouter(deps = {}) {
         ownerUserId: user?.id || null,
         clientId: req.query.client_id || req.query.clientId,
       });
+      await Promise.all([
+        assertMessagesSchemaReadyImpl(supabase, { phase: "request" }),
+        assertWidgetTelemetrySchemaReadyImpl(supabase),
+        assertLeadCaptureSchemaReadyImpl(supabase, { phase: "request" }),
+        assertConversionOutcomeSchemaReadyImpl(supabase, { phase: "request" }),
+      ]);
 
       const [messages, statuses, agentListResult] = await Promise.all([
         listAgentMessagesImpl(supabase, agentId),
@@ -656,16 +677,23 @@ export function createAgentRouter(deps = {}) {
       const routingEvents = await listWidgetRoutingEventsByAgentIdImpl(supabase, {
         agentId,
       });
+      const hydratedQueue = hydrateActionQueueWithLeadCaptures(baseQueue, {
+        records: leadCaptures.records || [],
+        followUps: followUpSync?.records || [],
+        widgetEvents: routingEvents,
+        outcomes: conversionOutcomes,
+        persistenceAvailable: leadCaptures.persistenceAvailable !== false,
+      });
 
-      res.json(
-        hydrateActionQueueWithLeadCaptures(baseQueue, {
-          records: leadCaptures.records || [],
-          followUps: followUpSync?.records || [],
-          widgetEvents: routingEvents,
-          outcomes: conversionOutcomes,
-          persistenceAvailable: leadCaptures.persistenceAvailable !== false,
-        })
-      );
+      res.json({
+        ...hydratedQueue,
+        analyticsSummary: buildAnalyticsSummary({
+          messages,
+          actionQueue: hydratedQueue,
+          widgetMetrics: agentProfile?.widgetMetrics || {},
+          installStatus: agentProfile?.installStatus || {},
+        }),
+      });
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({

@@ -51,6 +51,9 @@ let authViewMode = AUTH_VIEW_MODES.SIGN_UP;
 let authFeedback = null;
 let authStateListenerBound = false;
 let workspaceState = null;
+let workspaceRefreshBound = false;
+let workspaceRefreshAgentId = "";
+let workspaceRefreshTimeout = null;
 
 function isDevFakeBillingEnabled() {
   return Boolean(window.VONZA_DEV_FAKE_BILLING);
@@ -2368,7 +2371,80 @@ function createEmptyActionQueue() {
     knowledgeFixWorkflowMigrationRequired: false,
     liveConversionAvailable: true,
     liveConversionMigrationRequired: false,
+    analyticsSummary: createEmptyAnalyticsSummary(),
   };
+}
+
+function createEmptyAnalyticsSummary() {
+  return {
+    ready: true,
+    syncState: "ready",
+    diagnosticsMessage: "",
+    totalMessages: 0,
+    visitorQuestions: 0,
+    highIntentSignals: 0,
+    directCtasShown: 0,
+    ctaClicks: 0,
+    ctaClickThroughRate: 0,
+    contactsCaptured: 0,
+    assistedOutcomes: 0,
+    weakAnswerCount: 0,
+    attentionNeeded: 0,
+    lastMessageAt: null,
+    recentActivity: {
+      level: "none",
+      description: "No live activity yet",
+      copy: "No live conversations have been stored yet.",
+      lastActivityAt: null,
+    },
+    operatorSignal: {
+      title: "No operator signal yet",
+      copy: "There is not a strong lead, booking, pricing, or support signal yet.",
+      subtle: "No weak-answer signal has been detected yet.",
+    },
+  };
+}
+
+function getAnalyticsSummary(actionQueue = createEmptyActionQueue(), agent = {}, messages = []) {
+  const fallbackSignals = analyzeConversationSignals(messages);
+  const fallbackSummary = createEmptyAnalyticsSummary();
+  fallbackSummary.totalMessages = Number(agent.messageCount || messages.length || 0);
+  fallbackSummary.visitorQuestions = fallbackSignals.userMessageCount || 0;
+  fallbackSummary.highIntentSignals = fallbackSignals.highValueIntentCount || 0;
+  fallbackSummary.lastMessageAt = agent.lastMessageAt || messages[0]?.createdAt || messages[0]?.created_at || null;
+
+  const providedSummary = actionQueue?.analyticsSummary && typeof actionQueue.analyticsSummary === "object"
+    ? actionQueue.analyticsSummary
+    : {};
+
+  return {
+    ...fallbackSummary,
+    ...providedSummary,
+    recentActivity: {
+      ...fallbackSummary.recentActivity,
+      ...(providedSummary.recentActivity || {}),
+    },
+    operatorSignal: {
+      ...fallbackSummary.operatorSignal,
+      ...(providedSummary.operatorSignal || {}),
+    },
+  };
+}
+
+function formatAnalyticsMetric(value, analyticsSummary = createEmptyAnalyticsSummary()) {
+  if (analyticsSummary.syncState === "pending" && Number(value || 0) === 0) {
+    return "Syncing";
+  }
+
+  return String(Number(value || 0));
+}
+
+function formatAnalyticsRate(value, analyticsSummary = createEmptyAnalyticsSummary()) {
+  if (analyticsSummary.syncState === "pending" && Number(value || 0) === 0) {
+    return "Syncing";
+  }
+
+  return formatCaptureRate(value);
 }
 
 function normalizeActionQueueStatus(value) {
@@ -3485,9 +3561,11 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
 function buildOverviewState(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
   const installStatus = getDefaultInstallStatus(agent);
   const signals = analyzeConversationSignals(messages);
-  const messageCount = Number(agent.messageCount || messages.length || 0);
-  const lastActivity = agent.lastMessageAt || installStatus.lastSeenAt || null;
-  const activity = getActivityLevel(signals.userMessageCount || messageCount, agent.lastMessageAt);
+  const analyticsSummary = getAnalyticsSummary(actionQueue, agent, messages);
+  const messageCount = Number(analyticsSummary.totalMessages || 0);
+  const highIntentSignals = Number(analyticsSummary.highIntentSignals || 0);
+  const lastActivity = analyticsSummary.recentActivity.lastActivityAt || installStatus.lastSeenAt || null;
+  const activity = analyticsSummary.recentActivity;
   const topIntent = signals.topIntentEntries[0];
   const recentQuestions = signals.recentQuestions || [];
   const queueSummary = {
@@ -3540,7 +3618,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "section",
         value: "analytics",
       });
-    } else if (signals.weakAnswerCount > 0) {
+    } else if (analyticsSummary.weakAnswerCount > 0) {
       title = "Your assistant is live, and a few answers need strengthening";
       copy = `Vonza is active on ${installStatus.host || "your site"}, and some real customer questions are showing where the assistant still needs help.`;
       primaryAction = {
@@ -3553,7 +3631,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         type: "section",
         value: "customize",
       });
-    } else if (signals.highValueIntentCount > 0) {
+    } else if (highIntentSignals > 0) {
       title = "Your assistant is live and showing real buyer intent";
       copy = `Vonza is live on ${installStatus.host || "your site"} and is already capturing high-value visitor intent you can act on.`;
       primaryAction = {
@@ -3723,6 +3801,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
 
   return {
     installStatus,
+    analyticsSummary,
     messageCount,
     lastActivity,
     activity,
@@ -3753,11 +3832,11 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
       </div>
     `).join("")
     : `<div class="placeholder-card">No real customer question themes yet. Once the assistant is live and visitors start using it, Vonza will group the strongest recurring questions here.</div>`;
-  const highIntentSignals = overview.signals.highValueIntentCount;
-  const recentUsageValue = overview.signals.usageTrend.recentCount > 0
-    ? `${overview.signals.usageTrend.recentCount} recent`
-    : overview.signals.userMessageCount > 0
-      ? `${overview.signals.userMessageCount} captured`
+  const highIntentSignals = overview.analyticsSummary.highIntentSignals || 0;
+  const recentUsageValue = overview.analyticsSummary.syncState === "pending"
+    ? "Syncing"
+    : overview.analyticsSummary.visitorQuestions > 0
+      ? `${overview.analyticsSummary.visitorQuestions} captured`
       : "No usage yet";
   const recommendationTitle = !setup.knowledgeReady
     ? "Strengthen website knowledge"
@@ -3767,7 +3846,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
         ? "Review action queue"
       : overview.queueSummary.total > 0
           ? "Close the loop on follow-up"
-      : overview.signals.weakAnswerCount > 0
+      : overview.analyticsSummary.weakAnswerCount > 0
         ? "Review weak answers"
         : highIntentSignals > 0
           ? "Review buyer intent"
@@ -3780,7 +3859,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
         ? "Important high-intent or weak-answer items are in the Action Queue. Review them first so the owner knows which visitors or answer paths still need attention."
         : overview.queueSummary.total > 0
           ? "The Action Queue already holds important conversation follow-up. Keep moving items through review so the assistant becomes more operational, not just informative."
-      : overview.signals.weakAnswerCount > 0
+      : overview.analyticsSummary.weakAnswerCount > 0
         ? "Several live questions ended in weak or uncertain answers. Use Analytics to review those conversations, then refine website knowledge or assistant setup."
         : highIntentSignals > 0
           ? "High-intent questions are already coming in. Review Analytics to see whether visitors want pricing, booking, contact, or support help most."
@@ -3855,7 +3934,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">High-intent chats</div>
-            <div class="overview-metric-value">${overview.conversionSummary.highIntentConversations || 0}</div>
+            <div class="overview-metric-value">${escapeHtml(formatAnalyticsMetric(overview.analyticsSummary.highIntentSignals, overview.analyticsSummary))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Attention now</div>
@@ -3863,7 +3942,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Contacts captured</div>
-            <div class="overview-metric-value">${overview.conversionSummary.contactsCaptured || 0}</div>
+            <div class="overview-metric-value">${escapeHtml(formatAnalyticsMetric(overview.analyticsSummary.contactsCaptured, overview.analyticsSummary))}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Assisted outcomes</div>
@@ -3960,7 +4039,8 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
 function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyActionQueue()) {
   const signals = analyzeConversationSignals(messages);
   const { intentCounts } = signals;
-  const activity = getActivityLevel(agent.messageCount || messages.length || 0, agent.lastMessageAt);
+  const analyticsSummary = getAnalyticsSummary(actionQueue, agent, messages);
+  const activity = analyticsSummary.recentActivity;
   const recentInteractions = messages.slice(0, 12);
   const peopleSummary = {
     ...createEmptyActionQueue().peopleSummary,
@@ -4059,30 +4139,33 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
         <p class="workspace-panel-copy">See what customers are asking, where the assistant is active, and where a small improvement could make the experience stronger.</p>
       </div>
       <div class="analytics-stack">
+        ${analyticsSummary.syncState === "pending" ? `
+          <div class="placeholder-card">Live widget activity was detected, and Vonza is syncing the stored conversation read model now. Refresh stays targeted, so these counters will update without a full page boot.</div>
+        ` : ""}
         <div class="metric-grid">
           <div class="metric-card">
             <div class="metric-label">Total messages</div>
-            <div class="metric-value">${agent.messageCount || messages.length || 0}</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsMetric(analyticsSummary.totalMessages, analyticsSummary))}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">Visitor questions</div>
-            <div class="metric-value">${signals.usageTrend.recentCount || signals.userMessageCount || 0}</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsMetric(analyticsSummary.visitorQuestions, analyticsSummary))}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">High-intent signals</div>
-            <div class="metric-value">${conversionSummary.highIntentConversations || 0}</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsMetric(analyticsSummary.highIntentSignals, analyticsSummary))}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">Direct CTAs shown</div>
-            <div class="metric-value">${conversionSummary.directCtasShown || 0}</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsMetric(analyticsSummary.directCtasShown, analyticsSummary))}</div>
           </div>
           <div class="metric-card">
             <div class="metric-label">CTA click-through</div>
-            <div class="metric-value">${escapeHtml(formatCaptureRate(conversionSummary.ctaClickThroughRate))}</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsRate(analyticsSummary.ctaClickThroughRate, analyticsSummary))}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Assisted outcomes</div>
-            <div class="metric-value">${outcomeSummary.assistedConversions || 0}</div>
+            <div class="metric-label">Contacts captured</div>
+            <div class="metric-value">${escapeHtml(formatAnalyticsMetric(analyticsSummary.contactsCaptured, analyticsSummary))}</div>
           </div>
         </div>
 
@@ -4105,7 +4188,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               <div class="analytics-item">
                 <p class="analytics-item-title">Recent activity</p>
                 <p class="analytics-item-copy">${escapeHtml(activity.description)}</p>
-                <p class="analytics-subtle">${escapeHtml(signals.usageTrend.copy)}</p>
+                <p class="analytics-subtle">${escapeHtml(activity.copy)}</p>
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Knowledge state</p>
@@ -4114,20 +4197,8 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Operator signal</p>
-                <p class="analytics-item-copy">${escapeHtml(
-                  signals.highValueIntentCount > 0
-                    ? `${signals.highValueIntentCount} high-intent customer signal${signals.highValueIntentCount === 1 ? "" : "s"} have already appeared.`
-                    : Number(widgetMetrics.conversationsSinceInstall || 0) === 0 && isInstallDetected(installStatus)
-                      ? "0 conversations since install. Run a live test flow to confirm visitors can reach the assistant."
-                      : "There is not a strong lead, booking, pricing, or support signal yet."
-                )}</p>
-                <p class="analytics-subtle">${escapeHtml(
-                  signals.weakAnswerCount > 0
-                    ? `${signals.weakAnswerCount} question${signals.weakAnswerCount === 1 ? "" : "s"} may need a better answer path.`
-                    : Number(widgetMetrics.conversationsSinceInstall || 0) > 0
-                      ? `${widgetMetrics.conversationsSinceInstall} conversation${widgetMetrics.conversationsSinceInstall === 1 ? "" : "s"} started since install.`
-                      : "No weak-answer signal has been detected yet."
-                )}</p>
+                <p class="analytics-item-copy">${escapeHtml(analyticsSummary.operatorSignal.copy)}</p>
+                <p class="analytics-subtle">${escapeHtml(analyticsSummary.operatorSignal.subtle)}</p>
               </div>
             </div>
           </section>
@@ -4381,6 +4452,7 @@ function renderSetupState(agent, messages, setup, actionQueue) {
     setup,
     actionQueue,
   };
+  bindWorkspaceAutoRefresh(agent.id);
   renderAssistantShell(agent, messages, setup, actionQueue);
 }
 
@@ -4392,6 +4464,7 @@ function renderReadyState(agent, messages, actionQueue) {
     setup,
     actionQueue,
   };
+  bindWorkspaceAutoRefresh(agent.id);
   renderAssistantShell(agent, messages, setup, actionQueue);
 }
 
@@ -4681,31 +4754,49 @@ async function loadActionQueue(agentId) {
   const url = new URL("/agents/action-queue", window.location.origin);
   url.searchParams.set("agent_id", agentId);
   url.searchParams.set("client_id", getClientId());
-
-  try {
-    const data = await fetchJson(url.toString());
-    return {
-      items: Array.isArray(data.items) ? data.items : [],
-      people: Array.isArray(data.people) ? data.people : [],
-      peopleSummary: {
-        ...createEmptyActionQueue().peopleSummary,
-        ...(data.peopleSummary || {}),
+  const data = await fetchJson(url.toString());
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    people: Array.isArray(data.people) ? data.people : [],
+    peopleSummary: {
+      ...createEmptyActionQueue().peopleSummary,
+      ...(data.peopleSummary || {}),
+    },
+    summary: {
+      ...createEmptyActionQueue().summary,
+      ...(data.summary || {}),
+    },
+    conversionSummary: {
+      ...createEmptyActionQueue().conversionSummary,
+      ...(data.conversionSummary || {}),
+    },
+    outcomeSummary: {
+      ...createEmptyActionQueue().outcomeSummary,
+      ...(data.outcomeSummary || {}),
+    },
+    recentOutcomes: Array.isArray(data.recentOutcomes) ? data.recentOutcomes : [],
+    recentLeadCaptures: Array.isArray(data.recentLeadCaptures) ? data.recentLeadCaptures : [],
+    persistenceAvailable: data.persistenceAvailable !== false,
+    migrationRequired: data.migrationRequired === true,
+    followUpWorkflowAvailable: data.followUpWorkflowAvailable !== false,
+    followUpWorkflowMigrationRequired: data.followUpWorkflowMigrationRequired === true,
+    knowledgeFixWorkflowAvailable: data.knowledgeFixWorkflowAvailable !== false,
+    knowledgeFixWorkflowMigrationRequired: data.knowledgeFixWorkflowMigrationRequired === true,
+    liveConversionAvailable: data.liveConversionAvailable !== false,
+    liveConversionMigrationRequired: data.liveConversionMigrationRequired === true,
+    analyticsSummary: {
+      ...createEmptyAnalyticsSummary(),
+      ...(data.analyticsSummary || {}),
+      recentActivity: {
+        ...createEmptyAnalyticsSummary().recentActivity,
+        ...(data.analyticsSummary?.recentActivity || {}),
       },
-      summary: {
-        ...createEmptyActionQueue().summary,
-        ...(data.summary || {}),
+      operatorSignal: {
+        ...createEmptyAnalyticsSummary().operatorSignal,
+        ...(data.analyticsSummary?.operatorSignal || {}),
       },
-      persistenceAvailable: data.persistenceAvailable !== false,
-      migrationRequired: data.migrationRequired === true,
-      followUpWorkflowAvailable: data.followUpWorkflowAvailable !== false,
-      followUpWorkflowMigrationRequired: data.followUpWorkflowMigrationRequired === true,
-      knowledgeFixWorkflowAvailable: data.knowledgeFixWorkflowAvailable !== false,
-      knowledgeFixWorkflowMigrationRequired: data.knowledgeFixWorkflowMigrationRequired === true,
-    };
-  } catch (error) {
-    console.warn("[action queue] Could not load the action queue:", error.message);
-    return createEmptyActionQueue();
-  }
+    },
+  };
 }
 
 function renderWorkspaceFromState() {
@@ -4737,7 +4828,11 @@ async function refreshAgentInstallState(agentId) {
     return;
   }
 
-  const nextAgent = await loadAgentInstallSnapshot(agentId);
+  const [nextAgent, messages, actionQueue] = await Promise.all([
+    loadAgentInstallSnapshot(agentId),
+    loadAgentMessages(agentId),
+    loadActionQueue(agentId),
+  ]);
 
   if (!nextAgent) {
     await boot();
@@ -4747,9 +4842,47 @@ async function refreshAgentInstallState(agentId) {
   workspaceState = {
     ...workspaceState,
     agent: nextAgent,
+    messages,
+    actionQueue,
     setup: inferSetup(nextAgent),
   };
   renderWorkspaceFromState();
+}
+
+function scheduleWorkspaceRefresh() {
+  if (!workspaceRefreshAgentId) {
+    return;
+  }
+
+  if (workspaceRefreshTimeout) {
+    window.clearTimeout(workspaceRefreshTimeout);
+  }
+
+  workspaceRefreshTimeout = window.setTimeout(() => {
+    refreshAgentInstallState(workspaceRefreshAgentId).catch((error) => {
+      console.warn("[dashboard refresh] Could not refresh workspace state:", error.message);
+    });
+  }, 250);
+}
+
+function bindWorkspaceAutoRefresh(agentId) {
+  workspaceRefreshAgentId = trimText(agentId);
+
+  if (workspaceRefreshBound || !workspaceRefreshAgentId) {
+    return;
+  }
+
+  window.addEventListener("focus", () => {
+    scheduleWorkspaceRefresh();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      scheduleWorkspaceRefresh();
+    }
+  });
+
+  workspaceRefreshBound = true;
 }
 
 async function importKnowledge(agent, options = {}) {

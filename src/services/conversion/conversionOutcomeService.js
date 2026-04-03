@@ -123,10 +123,36 @@ function isMissingRelationError(error, relationName) {
   const message = cleanText(error?.message || "").toLowerCase();
   return (
     error?.code === "PGRST205" ||
+    error?.code === "PGRST204" ||
+    error?.code === "42703" ||
     error?.code === "42P01" ||
     message.includes(`'public.${relationName}'`) ||
     message.includes(`${relationName} was not found`)
   );
+}
+
+function buildMissingConversionOutcomeSchemaError(phase = "request") {
+  const error = new Error(
+    `[${phase}] Missing required conversion outcome schema for '${CONVERSION_OUTCOME_TABLE}'. Apply the latest database migration before running this build.`
+  );
+  error.statusCode = 500;
+  error.code = "schema_not_ready";
+  return error;
+}
+
+export async function assertConversionOutcomeSchemaReady(supabase, options = {}) {
+  const { error } = await supabase
+    .from(CONVERSION_OUTCOME_TABLE)
+    .select("id, agent_id, owner_user_id, install_id, outcome_type, session_id, occurred_at")
+    .limit(1);
+
+  if (error) {
+    if (isMissingRelationError(error, CONVERSION_OUTCOME_TABLE)) {
+      throw buildMissingConversionOutcomeSchemaError(options.phase || "startup");
+    }
+
+    throw error;
+  }
 }
 
 function normalizeOptionalUrl(value) {

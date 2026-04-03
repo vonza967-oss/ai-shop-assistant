@@ -1,14 +1,41 @@
 import { MESSAGES_TABLE } from "../../config/constants.js";
 import { cleanText } from "../../utils/text.js";
 
-function isMissingMessagesTable(error) {
+function isMissingMessagesSchemaError(error) {
   const message = cleanText(error?.message || "").toLowerCase();
   return (
     error?.code === "PGRST205" ||
+    error?.code === "PGRST204" ||
+    error?.code === "42703" ||
     error?.code === "42P01" ||
     message.includes(`'public.${MESSAGES_TABLE}'`) ||
-    message.includes(`${MESSAGES_TABLE} was not found`)
+    message.includes(`${MESSAGES_TABLE} was not found`) ||
+    message.includes("session_key")
   );
+}
+
+function buildMissingMessagesSchemaError(phase = "request") {
+  const error = new Error(
+    `[${phase}] Missing required message persistence schema for '${MESSAGES_TABLE}'. Apply the latest database migration before running this build.`
+  );
+  error.statusCode = 500;
+  error.code = "schema_not_ready";
+  return error;
+}
+
+export async function assertMessagesSchemaReady(supabase, options = {}) {
+  const { error } = await supabase
+    .from(MESSAGES_TABLE)
+    .select("id, agent_id, role, content, session_key, created_at")
+    .limit(1);
+
+  if (error) {
+    if (isMissingMessagesSchemaError(error)) {
+      throw buildMissingMessagesSchemaError(options.phase || "startup");
+    }
+
+    throw error;
+  }
 }
 
 export async function storeAgentMessages(supabase, agentId, entries = [], options = {}) {
@@ -45,9 +72,8 @@ export async function storeAgentMessages(supabase, agentId, entries = [], option
   const { error } = await supabase.from(MESSAGES_TABLE).insert(payload);
 
   if (error) {
-    if (isMissingMessagesTable(error)) {
-      console.warn(`Messages table '${MESSAGES_TABLE}' is missing; skipping message storage.`);
-      return;
+    if (isMissingMessagesSchemaError(error)) {
+      throw buildMissingMessagesSchemaError(options.phase || "request");
     }
 
     console.error(error);
@@ -72,8 +98,8 @@ export async function listAgentMessages(supabase, agentId) {
     .limit(50);
 
   if (error) {
-    if (isMissingMessagesTable(error)) {
-      return [];
+    if (isMissingMessagesSchemaError(error)) {
+      throw buildMissingMessagesSchemaError(options.phase || "request");
     }
 
     console.error(error);
@@ -104,8 +130,8 @@ export async function getAgentMessageStats(supabase, agentIds = []) {
     .order("created_at", { ascending: false });
 
   if (error) {
-    if (isMissingMessagesTable(error)) {
-      return new Map();
+    if (isMissingMessagesSchemaError(error)) {
+      throw buildMissingMessagesSchemaError("request");
     }
 
     console.error(error);

@@ -11,7 +11,10 @@ import {
   getReplyRepairIssues,
   repairAssistantReply,
 } from "./prompting.js";
-import { storeAgentMessages } from "./messageService.js";
+import {
+  assertMessagesSchemaReady,
+  storeAgentMessages,
+} from "./messageService.js";
 import {
   applyLeadCaptureAction,
   processLiveChatLeadCapture,
@@ -33,6 +36,14 @@ function hasLimitedKnowledge(websiteContent) {
   );
 }
 
+function stripRawAssetUrls(reply = "") {
+  return cleanText(
+    String(reply || "")
+      .replace(/https?:\/\/\S+\.(?:avif|gif|jpe?g|png|webp)(?:[?#]\S*)?/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+  );
+}
+
 function appendImageLines(reply, websiteContent, userMessage) {
   if (!hasVisualIntent(userMessage)) {
     return reply;
@@ -44,7 +55,7 @@ function appendImageLines(reply, websiteContent, userMessage) {
     return reply;
   }
 
-  return `${reply}\n\n${imageUrls.map((url) => `Image: ${url}`).join("\n")}`;
+  return `${reply}\n\nRelevant image links:\n${imageUrls.map((url) => `- ${url}`).join("\n")}`;
 }
 
 function buildLimitedKnowledgeReply(language, agentName, websiteContent) {
@@ -156,6 +167,7 @@ export async function handleChatRequest({
   });
 
   const websiteContent = await getStoredWebsiteContent(supabase, business.id);
+  await assertMessagesSchemaReady(supabase, { phase: "request" });
 
   if (!websiteContent) {
     const fallbackReply =
@@ -227,8 +239,10 @@ export async function handleChatRequest({
     ],
   });
 
-  let finalReply = normalizeAssistantReply(
-    completion.choices[0].message.content || ""
+  let finalReply = stripRawAssetUrls(
+    normalizeAssistantReply(
+      completion.choices[0].message.content || ""
+    )
   );
   const repairIssues = getReplyRepairIssues(finalReply, language);
 
@@ -244,6 +258,7 @@ export async function handleChatRequest({
       language,
       repairIssues
     );
+    finalReply = stripRawAssetUrls(finalReply);
   }
 
   if (!finalReply) {

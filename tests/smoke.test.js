@@ -632,6 +632,10 @@ function createAgentTestDeps(state) {
 
   return {
     getSupabaseClient: () => ({ test: true }),
+    assertMessagesSchemaReady: async () => {},
+    assertWidgetTelemetrySchemaReady: async () => {},
+    assertLeadCaptureSchemaReady: async () => {},
+    assertConversionOutcomeSchemaReady: async () => {},
     getAuthenticatedUser: async () => ({
       id: "owner-1",
       email: "owner@example.com",
@@ -1888,6 +1892,138 @@ test("action queue surfaces migration-required state instead of silently pretend
         assert.equal(result.status, 200);
         assert.equal(result.json.persistenceAvailable, false);
         assert.equal(result.json.migrationRequired, true);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("action queue returns a unified analytics summary for dashboard counters", { concurrency: false }, async () => {
+  const state = {
+    accessStatus: "active",
+    messages: [
+      {
+        id: "message-1",
+        role: "user",
+        content: "How much does it cost?",
+        createdAt: "2026-04-01T10:03:00.000Z",
+      },
+      {
+        id: "message-2",
+        role: "assistant",
+        content: "Pricing depends on scope.",
+        createdAt: "2026-04-01T10:03:05.000Z",
+      },
+      {
+        id: "message-3",
+        role: "user",
+        content: "Can someone contact me?",
+        createdAt: "2026-04-01T10:04:00.000Z",
+      },
+      {
+        id: "message-4",
+        role: "assistant",
+        content: "Yes, share the best email.",
+        createdAt: "2026-04-01T10:04:05.000Z",
+      },
+    ],
+  };
+
+  const deps = {
+    ...createAgentTestDeps(state),
+    listLeadCaptures: async () => ({
+      records: [
+        {
+          id: "lead-1",
+          agent_id: "agent-1",
+          owner_user_id: "owner-1",
+          lead_key: "email:buyer@example.com",
+          capture_state: "captured",
+          contact_email: "buyer@example.com",
+          latest_action_type: "pricing_interest",
+          latest_message_id: "message-1",
+          related_action_keys: ["message-1"],
+          prompt_count: 1,
+        },
+      ],
+      persistenceAvailable: true,
+    }),
+    listWidgetRoutingEventsByAgentId: async () => ([
+      {
+        event_name: "cta_shown",
+        session_id: "session-1",
+        page_url: "https://example.com/pricing",
+        created_at: "2026-04-01T10:05:00.000Z",
+        metadata: {
+          ctaType: "quote",
+          targetType: "url",
+          relatedActionKey: "message-1",
+        },
+      },
+      {
+        event_name: "cta_clicked",
+        session_id: "session-1",
+        page_url: "https://example.com/pricing",
+        created_at: "2026-04-01T10:05:05.000Z",
+        metadata: {
+          ctaType: "quote",
+          targetType: "url",
+          relatedActionKey: "message-1",
+        },
+      },
+    ]),
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(deps));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 200);
+        assert.equal(result.json.analyticsSummary.totalMessages, 4);
+        assert.equal(result.json.analyticsSummary.visitorQuestions, 2);
+        assert.equal(result.json.analyticsSummary.directCtasShown, 1);
+        assert.equal(result.json.analyticsSummary.ctaClicks, 1);
+        assert.equal(result.json.analyticsSummary.contactsCaptured, 1);
+      } finally {
+        await server.close();
+      }
+    }
+  );
+});
+
+test("action queue fails loudly when required analytics schema is missing", { concurrency: false }, async () => {
+  const deps = {
+    ...createAgentTestDeps({
+      accessStatus: "active",
+    }),
+    assertMessagesSchemaReady: async () => {
+      const error = new Error("[request] Missing required message persistence schema for 'messages'. Apply the latest database migration before running this build.");
+      error.statusCode = 500;
+      throw error;
+    },
+  };
+
+  await withEnv(
+    {
+      PUBLIC_APP_URL: "http://localhost:3000",
+      DEV_FAKE_BILLING: "false",
+      NODE_ENV: "development",
+    },
+    async () => {
+      const server = await startServer(createTestApp(deps));
+
+      try {
+        const result = await getJson(server.baseUrl, "/agents/action-queue?agent_id=agent-1");
+        assert.equal(result.status, 500);
+        assert.match(result.json.error, /message persistence schema/i);
       } finally {
         await server.close();
       }

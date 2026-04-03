@@ -64,10 +64,36 @@ function isMissingRelationError(error, relationName) {
   const message = cleanText(error?.message || "").toLowerCase();
   return (
     error?.code === "PGRST205" ||
+    error?.code === "PGRST204" ||
+    error?.code === "42703" ||
     error?.code === "42P01" ||
     message.includes(`'public.${relationName}'`) ||
     message.includes(`${relationName} was not found`)
   );
+}
+
+function buildMissingLeadCaptureSchemaError(phase = "request") {
+  const error = new Error(
+    `[${phase}] Missing required live lead-capture schema for '${LEAD_CAPTURE_TABLE}'. Apply the latest database migration before running this build.`
+  );
+  error.statusCode = 500;
+  error.code = "schema_not_ready";
+  return error;
+}
+
+export async function assertLeadCaptureSchemaReady(supabase, options = {}) {
+  const { error } = await supabase
+    .from(LEAD_CAPTURE_TABLE)
+    .select("id, agent_id, owner_user_id, install_id, visitor_session_key, capture_state, related_action_keys")
+    .limit(1);
+
+  if (error) {
+    if (isMissingRelationError(error, LEAD_CAPTURE_TABLE)) {
+      throw buildMissingLeadCaptureSchemaError(options.phase || "startup");
+    }
+
+    throw error;
+  }
 }
 
 function normalizeState(value) {

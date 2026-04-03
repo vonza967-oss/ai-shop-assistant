@@ -106,7 +106,6 @@ Intent guidance:
 - Contact: provide the actual contact method if it exists; if not, clearly say the website does not show it. After that, suggest what they could ask or include in the message
 - Unknown or unsupported question: say you do not have that information from the website, then suggest contacting the business or offer one clarifying question
 - If image URLs are present in the provided business content and the user asks for visuals, naturally mention what the image likely shows based on the surrounding content
-- When image URLs are available, do not claim that you cannot show images
 - Mention the business only as a possible solution, not as the center of the answer
 - Use the business information as factual ground truth, but do not copy its wording
 - Avoid vague wording like "they may offer", "it seems like", or "probably"
@@ -141,7 +140,7 @@ Hard rules:
 - If services are clearly listed, name them directly
 - Do not use pushy language like "you should", "you must", or "act now"
 - Prefer phrases like "If you want", "I can help you", or "The next step could be"
-- If image URLs are included after the main answer, treat them as part of the reply rather than rejecting them
+- Do not include raw image URLs, asset paths, or media links in a normal answer unless the user explicitly asks to see images or source assets
 - End with one clear next-step question that moves the conversation forward
 
 ${customPrompt ? `Additional agent instructions:\n${customPrompt}` : ""}`;
@@ -314,7 +313,7 @@ export async function repairAssistantReply(
 - If the website content is missing the requested detail, say that plainly instead of softening it with vague phrasing
 - Keep any next-step suggestion short, natural, and helpful
 - If the reply can gently move the user toward a useful action, do it without sounding salesy or pushy
-- If the reply includes image URLs, keep them and make the text before them feel natural and visually helpful
+- Remove raw image URLs, asset paths, or media links unless the user explicitly asked for images or source assets
 
 Return only the improved reply.`,
       },

@@ -15,8 +15,165 @@ import {
   normalizeUrl,
 } from "../../utils/url.js";
 
+const MEDIA_BLOCK_START = "[[VONZA_MEDIA_ASSETS]]";
+const MEDIA_BLOCK_END = "[[/VONZA_MEDIA_ASSETS]]";
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+}
+
+const MEDIA_BLOCK_PATTERN = new RegExp(
+  `${escapeRegex(MEDIA_BLOCK_START)}\\n?([\\s\\S]*?)\\n?${escapeRegex(MEDIA_BLOCK_END)}`,
+  "i"
+);
+
+function normalizeMediaAsset(asset = {}, fallbackPageUrl = "") {
+  const rawUrl = cleanText(asset.url);
+  const url = /^https?:\/\//i.test(rawUrl)
+    ? rawUrl
+    : normalizeUrl(rawUrl, fallbackPageUrl);
+
+  if (!url || !isUsefulImageUrl(url)) {
+    return null;
+  }
+
+  return {
+    url,
+    pageUrl: cleanText(asset.pageUrl || fallbackPageUrl),
+    alt: cleanText(asset.alt),
+  };
+}
+
+function serializeMediaAssets(assets = []) {
+  const normalizedAssets = assets
+    .map((asset) => normalizeMediaAsset(asset))
+    .filter(Boolean)
+    .slice(0, 48);
+
+  if (!normalizedAssets.length) {
+    return "";
+  }
+
+  return `${MEDIA_BLOCK_START}\n${JSON.stringify(normalizedAssets)}\n${MEDIA_BLOCK_END}`;
+}
+
+export function extractStructuredMediaAssets(content = "") {
+  const normalizedContent = String(content || "");
+  const seen = new Set();
+  const structuredAssets = [];
+
+  const startIndex = normalizedContent.indexOf(MEDIA_BLOCK_START);
+  const endIndex = normalizedContent.indexOf(MEDIA_BLOCK_END);
+
+  if (startIndex >= 0 && endIndex > startIndex) {
+    try {
+      const rawBlock = normalizedContent
+        .slice(startIndex + MEDIA_BLOCK_START.length, endIndex)
+        .trim();
+      const parsed = JSON.parse(rawBlock);
+
+      if (Array.isArray(parsed)) {
+        parsed.forEach((asset) => {
+          const normalized = normalizeMediaAsset(asset);
+
+          if (!normalized || seen.has(normalized.url)) {
+            return;
+          }
+
+          seen.add(normalized.url);
+          structuredAssets.push(normalized);
+        });
+      }
+    } catch {
+      // Ignore malformed media blocks and fall back to legacy parsing below.
+    }
+  }
+
+  const lines = normalizedContent.split("\n");
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (cleanText(lines[index]).toLowerCase() !== "images:") {
+      continue;
+    }
+
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const line = cleanText(lines[cursor]);
+
+      if (!line) {
+        continue;
+      }
+
+      if (!/^https?:\/\//i.test(line)) {
+        break;
+      }
+
+      if (!/\.(avif|gif|jpe?g|png|webp)(\?|#|$)/i.test(line)) {
+        continue;
+      }
+
+      const normalized = normalizeMediaAsset({ url: line });
+
+      if (!normalized || seen.has(normalized.url)) {
+        continue;
+      }
+
+      seen.add(normalized.url);
+      structuredAssets.push(normalized);
+    }
+  }
+
+  return structuredAssets;
+}
+
+export function stripStructuredMediaContent(content = "") {
+  return String(content || "").replace(MEDIA_BLOCK_PATTERN, "").trim();
+}
+
+export function stripLegacyImageSections(content = "") {
+  const lines = String(content || "").split("\n");
+  const cleanedLines = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const normalized = cleanText(line).toLowerCase();
+
+    if (normalized !== "images:") {
+      cleanedLines.push(line);
+      continue;
+    }
+
+    index += 1;
+
+    while (index < lines.length) {
+      const candidate = cleanText(lines[index]);
+
+      if (!candidate) {
+        index += 1;
+        continue;
+      }
+
+      if (/^https?:\/\//i.test(candidate)) {
+        index += 1;
+        continue;
+      }
+
+      index -= 1;
+      break;
+    }
+  }
+
+  return cleanedLines.join("\n");
+}
+
+export function buildPlainWebsiteContent(content = "") {
+  const withoutStructuredMedia = stripStructuredMediaContent(content);
+  const withoutLegacyImageSections = stripLegacyImageSections(withoutStructuredMedia);
+
+  return cleanExtractedContent(withoutLegacyImageSections);
+}
+
 export function buildRelevantContextBlock(contentRecord, userMessage) {
-  const sections = contentRecord.content
+  const sections = buildPlainWebsiteContent(contentRecord.content)
     .split(/\n\n---\n\n/)
     .map((section) => section.trim())
     .filter(Boolean);
@@ -156,9 +313,13 @@ function isUsefulImageUrl(url) {
 }
 
 export function extractUsefulImageUrls(html, pageUrl) {
+  return extractUsefulImageAssets(html, pageUrl).map((asset) => asset.url);
+}
+
+export function extractUsefulImageAssets(html, pageUrl) {
   const $ = cheerio.load(html);
   const seen = new Set();
-  const imageUrls = [];
+  const imageAssets = [];
   let discoveredCount = 0;
 
   $("img").each((_, element) => {
@@ -187,28 +348,35 @@ export function extractUsefulImageUrls(html, pageUrl) {
     }
 
     seen.add(normalizedUrl);
-    imageUrls.push(normalizedUrl);
+    imageAssets.push({
+      url: normalizedUrl,
+      pageUrl,
+      alt,
+    });
   });
 
-  const keptImages = imageUrls.slice(0, 12);
+  const keptImages = imageAssets.slice(0, 12);
   console.log(`[image-debug] ${pageUrl} found ${discoveredCount} <img> tags, kept ${keptImages.length}`);
 
   return keptImages;
 }
 
 export function extractImageUrlsFromContent(content = "") {
-  return [
-    ...new Set(
-      content
-        .split("\n")
-        .map((line) => cleanText(line))
-        .filter((line) => /^https?:\/\//i.test(line))
-    ),
-  ];
+  return extractStructuredMediaAssets(content).map((asset) => asset.url);
+}
+
+function getContentMediaAssets(contentRecord = {}) {
+  if (Array.isArray(contentRecord.mediaAssets) && contentRecord.mediaAssets.length > 0) {
+    return contentRecord.mediaAssets
+      .map((asset) => normalizeMediaAsset(asset))
+      .filter(Boolean);
+  }
+
+  return extractStructuredMediaAssets(contentRecord.rawContent || contentRecord.content);
 }
 
 export function hasVisualIntent(message = "") {
-  return /(show|image|images|photo|photos|picture|pictures|visual|look|see|gallery|product|products|service|services|portfolio|reference|example|examples|kép|képek|mutasd|mutass|fotó|fotók|vizuális|portfolio)/i.test(
+  return /(show me|send me|share|image|images|photo|photos|picture|pictures|gallery|logo|logos|visual|visuals|screenshot|screenshots|asset|assets|source image|source images|kép|képek|mutasd|mutass|fotó|fotók|vizuális|galéria|logo)/i.test(
     message
   );
 }
@@ -218,14 +386,46 @@ export function selectRelevantImageUrls(contentRecord, userMessage) {
     return [];
   }
 
-  const relevantContext = buildRelevantContextBlock(contentRecord, userMessage);
-  const relevantImages = extractImageUrlsFromContent(relevantContext);
+  const assets = getContentMediaAssets(contentRecord);
+  const keywords = tokenizeForMatching(userMessage);
+  const rankedAssets = assets
+    .map((asset) => {
+      const altText = cleanText(asset.alt).toLowerCase();
+      const pageText = cleanText(asset.pageUrl).toLowerCase();
+      const score = keywords.reduce((total, keyword) => {
+        if (!keyword) {
+          return total;
+        }
+
+        let nextScore = total;
+
+        if (altText.includes(keyword)) {
+          nextScore += 4;
+        }
+
+        if (pageText.includes(keyword)) {
+          nextScore += 2;
+        }
+
+        return nextScore;
+      }, 0);
+
+      return {
+        asset,
+        score,
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const relevantImages = rankedAssets
+    .filter((entry) => entry.score > 0)
+    .map((entry) => entry.asset.url);
 
   if (relevantImages.length > 0) {
     return relevantImages.slice(0, 2);
   }
 
-  return extractImageUrlsFromContent(contentRecord.content).slice(0, 2);
+  return assets.map((asset) => asset.url).slice(0, 2);
 }
 
 export function extractWebsiteContentFromHtml(html, pageUrl) {
@@ -246,10 +446,10 @@ export function extractWebsiteContentFromHtml(html, pageUrl) {
     .get()
     .filter(Boolean)
     .slice(0, 40);
-  const imageUrls = extractUsefulImageUrls(html, pageUrl);
+  const mediaAssets = extractUsefulImageAssets(html, pageUrl);
+  const imageUrls = mediaAssets.map((asset) => asset.url);
   const bodyContent = cleanExtractedContent($("body").text());
   const structuredContent = [
-    imageUrls.length ? `Images:\n${imageUrls.join("\n")}` : "",
     headings.length ? `Headings:\n${headings.join("\n")}` : "",
     highlights.length ? `Highlights:\n${highlights.join("\n")}` : "",
     bodyContent ? `Body:\n${bodyContent}` : "",
@@ -267,6 +467,7 @@ export function extractWebsiteContentFromHtml(html, pageUrl) {
     metaDescription,
     content,
     imageUrls,
+    mediaAssets,
   };
 }
 
@@ -280,9 +481,10 @@ function buildFallbackContentRecord(business, pageResults) {
     `URL: ${business.website_url}`,
     `Title: ${fallbackTitle || "None"}`,
     `Description: ${fallbackDescription || "None"}`,
-    primaryPage.imageUrls?.length ? `Images:\n${primaryPage.imageUrls.join("\n")}` : "",
+    primaryPage.mediaAssets?.length ? `Media assets available on request: ${primaryPage.mediaAssets.length}` : "",
     "Content:",
     "Limited content available. This assistant may give general answers.",
+    serializeMediaAssets(primaryPage.mediaAssets || []),
   ].filter(Boolean).join("\n");
 
   return {
@@ -363,7 +565,9 @@ export async function getStoredWebsiteContent(supabase, businessId) {
     websiteUrl: content.website_url,
     pageTitle: content.page_title,
     metaDescription: content.meta_description,
-    content: content.content,
+    content: buildPlainWebsiteContent(content.content),
+    rawContent: content.content,
+    mediaAssets: extractStructuredMediaAssets(content.content),
     crawledUrls: content.crawled_urls || [],
     pageCount: content.page_count || 0,
   };
@@ -405,13 +609,20 @@ export async function extractBusinessWebsiteContent(supabase, options = {}) {
   }
 
   const combinedContent = pageResults
+    .map((page) => ({
+      ...page,
+      content: buildPlainWebsiteContent(page.content),
+    }))
     .map(
       (page) =>
-        `URL: ${page.url}\nTitle: ${page.pageTitle || "None"}\nDescription: ${page.metaDescription || "None"}\n${page.imageUrls?.length ? `Images:\n${page.imageUrls.join("\n")}\n` : ""}Content:\n${page.content}`
+        `URL: ${page.url}\nTitle: ${page.pageTitle || "None"}\nDescription: ${page.metaDescription || "None"}\nContent:\n${page.content}`
     )
     .join("\n\n---\n\n")
     .slice(0, 20000)
     .trim();
+  const combinedMediaAssets = pageResults.flatMap((page) => page.mediaAssets || []);
+  const serializedMediaAssets = serializeMediaAssets(combinedMediaAssets);
+  const persistedContent = [combinedContent, serializedMediaAssets].filter(Boolean).join("\n\n");
 
   const combinedRecord =
     combinedContent && combinedContent.length >= 500
@@ -420,7 +631,8 @@ export async function extractBusinessWebsiteContent(supabase, options = {}) {
           websiteUrl: business.website_url,
           pageTitle: pageResults[0]?.pageTitle || null,
           metaDescription: pageResults[0]?.metaDescription || null,
-          content: combinedContent,
+          content: persistedContent,
+          mediaAssets: combinedMediaAssets,
           crawledUrls: pageResults.map((page) => page.url),
           pageCount: pageResults.length,
         }
