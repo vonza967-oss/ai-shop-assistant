@@ -659,6 +659,20 @@ function createAgentTestDeps(state) {
         persistenceAvailable: true,
       };
     },
+    listLeadCaptures: async () => ({
+      records: [],
+      summary: {
+        highIntentConversations: 0,
+        capturePromptsShown: 0,
+        contactsCaptured: 0,
+        captureRate: 0,
+        followUpsPrepared: 0,
+        followUpsSent: 0,
+        pricingCaptures: 0,
+        bookingCaptures: 0,
+      },
+      persistenceAvailable: true,
+    }),
     updateFollowUpWorkflow: async (_supabase, { followUpId, status, subject, draftContent }) => {
       const existing = state.followUps.get(followUpId);
       assert.ok(existing, "follow-up should exist before update");

@@ -2210,12 +2210,25 @@ function createEmptyActionQueue() {
       resolved: 0,
       attentionNeeded: 0,
     },
+    conversionSummary: {
+      highIntentConversations: 0,
+      capturePromptsShown: 0,
+      contactsCaptured: 0,
+      captureRate: 0,
+      followUpsPrepared: 0,
+      followUpsSent: 0,
+      pricingCaptures: 0,
+      bookingCaptures: 0,
+    },
+    recentLeadCaptures: [],
     persistenceAvailable: true,
     migrationRequired: false,
     followUpWorkflowAvailable: true,
     followUpWorkflowMigrationRequired: false,
     knowledgeFixWorkflowAvailable: true,
     knowledgeFixWorkflowMigrationRequired: false,
+    liveConversionAvailable: true,
+    liveConversionMigrationRequired: false,
   };
 }
 
@@ -2609,6 +2622,29 @@ function buildPeopleSummaryPills(summary = {}) {
   ];
 }
 
+function formatCaptureRate(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "0%";
+  }
+
+  return `${Math.round(numeric * 100)}%`;
+}
+
+function buildConversionSummaryPills(summary = {}) {
+  const counts = {
+    ...createEmptyActionQueue().conversionSummary,
+    ...(summary || {}),
+  };
+
+  return [
+    `${counts.highIntentConversations} high-intent chats`,
+    `${counts.capturePromptsShown} prompts shown`,
+    `${counts.contactsCaptured} contacts captured`,
+    `${formatCaptureRate(counts.captureRate)} capture rate`,
+  ];
+}
+
 function formatPersonIdentity(person = {}) {
   const name = trimText(person.name);
   const email = trimText(person.email);
@@ -2796,6 +2832,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
     const personThreadLabel = item.person?.relatedInteractionCount > 1
       ? `${item.person.label || "Returning visitor"} · ${item.person.relatedInteractionCount} interactions`
       : "";
+    const leadCapture = item.leadCapture && typeof item.leadCapture === "object" ? item.leadCapture : null;
     const followUp = item.followUp && typeof item.followUp === "object" ? item.followUp : null;
     const followUpStatus = trimText(followUp?.status).toLowerCase();
     const followUpSupported = item.followUpSupported === true;
@@ -2805,6 +2842,31 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
     const toggleOpenLabel = item.note || item.outcome || item.nextStep || item.contactStatus
       ? "Edit owner handoff"
       : "Open owner handoff";
+    const leadCaptureSummary = leadCapture
+      ? `
+        <div class="action-queue-handoff-summary">
+          <div class="action-queue-handoff-item">
+            <span class="action-queue-detail-label">Capture state</span>
+            <strong class="action-queue-detail-value">${escapeHtml(trimText(leadCapture.state).replaceAll("_", " ") || "Not started")}</strong>
+          </div>
+          <div class="action-queue-handoff-item">
+            <span class="action-queue-detail-label">Captured contact</span>
+            <strong class="action-queue-detail-value">${escapeHtml(formatActionQueueContact({ contactInfo: leadCapture.contact || {} }))}</strong>
+          </div>
+          <div class="action-queue-handoff-item">
+            <span class="action-queue-detail-label">Why capture happened</span>
+            <strong class="action-queue-detail-value">${escapeHtml(trimText(leadCapture.reason) || item.whyFlagged || "No capture reason stored yet.")}</strong>
+          </div>
+          <div class="action-queue-handoff-item">
+            <span class="action-queue-detail-label">Visitor type</span>
+            <strong class="action-queue-detail-value">${escapeHtml(leadCapture.isReturningVisitor ? "Returning visitor" : "New visitor")}</strong>
+          </div>
+        </div>
+        <div class="action-queue-secondary-action">
+          ${item.messageId ? `<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(item.messageId)}">Open related conversation</button>` : ""}
+        </div>
+      `
+      : "";
     const followUpSummary = followUpSupported
       ? `
         ${followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up is read-only until the workflow migration is applied. Run db/agent_follow_up_workflows.sql before using this live.</div>` : ""}
@@ -3024,6 +3086,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
         <div class="action-queue-handoff">
           ${followUpSummary}
           ${knowledgeFixSummary}
+          ${leadCaptureSummary}
           <div class="action-queue-handoff-summary">
             <div class="action-queue-handoff-item">
               <span class="action-queue-detail-label">Owner note</span>
@@ -3186,6 +3249,10 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
   const peopleSummary = {
     ...createEmptyActionQueue().peopleSummary,
     ...(actionQueue.peopleSummary || {}),
+  };
+  const conversionSummary = {
+    ...createEmptyActionQueue().conversionSummary,
+    ...(actionQueue.conversionSummary || {}),
   };
 
   const nextActions = [];
@@ -3410,6 +3477,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     signals,
     queueSummary,
     peopleSummary,
+    conversionSummary,
     cards,
     primaryAction,
     nextActions: nextActions.slice(0, 2),
@@ -3533,16 +3601,16 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
             <div class="overview-metric-value">${escapeHtml(recentUsageValue)}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Follow-up needed</div>
-            <div class="overview-metric-value">${overview.queueSummary.followUpNeeded || 0}</div>
+            <div class="overview-metric-label">High-intent chats</div>
+            <div class="overview-metric-value">${overview.conversionSummary.highIntentConversations || 0}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Attention now</div>
             <div class="overview-metric-value">${overview.queueSummary.attentionNeeded || 0}</div>
           </div>
           <div class="overview-metric">
-            <div class="overview-metric-label">Resolved items</div>
-            <div class="overview-metric-value">${overview.queueSummary.resolved || 0}</div>
+            <div class="overview-metric-label">Contacts captured</div>
+            <div class="overview-metric-value">${overview.conversionSummary.contactsCaptured || 0}</div>
           </div>
           <div class="overview-metric">
             <div class="overview-metric-label">Returning people</div>
@@ -3624,6 +3692,13 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     ...createEmptyActionQueue().peopleSummary,
     ...(actionQueue.peopleSummary || {}),
   };
+  const conversionSummary = {
+    ...createEmptyActionQueue().conversionSummary,
+    ...(actionQueue.conversionSummary || {}),
+  };
+  const recentLeadCaptures = Array.isArray(actionQueue.recentLeadCaptures)
+    ? actionQueue.recentLeadCaptures
+    : [];
   const installStatus = getDefaultInstallStatus(agent);
   const widgetMetrics = agent.widgetMetrics || {};
   const opportunityItems = [];
@@ -3716,15 +3791,19 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
           </div>
           <div class="metric-card">
             <div class="metric-label">High-intent signals</div>
-            <div class="metric-value">${signals.highValueIntentCount}</div>
+            <div class="metric-value">${conversionSummary.highIntentConversations || 0}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Answers needing work</div>
-            <div class="metric-value">${signals.weakAnswerCount || 0}</div>
+            <div class="metric-label">Prompts shown</div>
+            <div class="metric-value">${conversionSummary.capturePromptsShown || 0}</div>
           </div>
           <div class="metric-card">
-            <div class="metric-label">Returning people</div>
-            <div class="metric-value">${peopleSummary.returning || 0}</div>
+            <div class="metric-label">Contacts captured</div>
+            <div class="metric-value">${conversionSummary.contactsCaptured || 0}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Capture rate</div>
+            <div class="metric-value">${escapeHtml(formatCaptureRate(conversionSummary.captureRate))}</div>
           </div>
         </div>
 
@@ -3790,6 +3869,33 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
         </div>
 
         <section class="workspace-card-soft">
+          <h3 class="studio-group-title">Conversion loop</h3>
+          <p class="studio-group-copy">This is the front-desk loop: which high-intent chats were prompted, which contacts were captured, and whether follow-up is already prepared.</p>
+          <div class="action-queue-summary">
+            ${buildConversionSummaryPills(conversionSummary).map((label) => `
+              <span class="pill">${escapeHtml(label)}</span>
+            `).join("")}
+          </div>
+          <div class="analytics-list" style="margin-top:16px;">
+            <div class="analytics-item">
+              <p class="analytics-item-title">Follow-ups prepared</p>
+              <p class="analytics-item-copy">${escapeHtml(`${conversionSummary.followUpsPrepared || 0} prepared`)}</p>
+              <p class="analytics-subtle">${escapeHtml(`${conversionSummary.followUpsSent || 0} marked sent so far.`)}</p>
+            </div>
+            <div class="analytics-item">
+              <p class="analytics-item-title">Pricing captures</p>
+              <p class="analytics-item-copy">${escapeHtml(`${conversionSummary.pricingCaptures || 0} captured`)}</p>
+              <p class="analytics-subtle">High-intent pricing chats that turned into a stored contact.</p>
+            </div>
+            <div class="analytics-item">
+              <p class="analytics-item-title">Booking captures</p>
+              <p class="analytics-item-copy">${escapeHtml(`${conversionSummary.bookingCaptures || 0} captured`)}</p>
+              <p class="analytics-subtle">Booking-intent chats that turned into a stored contact.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-card-soft">
           <h3 class="studio-group-title">Top customer questions</h3>
           <p class="studio-group-copy">These are the strongest recurring question themes from real visitor usage. Similar wording is grouped lightly so you can see what customers care about most.</p>
           ${signals.topQuestions.length ? `
@@ -3816,6 +3922,30 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
         ${buildActionQueueMarkup(agent, actionQueue, { compact: true, allowStatusUpdates: false })}
 
         ${buildPeopleMarkup(actionQueue)}
+
+        <section class="workspace-card-soft">
+          <h3 class="studio-group-title">Recent captured leads</h3>
+          <p class="studio-group-copy">These are the most recent live-chat contacts Vonza turned into a real operator handoff.</p>
+          ${recentLeadCaptures.length ? `
+            <div class="analytics-list">
+              ${recentLeadCaptures.map((lead) => `
+                <div class="analytics-item">
+                  <p class="analytics-item-title">${escapeHtml(formatActionQueueContact({ contactInfo: lead.contact || {} }) || "Contact captured")}</p>
+                  <p class="analytics-item-copy">${escapeHtml(trimText(lead.reason) || "Captured from live chat intent.")}</p>
+                  <p class="analytics-subtle">${escapeHtml([
+                    trimText(lead.state).replaceAll("_", " "),
+                    lead.isReturningVisitor ? "returning visitor" : "new visitor",
+                    trimText(lead.followUp?.status) ? `follow-up ${trimText(lead.followUp.status)}` : "",
+                  ].filter(Boolean).join(" · "))}</p>
+                  <div class="action-queue-secondary-action">
+                    ${lead.latestMessageId ? `<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(lead.latestMessageId)}">Open related conversation</button>` : ""}
+                    <button class="ghost-button" type="button" data-overview-focus="action-queue">Open action queue</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          ` : `<div class="placeholder-card">No live contacts captured yet. As soon as a high-intent chat turns into a real contact, it will show up here.</div>`}
+        </section>
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">What needs attention</h3>

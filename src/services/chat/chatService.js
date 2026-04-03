@@ -13,6 +13,10 @@ import {
 } from "./prompting.js";
 import { storeAgentMessages } from "./messageService.js";
 import {
+  applyLeadCaptureAction,
+  processLiveChatLeadCapture,
+} from "../leads/liveLeadCaptureService.js";
+import {
   buildEffectiveUserText,
   cleanText,
   detectResponseLanguage,
@@ -68,7 +72,16 @@ function buildLimitedKnowledgeReply(language, agentName, websiteContent) {
   return `${summary} I can still help with the next step. Are you trying to understand their services, pricing, or how to contact ${siteLabel}?`;
 }
 
-async function buildChatResponse({ supabase, agent, businessId, widgetConfig, userMessage, reply, sessionKey }) {
+async function buildChatResponse({
+  supabase,
+  agent,
+  businessId,
+  widgetConfig,
+  userMessage,
+  reply,
+  sessionKey,
+  leadCapture = null,
+}) {
   await storeAgentMessages(supabase, agent.id, [
     { role: "user", content: userMessage },
     { role: "assistant", content: reply },
@@ -85,6 +98,7 @@ async function buildChatResponse({ supabase, agent, businessId, widgetConfig, us
       ...widgetConfig,
       assistantName: agent.name || widgetConfig.assistantName,
     },
+    leadCapture,
   };
 }
 
@@ -101,6 +115,9 @@ export async function handleChatRequest({
   const businessId = body.business_id || body.businessId;
   const websiteUrl = cleanText(body.website_url || body.websiteUrl || "");
   const sessionKey = cleanText(body.visitor_session_key || body.visitorSessionKey || "");
+  const installId = cleanText(body.install_id || body.installId || "");
+  const pageUrl = cleanText(body.page_url || body.pageUrl || "");
+  const origin = cleanText(body.origin || "");
   const history = sanitizeChatHistory(body.history);
   const effectiveUserText = buildEffectiveUserText(message || "", history);
   const conversationHistory = formatConversationHistory(history);
@@ -233,6 +250,18 @@ export async function handleChatRequest({
 
   console.log("FINAL REPLY:", finalReply);
 
+  const leadCapture = await processLiveChatLeadCapture(supabase, {
+    agent,
+    business,
+    widgetConfig,
+    sessionKey,
+    installId,
+    pageUrl,
+    origin,
+    userMessage: message,
+    language,
+  });
+
   return buildChatResponse({
     supabase,
     agent,
@@ -241,5 +270,68 @@ export async function handleChatRequest({
     userMessage: message,
     reply: appendImageLines(finalReply, websiteContent, message),
     sessionKey,
+    leadCapture,
   });
+}
+
+export async function handleLeadCaptureRequest({
+  supabase,
+  body,
+}) {
+  const agentId = body.agent_id || body.agentId;
+  const agentKey = body.agent_key || body.agentKey;
+  const businessId = body.business_id || body.businessId;
+  const websiteUrl = cleanText(body.website_url || body.websiteUrl || "");
+  const sessionKey = cleanText(body.visitor_session_key || body.visitorSessionKey || "");
+  const installId = cleanText(body.install_id || body.installId || "");
+  const pageUrl = cleanText(body.page_url || body.pageUrl || "");
+  const origin = cleanText(body.origin || "");
+  const action = cleanText(body.action).toLowerCase();
+  const referenceMessage = cleanText(body.reference_message || body.referenceMessage || "");
+  const language = detectResponseLanguage(referenceMessage);
+
+  if (!agentKey && !businessId && !agentId) {
+    const error = new Error("agent_id, agent_key, or business_id is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!action) {
+    const error = new Error("action is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { agent, business, widgetConfig } = await resolveAgentContext(supabase, {
+    agentId,
+    agentKey,
+    businessId,
+    websiteUrl,
+    businessName: body.name,
+  });
+
+  const leadCapture = await applyLeadCaptureAction(supabase, {
+    agent,
+    business,
+    widgetConfig,
+    action,
+    sessionKey,
+    installId,
+    pageUrl,
+    origin,
+    language,
+    userMessage: referenceMessage,
+    name: body.name,
+    email: body.email,
+    phone: body.phone,
+    preferredChannel: body.preferred_channel || body.preferredChannel,
+  });
+
+  return {
+    ok: true,
+    agentId: agent.id,
+    agentKey: agent.publicAgentKey,
+    businessId: business.id,
+    leadCapture,
+  };
 }
