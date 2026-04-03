@@ -5,6 +5,7 @@ import {
   buildOperatorActivationChecklist,
   buildOperatorBriefing,
   buildOperatorSingleNextAction,
+  buildOperatorTodaySummary,
   createDefaultOperatorActivationState,
 } from "../src/services/operator/operatorActivationService.js";
 
@@ -160,4 +161,23 @@ test("operator briefing summarizes live workload with next recommendation", () =
   assert.match(briefing.text, /3 inbox threads need attention/i);
   assert.match(briefing.text, /1 complaint needs review/i);
   assert.match(briefing.text, /recommended next step: Review complaints/i);
+});
+
+test("today summary includes people-centered attention counts", () => {
+  const today = buildOperatorTodaySummary({
+    summary: {
+      inboxNeedingAttention: 1,
+    },
+    contactsSummary: {
+      contactsNeedingAttention: 4,
+      complaintRiskContacts: 2,
+      leadsWithoutNextStep: 1,
+      customersAwaitingFollowUp: 3,
+    },
+  });
+
+  assert.equal(today.contactsNeedingAttention, 4);
+  assert.equal(today.complaintRiskContacts, 2);
+  assert.equal(today.leadsWithoutNextStep, 1);
+  assert.equal(today.customersAwaitingFollowUp, 3);
 });

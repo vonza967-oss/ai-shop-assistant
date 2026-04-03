@@ -901,6 +901,119 @@ export async function syncFollowUpWorkflows(supabase, options = {}) {
   };
 }
 
+export async function createManualFollowUpWorkflow(supabase, options = {}) {
+  const agentId = cleanText(options.agentId);
+  const ownerUserId = cleanText(options.ownerUserId);
+  const businessName = cleanText(options.businessName || options.name) || "Vonza";
+  const assistantName = cleanText(options.assistantName || businessName) || businessName;
+  const actionType = normalizeActionType(options.actionType || "lead_follow_up") || "lead_follow_up";
+  const contact = normalizeContactInfo({
+    name: options.contactName || options.name,
+    email: options.contactEmail || options.email,
+    phone: options.contactPhone || options.phone,
+  });
+  const personKey = cleanText(options.personKey);
+  const linkedActionKeys = normalizeLinkedActionKeys(options.linkedActionKeys || options.linked_action_keys || []);
+  const sourceActionKey = cleanText(options.sourceActionKey || options.source_action_key)
+    || `manual_contact:${personKey || contact.email || contact.phoneNormalized || businessName.toLowerCase().replace(/\s+/g, "_")}:${actionType}`;
+
+  if (!agentId || !ownerUserId) {
+    const error = new Error("agent_id and owner_user_id are required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!hasUsableContact(contact)) {
+    const error = new Error("A usable email address or phone number is required for a contact follow-up.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const dedupeKey = personKey
+    ? `manual_person:${personKey}:${actionType}`
+    : `manual_contact:${contact.email || contact.phoneNormalized}:${actionType}`;
+  const topic = cleanText(options.topic)
+    || (actionType === "booking_intent"
+      ? "Booking request"
+      : actionType === "pricing_interest"
+        ? "Pricing follow-up"
+        : "Lead follow-up");
+  const subject = cleanText(options.subject) || buildSubject({
+    actionType,
+    topic,
+    businessName,
+  });
+  const candidate = {
+    actionType,
+    businessName,
+    assistantName,
+    channel: getPreferredChannel(contact),
+    contact,
+    hasUsableContact: true,
+    topic,
+    item: {
+      question: cleanText(options.contextQuestion),
+      snippet: cleanText(options.contextSnippet),
+      label: topic,
+    },
+  };
+  const draftContent = cleanText(options.draftContent) || buildDraftContent(candidate);
+  const listed = await listFollowUpWorkflows(supabase, {
+    agentId,
+    ownerUserId,
+  });
+
+  if (listed.persistenceAvailable === false) {
+    return {
+      followUp: null,
+      persistenceAvailable: false,
+    };
+  }
+
+  const existing = listed.records.find((record) => record.dedupeKey === dedupeKey) || null;
+  const workflow = normalizeFollowUpWorkflow({
+    ...existing,
+    agentId,
+    ownerUserId,
+    dedupeKey,
+    sourceActionKey,
+    linkedActionKeys: uniqueText([sourceActionKey, ...linkedActionKeys, ...(existing?.linkedActionKeys || [])]),
+    actionType,
+    personKey: personKey || existing?.personKey,
+    status: "draft",
+    channel: getPreferredChannel(contact),
+    contactName: contact.name || existing?.contactName,
+    contactEmail: contact.email || existing?.contactEmail,
+    contactPhone: contact.phone || existing?.contactPhone,
+    subject,
+    draftContent,
+    lastGeneratedSubject: subject,
+    lastGeneratedContent: draftContent,
+    draftEditedManually: Boolean(cleanText(options.subject) || cleanText(options.draftContent)),
+    evidence: cleanText(options.evidence || options.contextSnippet),
+    whyPrepared: cleanText(options.whyPrepared || `Prepared manually from the Contacts workspace for ${topic.toLowerCase()}.`),
+    topic,
+    pageHint: cleanText(options.pageHint),
+    sourceHash: hashParts([dedupeKey, subject, draftContent]),
+    lastError: "",
+    sentAt: null,
+    dismissedAt: null,
+  });
+
+  const persisted = existing?.id
+    ? await updateFollowUpWorkflowRecord(supabase, workflow)
+    : await insertFollowUpWorkflow(supabase, workflow);
+  const queueSync = await persistQueueSyncForFollowUp(supabase, {
+    followUp: persisted,
+  });
+
+  return {
+    followUp: persisted,
+    queueSync,
+    persistenceAvailable: true,
+  };
+}
+
 async function getFollowUpWorkflowById(supabase, options = {}) {
   const followUpId = cleanText(options.followUpId);
   const agentId = cleanText(options.agentId);

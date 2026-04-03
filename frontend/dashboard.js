@@ -35,8 +35,7 @@ const LAUNCH_STEPS = [
   }
 ];
 const trackedEventKeys = new Set();
-const SHELL_SECTIONS = ["overview", "inbox", "calendar", "automations", "customize", "analytics"];
-const FULL_SHELL_SECTIONS = SHELL_SECTIONS.slice();
+const FULL_SHELL_SECTIONS = ["overview", "contacts", "inbox", "calendar", "automations", "customize", "analytics"];
 const LEGACY_SHELL_SECTIONS = ["overview", "customize", "analytics"];
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const AUTH_VIEW_MODES = {
@@ -1537,6 +1536,11 @@ function buildWorkspaceTabs(activeSection, setup, operatorWorkspace = createEmpt
         : (setup.isReady ? "Today, workload, approvals, and connected systems" : "Activation checklist plus operator rollout"),
     },
     {
+      key: "contacts",
+      label: "Contacts",
+      note: "Cross-channel people, timeline, lifecycle, and next-step recommendations",
+    },
+    {
       key: "inbox",
       label: "Inbox",
       note: "Connected Gmail threads, complaint drafts, and owner-approved replies",
@@ -1691,6 +1695,269 @@ function buildOperatorEmptyState({ title, copy, actionMarkup = "" } = {}) {
   `;
 }
 
+function formatContactLifecycleLabel(value = "") {
+  const normalized = trimText(value).replaceAll("_", " ");
+  return normalized ? normalized.replace(/\b\w/g, (match) => match.toUpperCase()) : "New";
+}
+
+function buildContactSources(contact = {}) {
+  return Array.isArray(contact.sources) ? contact.sources : [];
+}
+
+function buildContactFlags(contact = {}) {
+  return Array.isArray(contact.flags) ? contact.flags : [];
+}
+
+function getRecommendedCampaignGoal(contact = {}) {
+  if (trimText(contact.lifecycleState) === "customer") {
+    return "review_request";
+  }
+
+  if (buildContactFlags(contact).includes("complaint")) {
+    return "complaint_recovery";
+  }
+
+  return "quote_follow_up";
+}
+
+function buildContactQuickActions(contact = {}, operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const actions = [];
+  const nextAction = contact.nextAction || {};
+  const suggestedSlot = (operatorWorkspace.calendar?.suggestedSlots || [])[0] || null;
+
+  if (contact.latestMessageId) {
+    actions.push(`<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(contact.latestMessageId)}">Open related conversation</button>`);
+  }
+
+  if (contact.primaryThreadId) {
+    actions.push(`<button class="ghost-button" type="button" data-open-inbox-thread data-thread-id="${escapeHtml(contact.primaryThreadId)}">Open inbox thread</button>`);
+  }
+
+  if (nextAction.followUpId) {
+    actions.push(`<button class="ghost-button" type="button" data-open-follow-up data-follow-up-id="${escapeHtml(nextAction.followUpId)}">Open follow-up draft</button>`);
+  } else if (contact.email || contact.phone) {
+    actions.push(`
+      <button
+        class="ghost-button"
+        type="button"
+        data-draft-contact-followup
+        data-contact-name="${escapeHtml(contact.name || "")}"
+        data-contact-email="${escapeHtml(contact.email || "")}"
+        data-contact-phone="${escapeHtml(contact.phone || "")}"
+        data-person-key="${escapeHtml(contact.personKey || "")}"
+        data-lead-id="${escapeHtml(contact.leadId || "")}"
+        data-lifecycle-state="${escapeHtml(contact.lifecycleState || "")}"
+      >Draft follow-up</button>
+    `);
+  }
+
+  if (nextAction.eventId || contact.primaryEventId) {
+    actions.push(`<button class="ghost-button" type="button" data-open-calendar-event data-event-id="${escapeHtml(nextAction.eventId || contact.primaryEventId)}">Review calendar action</button>`);
+  } else if ((contact.email || contact.phone) && suggestedSlot?.startAt && suggestedSlot?.endAt) {
+    actions.push(`
+      <button
+        class="ghost-button"
+        type="button"
+        data-draft-contact-calendar
+        data-contact-name="${escapeHtml(contact.name || "")}"
+        data-contact-email="${escapeHtml(contact.email || "")}"
+        data-contact-phone="${escapeHtml(contact.phone || "")}"
+        data-lead-id="${escapeHtml(contact.leadId || "")}"
+        data-slot-start="${escapeHtml(suggestedSlot.startAt || "")}"
+        data-slot-end="${escapeHtml(suggestedSlot.endAt || "")}"
+      >Schedule call</button>
+    `);
+  } else {
+    actions.push(`<button class="ghost-button" type="button" data-shell-target="calendar">Open calendar</button>`);
+  }
+
+  if (contact.email) {
+    actions.push(`
+      <button
+        class="ghost-button"
+        type="button"
+        data-draft-contact-campaign
+        data-contact-name="${escapeHtml(contact.name || "")}"
+        data-contact-email="${escapeHtml(contact.email || "")}"
+        data-person-key="${escapeHtml(contact.personKey || "")}"
+        data-lead-id="${escapeHtml(contact.leadId || "")}"
+        data-goal="${escapeHtml(nextAction.recommendedGoal || getRecommendedCampaignGoal(contact))}"
+      >Draft campaign</button>
+    `);
+  }
+
+  if (Array.isArray(contact.complaintTaskIds) && contact.complaintTaskIds.length) {
+    actions.push(`<button class="ghost-button" type="button" data-update-operator-task data-task-id="${escapeHtml(contact.complaintTaskIds[0])}" data-task-status="resolved">Mark complaint resolved</button>`);
+    actions.push(`<button class="ghost-button" type="button" data-update-operator-task data-task-id="${escapeHtml(contact.complaintTaskIds[0])}" data-task-status="escalated">Escalate</button>`);
+  }
+
+  return actions.join("");
+}
+
+function buildContactsAttentionStrip(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const summary = operatorWorkspace.contacts?.summary || createEmptyOperatorWorkspace().contacts.summary;
+
+  return `
+    <div class="overview-grid operator-metric-grid operator-people-grid">
+      <div class="overview-card">
+        <p class="overview-label">Contacts needing attention</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.contactsNeedingAttention, "contact"))}</p>
+        <p class="overview-card-copy">People-centered work that still needs an operator decision.</p>
+      </div>
+      <div class="overview-card">
+        <p class="overview-label">Complaint-risk contacts</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.complaintRiskContacts, "contact"))}</p>
+        <p class="overview-card-copy">Contacts where complaint or support context should stay front-and-center.</p>
+      </div>
+      <div class="overview-card">
+        <p class="overview-label">Leads with no next step</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.leadsWithoutNextStep, "lead"))}</p>
+        <p class="overview-card-copy">High-intent people who still need a follow-up, booking, or campaign decision.</p>
+      </div>
+      <div class="overview-card">
+        <p class="overview-label">Customers awaiting follow-up</p>
+        <p class="overview-value">${escapeHtml(formatOperatorCount(summary.customersAwaitingFollowUp, "customer"))}</p>
+        <p class="overview-card-copy">Customer records that would benefit from the next owner touchpoint.</p>
+      </div>
+    </div>
+  `;
+}
+
+function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const contacts = operatorWorkspace.contacts?.list || [];
+  const contactsHealth = operatorWorkspace.contacts?.health || createEmptyOperatorWorkspace().contacts.health;
+  const filters = operatorWorkspace.contacts?.filters || createEmptyOperatorWorkspace().contacts.filters;
+  const onlyChatSources = contacts.length && contacts.every((contact) => {
+    const sources = buildContactSources(contact);
+    return sources.length > 0 && sources.every((source) => source === "chat");
+  });
+
+  return `
+    <section class="workspace-panel" data-shell-section="contacts" hidden>
+      <div class="workspace-panel-header">
+        <div>
+          <h2 class="workspace-panel-title">Contacts</h2>
+          <p class="workspace-panel-copy">Vonza now centers the operator workspace around real people instead of disconnected channels. Each record rolls chat, inbox, calendar, follow-up, campaign, complaint, and outcome activity into one operator timeline.</p>
+        </div>
+        <div class="workspace-badge-row">
+          <span class="${getBadgeClass(contactsHealth.migrationRequired ? "Needs attention" : "Ready")}">${contactsHealth.migrationRequired ? "Migration needed" : "Contacts live"}</span>
+          <span class="${getBadgeClass(contactsHealth.partialData ? "Limited" : "Ready")}">${contactsHealth.partialData ? "Partial data" : "Cross-channel view"}</span>
+        </div>
+      </div>
+      ${contactsHealth.loadError ? `<div class="operator-inline-alert"><p>${escapeHtml(`Contacts note: ${contactsHealth.loadError}`)}</p></div>` : ""}
+      ${(filters.quick || []).length || (filters.sources || []).length ? `
+        <div class="workspace-card-soft contact-filter-shell">
+          <div class="contact-filter-group">
+            ${(filters.quick || []).map((filter, index) => `
+              <button class="contact-filter-button ${index === 0 ? "active" : ""}" type="button" data-contact-filter="${escapeHtml(filter.key)}">
+                ${escapeHtml(`${filter.label} (${filter.count})`)}
+              </button>
+            `).join("")}
+          </div>
+          <div class="contact-filter-group contact-filter-group-secondary">
+            ${(filters.sources || []).map((filter) => `
+              <button class="contact-filter-button secondary" type="button" data-contact-filter="${escapeHtml(filter.key)}">
+                ${escapeHtml(`${filter.label} (${filter.count})`)}
+              </button>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
+      ${!contacts.length ? buildOperatorEmptyState({
+        title: "No contacts yet",
+        copy: operatorWorkspace.status?.googleConnected
+          ? "Vonza will create contact records as soon as leads, inbox threads, bookings, or approval-first follow-ups start appearing."
+          : "Contacts still work without Google, but the richest cross-channel timeline appears once chat, inbox, calendar, and follow-up activity start accumulating together.",
+      }) : `
+        ${onlyChatSources ? `<div class="shell-status-banner">Only chat-led contact history is visible right now. That is still useful: as soon as Google-connected inbox or calendar activity appears, Vonza will stitch it into these same records.</div>` : ""}
+        <div class="contact-card-grid" data-contact-filter-results>
+          ${contacts.map((contact) => `
+            <article
+              class="workspace-card-soft contact-card"
+              data-contact-card
+              data-contact-id="${escapeHtml(contact.id || "")}"
+              data-contact-lifecycle="${escapeHtml(contact.lifecycleState || "")}"
+              data-contact-flags="${escapeHtml(buildContactFlags(contact).join("|"))}"
+              data-contact-sources="${escapeHtml(buildContactSources(contact).join("|"))}"
+              data-contact-last-activity="${escapeHtml(contact.mostRecentActivityAt || "")}"
+            >
+              <div class="contact-card-head">
+                <div>
+                  <div class="action-queue-badges">
+                    <span class="pill">${escapeHtml(formatContactLifecycleLabel(contact.lifecycleState))}</span>
+                    ${contact.suggestedLifecycleState && contact.suggestedLifecycleState !== contact.lifecycleState ? `<span class="pill">Suggested ${escapeHtml(formatContactLifecycleLabel(contact.suggestedLifecycleState))}</span>` : ""}
+                    ${contact.partialIdentity ? `<span class="pill">Partial identity</span>` : ""}
+                    ${buildContactFlags(contact).slice(0, 4).map((flag) => `<span class="${flag.includes("complaint") ? "badge pending" : "pill"}">${escapeHtml(flag)}</span>`).join("")}
+                  </div>
+                  <h3 class="studio-group-title">${escapeHtml(contact.name || "Unknown contact")}</h3>
+                  <p class="workspace-panel-copy">${escapeHtml([
+                    contact.bestIdentifier,
+                    contact.email || "",
+                    contact.phone || "",
+                  ].filter(Boolean).join(" · "))}</p>
+                </div>
+                <div class="contact-card-head-meta">
+                  <p class="overview-label">Most recent activity</p>
+                  <strong>${escapeHtml(contact.mostRecentActivityAt ? formatSeenAt(contact.mostRecentActivityAt) : "No recent activity")}</strong>
+                </div>
+              </div>
+              <div class="contact-meta-grid">
+                <div class="contact-meta-block">
+                  <span class="action-queue-detail-label">Source spine</span>
+                  <strong class="action-queue-detail-value">${escapeHtml(buildContactSources(contact).join(" · ") || "Sparse contact record")}</strong>
+                </div>
+                <div class="contact-meta-block">
+                  <span class="action-queue-detail-label">Recommended next action</span>
+                  <strong class="action-queue-detail-value">${escapeHtml(contact.nextAction?.title || "No action needed")}</strong>
+                  <p class="action-queue-copy">${escapeHtml(contact.nextAction?.description || "Vonza does not currently see a higher-priority operator move here.")}</p>
+                </div>
+                <div class="contact-meta-block">
+                  <span class="action-queue-detail-label">Activity counts</span>
+                  <strong class="action-queue-detail-value">${escapeHtml([
+                    `${contact.counts?.leads || 0} leads`,
+                    `${contact.counts?.inboxThreads || 0} inbox`,
+                    `${contact.counts?.calendarEvents || 0} calendar`,
+                    `${contact.counts?.followUps || 0} follow-ups`,
+                  ].join(" · "))}</strong>
+                </div>
+                <div class="contact-meta-block">
+                  <span class="action-queue-detail-label">Lifecycle override</span>
+                  <form class="inline-actions" data-contact-lifecycle-form data-contact-id="${escapeHtml(contact.id || "")}">
+                    <select name="lifecycle_state">
+                      ${["new", "active_lead", "qualified", "customer", "support_issue", "complaint_risk", "dormant"].map((state) => `
+                        <option value="${escapeHtml(state)}" ${state === contact.lifecycleState ? "selected" : ""}>${escapeHtml(formatContactLifecycleLabel(state))}</option>
+                      `).join("")}
+                    </select>
+                    <button class="ghost-button" type="submit" ${contact.id ? "" : "disabled"}>Save state</button>
+                  </form>
+                </div>
+              </div>
+              <div class="inline-actions">
+                ${buildContactQuickActions(contact, operatorWorkspace)}
+              </div>
+              <div class="contact-timeline">
+                <div class="person-subsection">
+                  <span class="action-queue-detail-label">Timeline</span>
+                  ${Array.isArray(contact.timeline) && contact.timeline.length ? `
+                    <div class="timeline-list">
+                      ${contact.timeline.map((entry) => `
+                        <div class="timeline-row">
+                          <strong>${escapeHtml(entry.at ? formatSeenAt(entry.at) : "Recent")}</strong>
+                          <span>${escapeHtml(`${entry.label || entry.source || "Activity"} · ${entry.summary || ""}`)}</span>
+                        </div>
+                      `).join("")}
+                    </div>
+                  ` : `<div class="placeholder-card">This contact exists, but the timeline is still sparse. Vonza will expand it as more cross-channel activity lands.</div>`}
+                </div>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      `}
+    </section>
+  `;
+}
+
 function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOperatorWorkspace()) {
   if (operatorWorkspace.enabled === false) {
     return "";
@@ -1733,10 +2000,11 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
           <p class="overview-label">${escapeHtml(briefing.title || "Operator briefing")}</p>
           <p class="workspace-panel-copy">${escapeHtml(briefing.text || dailySummary)}</p>
           ${health.globalError ? `<div class="operator-inline-alert"><p>${escapeHtml(`Workspace note: ${health.globalError}`)}</p></div>` : ""}
-          ${health.inboxSyncError || health.calendarSyncError ? `
+          ${health.inboxSyncError || health.calendarSyncError || health.contactsError ? `
             <div class="operator-inline-alert">
               ${health.inboxSyncError ? `<p>${escapeHtml(`Inbox sync issue: ${health.inboxSyncError}`)}</p>` : ""}
               ${health.calendarSyncError ? `<p>${escapeHtml(`Calendar sync issue: ${health.calendarSyncError}`)}</p>` : ""}
+              ${health.contactsError ? `<p>${escapeHtml(`Contacts note: ${health.contactsError}`)}</p>` : ""}
             </div>
           ` : ""}
         </section>
@@ -1780,6 +2048,7 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
           <p class="overview-card-copy">${escapeHtml(dailySummary)}</p>
         </div>
       </div>
+      ${buildContactsAttentionStrip(operatorWorkspace)}
     </section>
   `;
 }
@@ -2789,6 +3058,10 @@ function createEmptyOperatorWorkspace() {
       openAvailabilityCount: 0,
       campaignCount: 0,
       followUpCount: 0,
+      contactsNeedingAttention: 0,
+      complaintRiskContacts: 0,
+      leadsWithoutNextStep: 0,
+      customersAwaitingFollowUp: 0,
       topTask: "",
     },
     contextOptions: {
@@ -2810,6 +3083,7 @@ function createEmptyOperatorWorkspace() {
     health: {
       inboxSyncError: "",
       calendarSyncError: "",
+      contactsError: "",
       globalError: "",
     },
     connectedAccounts: [],
@@ -2827,6 +3101,26 @@ function createEmptyOperatorWorkspace() {
       tasks: [],
       campaigns: [],
       followUps: [],
+    },
+    contacts: {
+      list: [],
+      filters: {
+        quick: [],
+        sources: [],
+      },
+      summary: {
+        totalContacts: 0,
+        contactsNeedingAttention: 0,
+        complaintRiskContacts: 0,
+        leadsWithoutNextStep: 0,
+        customersAwaitingFollowUp: 0,
+      },
+      health: {
+        persistenceAvailable: true,
+        migrationRequired: false,
+        loadError: "",
+        partialData: false,
+      },
     },
     summary: {
       inboxNeedingAttention: 0,
@@ -4965,7 +5259,7 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
                 const draft = getThreadDraft(thread);
                 const latestInbound = (thread.messages || []).slice().reverse().find((message) => message.direction === "inbound");
                 return `
-                  <article class="operator-thread-card">
+                  <article class="operator-thread-card" data-thread-card data-thread-id="${escapeHtml(thread.id)}">
                     <div class="operator-thread-head">
                       <div>
                         <p class="analytics-item-title">${escapeHtml(thread.subject || "Connected inbox thread")}</p>
@@ -5050,7 +5344,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
           }) : (calendar.suggestedSlots || []).length ? `
             <div class="analytics-list">
               ${(calendar.suggestedSlots || []).map((slot) => `
-                <div class="analytics-item">
+                <div class="analytics-item" data-calendar-event-card data-event-id="${escapeHtml(event.id)}">
                   <p class="analytics-item-title">${escapeHtml(slot.label || "")}</p>
                   <p class="analytics-subtle">${escapeHtml(`${formatSeenAt(slot.startAt)} to ${formatSeenAt(slot.endAt)}`)}</p>
                 </div>
@@ -5119,7 +5413,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
           ${primaryAccount?.status !== "connected" ? "" : events.length ? `
             <div class="operator-thread-grid">
               ${events.map((event) => `
-                <article class="operator-thread-card">
+                <article class="operator-thread-card" data-calendar-event-card data-event-id="${escapeHtml(event.id)}">
                   <p class="analytics-item-title">${escapeHtml(event.title || "Upcoming event")}</p>
                   <p class="analytics-subtle">${escapeHtml([
                     event.startAt ? formatSeenAt(event.startAt) : "",
@@ -5238,7 +5532,7 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
           ${!googleConnected ? "" : campaigns.length ? `
             <div class="operator-thread-grid">
               ${campaigns.map((campaign) => `
-                <article class="operator-thread-card">
+                <article class="operator-thread-card" data-campaign-card data-campaign-id="${escapeHtml(campaign.id)}">
                   <div class="operator-thread-head">
                     <div>
                       <p class="analytics-item-title">${escapeHtml(campaign.title || "Campaign")}</p>
@@ -5272,12 +5566,33 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Follow-ups needing approval</h3>
           ${(automations.followUps || []).length ? `
-            <div class="analytics-list">
-              ${(automations.followUps || []).slice(0, 6).map((followUp) => `
-                <div class="analytics-item">
-                  <p class="analytics-item-title">${escapeHtml(followUp.subject || followUp.topic || "Prepared follow-up")}</p>
-                  <p class="analytics-item-copy">${escapeHtml(`${followUp.status || "draft"} · ${followUp.channel || "email"} · ${followUp.contactEmail || followUp.contactPhone || "missing contact"}`)}</p>
-                </div>
+            <div class="operator-thread-grid">
+              ${(automations.followUps || []).slice(0, 8).map((followUp) => `
+                <article class="operator-thread-card" data-follow-up-card data-follow-up-id="${escapeHtml(followUp.id)}">
+                  <div class="operator-thread-head">
+                    <div>
+                      <p class="analytics-item-title">${escapeHtml(followUp.subject || followUp.topic || "Prepared follow-up")}</p>
+                      <p class="analytics-subtle">${escapeHtml(`${followUp.status || "draft"} · ${followUp.channel || "email"} · ${followUp.contactEmail || followUp.contactPhone || "missing contact"}`)}</p>
+                    </div>
+                    <span class="${getBadgeClass(followUp.status === "sent" ? "Ready" : followUp.status === "dismissed" ? "Limited" : "Needs attention")}">${escapeHtml(followUp.status || "draft")}</span>
+                  </div>
+                  <form class="workspace-section-stack" data-follow-up-form data-follow-up-id="${escapeHtml(followUp.id)}" data-lead-id="${escapeHtml(followUp.leadId || "")}">
+                    <div class="field">
+                      <label>Subject</label>
+                      <input name="subject" type="text" value="${escapeHtml(followUp.subject || "")}">
+                    </div>
+                    <div class="field">
+                      <label>Draft</label>
+                      <textarea name="draft_content">${escapeHtml(followUp.draftContent || "")}</textarea>
+                    </div>
+                    <div class="inline-actions">
+                      <button class="ghost-button" type="submit">Save draft</button>
+                      <button class="ghost-button" type="button" data-follow-up-status-action data-next-status="ready">Mark ready</button>
+                      <button class="primary-button" type="button" data-follow-up-status-action data-next-status="sent">Mark sent</button>
+                      <button class="ghost-button" type="button" data-follow-up-status-action data-next-status="dismissed">Dismiss</button>
+                    </div>
+                  </form>
+                </article>
               `).join("")}
             </div>
           ` : `<div class="placeholder-card">Prepared follow-ups from existing Vonza workflows will show up here alongside campaigns and complaint tasks.</div>`}
@@ -5338,6 +5653,7 @@ function renderAssistantShell(
 
       ${buildWorkspaceDiagnosticsMarkup(diagnostics)}
       ${buildOverviewPanel(agent, messages, setup, actionQueue, operatorWorkspace)}
+      ${operatorEnabled ? buildContactsPanel(operatorWorkspace) : ""}
       ${operatorEnabled ? buildInboxPanel(agent, operatorWorkspace) : ""}
       ${operatorEnabled ? buildCalendarPanel(agent, operatorWorkspace) : ""}
       ${operatorEnabled ? buildAutomationsPanel(agent, operatorWorkspace) : ""}
@@ -5848,6 +6164,25 @@ async function loadOperatorWorkspace(agentId, options = {}) {
       tasks: Array.isArray(data?.automations?.tasks) ? data.automations.tasks : [],
       campaigns: Array.isArray(data?.automations?.campaigns) ? data.automations.campaigns : [],
       followUps: Array.isArray(data?.automations?.followUps) ? data.automations.followUps : [],
+    },
+    contacts: {
+      ...createEmptyOperatorWorkspace().contacts,
+      ...(data?.contacts || {}),
+      list: Array.isArray(data?.contacts?.list) ? data.contacts.list : [],
+      filters: {
+        ...createEmptyOperatorWorkspace().contacts.filters,
+        ...(data?.contacts?.filters || {}),
+        quick: Array.isArray(data?.contacts?.filters?.quick) ? data.contacts.filters.quick : [],
+        sources: Array.isArray(data?.contacts?.filters?.sources) ? data.contacts.filters.sources : [],
+      },
+      summary: {
+        ...createEmptyOperatorWorkspace().contacts.summary,
+        ...(data?.contacts?.summary || {}),
+      },
+      health: {
+        ...createEmptyOperatorWorkspace().contacts.health,
+        ...(data?.contacts?.health || {}),
+      },
     },
     summary: {
       ...createEmptyOperatorWorkspace().summary,
@@ -6784,7 +7119,16 @@ function bindSharedDashboardEvents(
   const knowledgeFixStatusButtons = document.querySelectorAll("[data-knowledge-fix-status-action]");
   const manualOutcomeForms = document.querySelectorAll("[data-manual-outcome-form]");
   const openConversationButtons = document.querySelectorAll("[data-open-conversation]");
+  const openInboxThreadButtons = document.querySelectorAll("[data-open-inbox-thread]");
+  const openFollowUpButtons = document.querySelectorAll("[data-open-follow-up]");
+  const openCalendarEventButtons = document.querySelectorAll("[data-open-calendar-event]");
   const copyFollowUpButtons = document.querySelectorAll("[data-copy-follow-up]");
+  const contactFilterButtons = document.querySelectorAll("[data-contact-filter]");
+  const contactCards = document.querySelectorAll("[data-contact-card]");
+  const contactLifecycleForms = document.querySelectorAll("[data-contact-lifecycle-form]");
+  const draftContactFollowUpButtons = document.querySelectorAll("[data-draft-contact-followup]");
+  const draftContactCampaignButtons = document.querySelectorAll("[data-draft-contact-campaign]");
+  const draftContactCalendarButtons = document.querySelectorAll("[data-draft-contact-calendar]");
   const googleConnectButtons = document.querySelectorAll("[data-google-connect]");
   const refreshOperatorButtons = document.querySelectorAll("[data-refresh-operator]");
   const inboxThreadForms = document.querySelectorAll("[data-inbox-thread-form]");
@@ -6816,6 +7160,27 @@ function bindSharedDashboardEvents(
     });
   };
 
+  const showSectionAndHighlight = (targetSection, selector) => {
+    showShellSection(targetSection);
+    const sectionEl = document.querySelector(`[data-shell-section="${targetSection}"]`);
+    sectionEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (!selector) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      const target = document.querySelector(selector);
+      if (!target) {
+        return;
+      }
+
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("active");
+      window.setTimeout(() => target.classList.remove("active"), 1600);
+    }, 120);
+  };
+
   const saveFollowUp = async (form, nextStatus = "") => {
     const formData = new FormData(form);
     const followUpId = form.dataset.followUpId;
@@ -6845,15 +7210,216 @@ function bindSharedDashboardEvents(
         }),
       });
 
-      setDashboardFocus("action-queue");
+      const inlineAutomationsFollowUp = Boolean(form.closest('[data-shell-section="automations"]'));
+      if (!inlineAutomationsFollowUp) {
+        setDashboardFocus("action-queue");
+      }
+
       setStatus(result.message || "Follow-up updated.");
       await boot();
+      if (inlineAutomationsFollowUp) {
+        showSectionAndHighlight("automations", `[data-follow-up-card][data-follow-up-id="${followUpId}"]`);
+      }
     } catch (error) {
       setStatus(error.message || "We couldn't update that follow-up.");
     } finally {
       if (submitButton) {
         submitButton.disabled = false;
       }
+    }
+  };
+
+  const applyContactFilter = (filterKey = "all") => {
+    const staleThreshold = Date.now() - (1000 * 60 * 60 * 24 * 21);
+    let visibleCount = 0;
+
+    contactFilterButtons.forEach((button) => {
+      button.classList.toggle("active", button.dataset.contactFilter === filterKey);
+    });
+
+    contactCards.forEach((card) => {
+      const lifecycle = trimText(card.dataset.contactLifecycle);
+      const flags = trimText(card.dataset.contactFlags).split("|").filter(Boolean);
+      const sources = trimText(card.dataset.contactSources).split("|").filter(Boolean);
+      const lastActivity = trimText(card.dataset.contactLastActivity);
+      let visible = true;
+
+      switch (filterKey) {
+        case "leads":
+          visible = ["active_lead", "qualified", "new"].includes(lifecycle);
+          break;
+        case "customers":
+          visible = lifecycle === "customer";
+          break;
+        case "complaints":
+          visible = flags.includes("complaint");
+          break;
+        case "follow_up_due":
+          visible = flags.includes("follow up due");
+          break;
+        case "booked":
+          visible = flags.includes("booked");
+          break;
+        case "no_recent_activity":
+          visible = !lastActivity || new Date(lastActivity).getTime() < staleThreshold;
+          break;
+        case "campaign_active":
+          visible = flags.includes("campaign active");
+          break;
+        case "source_chat":
+          visible = sources.includes("chat");
+          break;
+        case "source_inbox":
+          visible = sources.includes("inbox");
+          break;
+        case "source_calendar":
+          visible = sources.includes("calendar");
+          break;
+        case "source_campaign":
+          visible = sources.includes("campaign");
+          break;
+        case "source_follow_up":
+          visible = sources.includes("follow up");
+          break;
+        default:
+          visible = true;
+      }
+
+      card.hidden = !visible;
+      if (visible) {
+        visibleCount += 1;
+      }
+    });
+
+    const resultsShell = document.querySelector("[data-contact-filter-results]");
+    const existingEmpty = document.querySelector(".contact-filter-empty");
+
+    if (existingEmpty) {
+      existingEmpty.remove();
+    }
+
+    if (resultsShell && visibleCount === 0) {
+      const empty = document.createElement("div");
+      empty.className = "placeholder-card contact-filter-empty";
+      empty.textContent = "No contacts match this filter yet.";
+      resultsShell.parentElement?.appendChild(empty);
+    }
+  };
+
+  const saveContactLifecycle = async (form) => {
+    const formData = new FormData(form);
+
+    setStatus("Saving contact lifecycle...");
+
+    try {
+      await fetchJson("/agents/operator/contacts/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          contact_id: form.dataset.contactId,
+          lifecycle_state: trimText(formData.get("lifecycle_state")),
+        }),
+      });
+
+      setActiveShellSection("contacts");
+      setStatus("Contact lifecycle updated.");
+      await boot();
+    } catch (error) {
+      setStatus(error.message || "We couldn't update that contact.");
+    }
+  };
+
+  const draftContactFollowUp = async (button) => {
+    setStatus("Preparing contact follow-up draft...");
+
+    try {
+      const result = await fetchJson("/agents/operator/contacts/follow-up/draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          action_type: trimText(button.dataset.lifecycleState) === "customer" ? "lead_follow_up" : "lead_follow_up",
+          contact_name: button.dataset.contactName,
+          contact_email: button.dataset.contactEmail,
+          contact_phone: button.dataset.contactPhone,
+          person_key: button.dataset.personKey,
+          topic: trimText(button.dataset.lifecycleState) === "customer" ? "Customer follow-up" : "Lead follow-up",
+          why_prepared: "Prepared from the Contacts workspace.",
+        }),
+      });
+
+      setStatus("Contact follow-up draft prepared.");
+      await boot();
+      showSectionAndHighlight("automations", `[data-follow-up-card][data-follow-up-id="${result.followUp?.id || ""}"]`);
+    } catch (error) {
+      setStatus(error.message || "We couldn't prepare that contact follow-up.");
+    }
+  };
+
+  const draftContactCampaign = async (button) => {
+    setStatus("Generating contact campaign draft...");
+
+    try {
+      const result = await fetchJson("/agents/operator/campaigns/draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          goal: trimText(button.dataset.goal) || "quote_follow_up",
+          contact_name: button.dataset.contactName,
+          contact_email: button.dataset.contactEmail,
+          person_key: button.dataset.personKey,
+          lead_id: button.dataset.leadId,
+        }),
+      });
+
+      setStatus("Campaign draft created for this contact.");
+      await boot();
+      showSectionAndHighlight("automations", `[data-campaign-card][data-campaign-id="${result.campaign?.id || ""}"]`);
+    } catch (error) {
+      setStatus(error.message || "We couldn't create that contact campaign.");
+    }
+  };
+
+  const draftContactCalendarAction = async (button) => {
+    const contactName = trimText(button.dataset.contactName || button.dataset.contactEmail || "Contact");
+
+    setStatus("Drafting calendar action for this contact...");
+
+    try {
+      await fetchJson("/agents/operator/calendar/draft", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          action_type: "create",
+          title: `Call with ${contactName}`,
+          description: `Prepared from the Contacts workspace for ${contactName}.`,
+          start_at: button.dataset.slotStart,
+          end_at: button.dataset.slotEnd,
+          attendee_emails: trimText(button.dataset.contactEmail) ? [button.dataset.contactEmail] : [],
+          lead_id: button.dataset.leadId || undefined,
+        }),
+      });
+
+      setStatus("Calendar action draft prepared.");
+      await boot();
+      showSectionAndHighlight("calendar");
+    } catch (error) {
+      setStatus(error.message || "We couldn't prepare that calendar action.");
     }
   };
 
@@ -7225,23 +7791,56 @@ function bindSharedDashboardEvents(
   openConversationButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const messageId = button.dataset.messageId;
+      showSectionAndHighlight("analytics", `[data-conversation-message="${messageId}"]`);
+    });
+  });
 
-      showShellSection("analytics");
+  openInboxThreadButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      showSectionAndHighlight("inbox", `[data-thread-card][data-thread-id="${button.dataset.threadId}"]`);
+    });
+  });
 
-      const sectionEl = document.querySelector('[data-shell-section="analytics"]');
-      if (sectionEl) {
-        sectionEl.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
+  openFollowUpButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      showSectionAndHighlight("automations", `[data-follow-up-card][data-follow-up-id="${button.dataset.followUpId}"]`);
+    });
+  });
 
-      window.setTimeout(() => {
-        const row = document.querySelector(`[data-conversation-message="${messageId}"]`);
+  openCalendarEventButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      showSectionAndHighlight("calendar", `[data-calendar-event-card][data-event-id="${button.dataset.eventId}"]`);
+    });
+  });
 
-        if (row) {
-          row.scrollIntoView({ behavior: "smooth", block: "center" });
-          row.classList.add("active");
-          window.setTimeout(() => row.classList.remove("active"), 1500);
-        }
-      }, 120);
+  contactFilterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applyContactFilter(button.dataset.contactFilter || "all");
+    });
+  });
+
+  contactLifecycleForms.forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await saveContactLifecycle(form);
+    });
+  });
+
+  draftContactFollowUpButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      await draftContactFollowUp(button);
+    });
+  });
+
+  draftContactCampaignButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      await draftContactCampaign(button);
+    });
+  });
+
+  draftContactCalendarButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      await draftContactCalendarAction(button);
     });
   });
 
@@ -7736,6 +8335,10 @@ function bindSharedDashboardEvents(
     section.hidden = section.dataset.shellSection !== initialSection;
   });
 
+  if (contactFilterButtons.length) {
+    applyContactFilter("all");
+  }
+
   const focusTarget = getDashboardFocus();
 
   if (focusTarget) {
@@ -7744,6 +8347,7 @@ function bindSharedDashboardEvents(
       install: ".install-card",
       setup: '[data-shell-section="customize"]',
       "action-queue": "[data-action-queue-section]",
+      contacts: '[data-shell-section="contacts"]',
       inbox: '[data-shell-section="inbox"]',
       calendar: '[data-shell-section="calendar"]',
       automations: '[data-shell-section="automations"]',

@@ -16,6 +16,8 @@ test("schema hints cover recent required persistence tables", () => {
     "widget_configs",
     "agent_action_queue_statuses",
     "agent_follow_up_workflows",
+    "operator_contacts",
+    "operator_contact_identities",
   ];
 
   requiredTables.forEach((tableName) => {

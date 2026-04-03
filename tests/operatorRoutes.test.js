@@ -81,6 +81,12 @@ function buildRouteDeps(overrides = {}) {
       inbox: { threads: [{ id: "thread-1" }], attentionCount: 1 },
       calendar: { events: [{ id: "event-1" }], suggestedSlots: [], dailySummary: "Busy day." },
       automations: { tasks: [{ id: "task-1" }], campaigns: [], followUps: [] },
+      contacts: {
+        list: [{ id: "contact-1", name: "Taylor Reed" }],
+        filters: { quick: [{ key: "all", label: "All", count: 1 }], sources: [] },
+        summary: { totalContacts: 1, contactsNeedingAttention: 1 },
+        health: { persistenceAvailable: true, migrationRequired: false, loadError: "" },
+      },
       summary: { inboxNeedingAttention: 1 },
       briefing: { text: "Review today." },
       nextAction: { key: "review_inbox", title: "Review inbox" },
@@ -114,6 +120,14 @@ function buildRouteDeps(overrides = {}) {
     updateOperatorTaskStatus: async () => ({
       id: "task-1",
       status: "resolved",
+    }),
+    createManualFollowUpWorkflow: async () => ({
+      followUp: { id: "follow-up-1", status: "draft" },
+      persistenceAvailable: true,
+    }),
+    updateOperatorContactLifecycleState: async () => ({
+      id: "contact-1",
+      lifecycleState: "customer",
     }),
     updateOperatorOnboardingState: async () => ({
       googleConnected: true,
@@ -153,6 +167,7 @@ test("operator workspace route exposes inbox, calendar, and automations surfaces
     assert.equal(response.json.inbox.attentionCount, 1);
     assert.equal(response.json.calendar.events[0].id, "event-1");
     assert.equal(response.json.automations.tasks[0].id, "task-1");
+    assert.equal(response.json.contacts.list[0].id, "contact-1");
     assert.equal(response.json.nextAction.key, "review_inbox");
   } finally {
     await server.close();
@@ -246,6 +261,37 @@ test("operator mutation routes cover reply drafting, calendar approvals, and cam
     });
     assert.equal(draftCampaign.status, 200);
     assert.equal(draftCampaign.json.campaign.id, "campaign-1");
+
+    const draftContactFollowUp = await requestJson(server.baseUrl, "/agents/operator/contacts/follow-up/draft", {
+      method: "POST",
+      body: JSON.stringify({
+        agent_id: "agent-1",
+        contact_email: "contact@example.com",
+      }),
+    });
+    assert.equal(draftContactFollowUp.status, 200);
+    assert.equal(draftContactFollowUp.json.followUp.id, "follow-up-1");
+  } finally {
+    await server.close();
+  }
+});
+
+test("contact lifecycle route preserves owner-scoped lifecycle updates", async () => {
+  const server = await startServer(createApp(buildRouteDeps()));
+
+  try {
+    const response = await requestJson(server.baseUrl, "/agents/operator/contacts/update", {
+      method: "POST",
+      body: JSON.stringify({
+        agent_id: "agent-1",
+        contact_id: "contact-1",
+        lifecycle_state: "customer",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.json.contact.id, "contact-1");
+    assert.equal(response.json.contact.lifecycleState, "customer");
   } finally {
     await server.close();
   }

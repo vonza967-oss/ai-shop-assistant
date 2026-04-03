@@ -34,6 +34,7 @@ import {
   updateActionQueueStatus,
 } from "../services/analytics/actionQueueService.js";
 import {
+  createManualFollowUpWorkflow,
   syncFollowUpWorkflows,
   updateFollowUpWorkflow,
 } from "../services/followup/followUpService.js";
@@ -86,6 +87,7 @@ import {
   updateOperatorTaskStatus,
 } from "../services/operator/operatorWorkspaceService.js";
 import { updateOperatorOnboardingState } from "../services/operator/operatorActivationService.js";
+import { updateOperatorContactLifecycleState } from "../services/operator/contactWorkspaceService.js";
 
 export function createAgentRouter(deps = {}) {
   const router = express.Router();
@@ -107,6 +109,7 @@ export function createAgentRouter(deps = {}) {
   const listActionQueueStatusesImpl = deps.listActionQueueStatuses || listActionQueueStatuses;
   const updateActionQueueStatusImpl = deps.updateActionQueueStatus || updateActionQueueStatus;
   const syncFollowUpWorkflowsImpl = deps.syncFollowUpWorkflows || syncFollowUpWorkflows;
+  const createManualFollowUpWorkflowImpl = deps.createManualFollowUpWorkflow || createManualFollowUpWorkflow;
   const updateFollowUpWorkflowImpl = deps.updateFollowUpWorkflow || updateFollowUpWorkflow;
   const syncKnowledgeFixWorkflowsImpl = deps.syncKnowledgeFixWorkflows || syncKnowledgeFixWorkflows;
   const updateKnowledgeFixWorkflowImpl = deps.updateKnowledgeFixWorkflow || updateKnowledgeFixWorkflow;
@@ -155,6 +158,8 @@ export function createAgentRouter(deps = {}) {
     deps.sendDueCampaignSteps || sendDueCampaignSteps;
   const updateOperatorTaskStatusImpl =
     deps.updateOperatorTaskStatus || updateOperatorTaskStatus;
+  const updateOperatorContactLifecycleStateImpl =
+    deps.updateOperatorContactLifecycleState || updateOperatorContactLifecycleState;
   const updateOperatorOnboardingStateImpl =
     deps.updateOperatorOnboardingState || updateOperatorOnboardingState;
   const getAdminToken = (req) => req.query.token || req.headers["x-admin-token"];
@@ -1066,6 +1071,11 @@ export function createAgentRouter(deps = {}) {
         goal: req.body.goal,
         recipientSource: req.body.recipient_source || req.body.recipientSource,
         sendWindowHour: req.body.send_window_hour || req.body.sendWindowHour,
+        contactName: req.body.contact_name || req.body.contactName,
+        contactEmail: req.body.contact_email || req.body.contactEmail,
+        personKey: req.body.person_key || req.body.personKey,
+        leadId: req.body.lead_id || req.body.leadId,
+        latestActionKey: req.body.latest_action_key || req.body.latestActionKey,
       });
 
       res.json({ campaign });
@@ -1155,6 +1165,86 @@ export function createAgentRouter(deps = {}) {
       });
 
       res.json({ task });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/operator/contacts/update", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req);
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const contact = await updateOperatorContactLifecycleStateImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        contactId: req.body.contact_id || req.body.contactId,
+        lifecycleState: req.body.lifecycle_state || req.body.lifecycleState,
+      });
+
+      res.json({
+        ok: true,
+        contact,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/operator/contacts/follow-up/draft", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req);
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+      const result = await createManualFollowUpWorkflowImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        businessName: agent.assistantName || agent.name,
+        assistantName: agent.assistantName || agent.name,
+        actionType: req.body.action_type || req.body.actionType,
+        contactName: req.body.contact_name || req.body.contactName,
+        contactEmail: req.body.contact_email || req.body.contactEmail,
+        contactPhone: req.body.contact_phone || req.body.contactPhone,
+        personKey: req.body.person_key || req.body.personKey,
+        linkedActionKeys: req.body.linked_action_keys || req.body.linkedActionKeys,
+        sourceActionKey: req.body.source_action_key || req.body.sourceActionKey,
+        topic: req.body.topic,
+        subject: req.body.subject,
+        draftContent: req.body.draft_content || req.body.draftContent,
+        evidence: req.body.evidence,
+        whyPrepared: req.body.why_prepared || req.body.whyPrepared,
+        pageHint: req.body.page_hint || req.body.pageHint,
+        contextQuestion: req.body.context_question || req.body.contextQuestion,
+        contextSnippet: req.body.context_snippet || req.body.contextSnippet,
+      });
+
+      res.json({
+        ok: true,
+        followUp: result.followUp,
+        queueSync: result.queueSync || null,
+        persistenceAvailable: result.persistenceAvailable !== false,
+      });
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({

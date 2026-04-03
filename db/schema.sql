@@ -143,6 +143,7 @@ create table if not exists public.agent_follow_up_workflows (
   linked_action_keys text[] not null default '{}',
   action_type text not null,
   person_key text,
+  contact_id uuid,
   status text not null default 'draft',
   channel text,
   contact_name text,
@@ -182,6 +183,7 @@ create table if not exists public.agent_contact_leads (
   install_id uuid,
   lead_key text not null,
   person_key text,
+  contact_id uuid,
   visitor_session_key text,
   capture_state text not null default 'none',
   preferred_channel text,
@@ -359,6 +361,7 @@ create table if not exists public.agent_conversion_outcomes (
   conversation_id text,
   person_key text,
   lead_id uuid,
+  contact_id uuid,
   action_key text,
   follow_up_id uuid,
   page_url text,
@@ -453,6 +456,67 @@ create index if not exists google_connected_accounts_status_idx
 create unique index if not exists google_connected_accounts_agent_provider_idx
   on public.google_connected_accounts (agent_id, owner_user_id, provider);
 
+create table if not exists public.operator_contacts (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  business_id uuid references public.businesses (id) on delete cascade,
+  owner_user_id uuid,
+  display_name text,
+  primary_email text,
+  primary_phone text,
+  primary_phone_normalized text,
+  primary_person_key text,
+  lifecycle_state text not null default 'new',
+  lifecycle_state_source text not null default 'system',
+  suggested_lifecycle_state text not null default 'new',
+  activity_sources text[] not null default '{}',
+  high_priority_flags text[] not null default '{}',
+  last_activity_at timestamp with time zone,
+  next_action_type text not null default 'no_action_needed',
+  next_action_title text,
+  next_action_payload jsonb not null default '{}'::jsonb,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create index if not exists operator_contacts_agent_owner_idx
+  on public.operator_contacts (agent_id, owner_user_id, last_activity_at desc);
+
+create index if not exists operator_contacts_lifecycle_idx
+  on public.operator_contacts (agent_id, owner_user_id, lifecycle_state, last_activity_at desc);
+
+create index if not exists operator_contacts_primary_email_idx
+  on public.operator_contacts (agent_id, owner_user_id, primary_email)
+  where primary_email is not null;
+
+create index if not exists operator_contacts_primary_phone_idx
+  on public.operator_contacts (agent_id, owner_user_id, primary_phone_normalized)
+  where primary_phone_normalized is not null;
+
+create table if not exists public.operator_contact_identities (
+  id uuid primary key default gen_random_uuid(),
+  contact_id uuid references public.operator_contacts (id) on delete cascade,
+  agent_id uuid references public.agents (id) on delete cascade,
+  business_id uuid references public.businesses (id) on delete cascade,
+  owner_user_id uuid,
+  identity_type text not null,
+  identity_value text not null,
+  is_primary boolean not null default false,
+  source_type text not null default 'contact_sync',
+  first_seen_at timestamp with time zone default now(),
+  last_seen_at timestamp with time zone default now(),
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists operator_contact_identities_unique_idx
+  on public.operator_contact_identities (agent_id, owner_user_id, identity_type, identity_value);
+
+create index if not exists operator_contact_identities_contact_idx
+  on public.operator_contact_identities (contact_id, identity_type, last_seen_at desc);
+
 create table if not exists public.operator_inbox_threads (
   id uuid primary key default gen_random_uuid(),
   connected_account_id uuid references public.google_connected_accounts (id) on delete cascade,
@@ -473,6 +537,7 @@ create table if not exists public.operator_inbox_threads (
   risk_level text not null default 'normal',
   unread_count integer not null default 0,
   participants jsonb not null default '[]'::jsonb,
+  contact_id uuid references public.operator_contacts (id) on delete set null,
   related_lead_id uuid references public.agent_contact_leads (id) on delete set null,
   related_follow_up_id uuid references public.agent_follow_up_workflows (id) on delete set null,
   related_action_key text,
@@ -538,6 +603,7 @@ create table if not exists public.operator_calendar_events (
   end_at timestamp with time zone,
   timezone text,
   location text,
+  contact_id uuid references public.operator_contacts (id) on delete set null,
   lead_id uuid references public.agent_contact_leads (id) on delete set null,
   related_action_key text,
   conflict_state text not null default 'clear',
@@ -610,6 +676,7 @@ create table if not exists public.operator_campaign_recipients (
   agent_id uuid references public.agents (id) on delete cascade,
   business_id uuid references public.businesses (id) on delete cascade,
   owner_user_id uuid,
+  contact_id uuid references public.operator_contacts (id) on delete set null,
   lead_id uuid references public.agent_contact_leads (id) on delete set null,
   person_key text,
   contact_name text,
@@ -645,6 +712,7 @@ create table if not exists public.operator_tasks (
   status text not null default 'open',
   priority text not null default 'normal',
   approval_required boolean not null default false,
+  contact_id uuid references public.operator_contacts (id) on delete set null,
   related_thread_id uuid references public.operator_inbox_threads (id) on delete set null,
   related_event_id uuid references public.operator_calendar_events (id) on delete set null,
   related_campaign_id uuid references public.operator_campaigns (id) on delete set null,
@@ -703,3 +771,17 @@ create table if not exists public.operator_audit_logs (
 
 create index if not exists operator_audit_logs_agent_owner_idx
   on public.operator_audit_logs (agent_id, owner_user_id, created_at desc);
+create index if not exists agent_contact_leads_contact_idx
+  on public.agent_contact_leads (contact_id);
+create index if not exists agent_follow_up_workflows_contact_idx
+  on public.agent_follow_up_workflows (contact_id);
+create index if not exists agent_conversion_outcomes_contact_idx
+  on public.agent_conversion_outcomes (contact_id);
+create index if not exists operator_inbox_threads_contact_idx
+  on public.operator_inbox_threads (contact_id);
+create index if not exists operator_calendar_events_contact_idx
+  on public.operator_calendar_events (contact_id);
+create index if not exists operator_campaign_recipients_contact_idx
+  on public.operator_campaign_recipients (contact_id);
+create index if not exists operator_tasks_contact_idx
+  on public.operator_tasks (contact_id);

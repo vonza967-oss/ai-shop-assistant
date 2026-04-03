@@ -940,6 +940,88 @@ button:disabled {
   font-size: 13px;
 }
 
+.contact-filter-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.contact-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.contact-filter-group-secondary {
+  padding-top: 2px;
+}
+
+.contact-filter-button {
+  border-radius: 999px;
+  padding: 10px 14px;
+  box-shadow: none;
+}
+
+.contact-filter-button.active {
+  border-color: rgba(20, 184, 166, 0.42);
+  background: rgba(20, 184, 166, 0.16);
+}
+
+.contact-filter-button.secondary {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.contact-card-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.contact-card {
+  display: grid;
+  gap: 16px;
+}
+
+.contact-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.contact-card-head-meta {
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.contact-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.contact-meta-block {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.contact-timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.operator-thread-card.active,
+.contact-card.active,
+.timeline-row.active,
+.question-row.active,
+[data-conversation-message].active {
+  border-color: rgba(20, 184, 166, 0.42);
+  box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.18), 0 18px 36px rgba(20, 184, 166, 0.12);
+}
+
 /* Shared workspace panels */
 .workspace-panel {
   padding: 24px;
@@ -2314,6 +2396,7 @@ button:disabled {
   .operator-thread-grid,
   .intent-grid,
   .overview-metric-grid,
+  .contact-meta-grid,
   .action-queue-details,
   .action-queue-handoff-summary,
   .person-snippets {
@@ -2350,8 +2433,13 @@ button:disabled {
   .action-queue-item-top,
   .action-queue-form-actions,
   .people-header,
-  .person-card-top {
+  .person-card-top,
+  .contact-card-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .contact-card-head-meta {
+    text-align: left;
   }
 }

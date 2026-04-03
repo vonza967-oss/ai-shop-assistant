@@ -747,6 +747,7 @@ export function buildOperatorTodaySummary({
   suggestedSlots = [],
   campaigns = [],
   followUps = [],
+  contactsSummary = {},
 } = {}) {
   const taskCounts = getOpenTaskCounts(tasks);
   const nextEvent = (events || [])
@@ -769,6 +770,10 @@ export function buildOperatorTodaySummary({
     openAvailabilityCount: Number(summary.openAvailabilityCount || suggestedSlots.length || 0),
     campaignCount: (campaigns || []).length,
     followUpCount: (followUps || []).length,
+    contactsNeedingAttention: Number(contactsSummary.contactsNeedingAttention || 0),
+    complaintRiskContacts: Number(contactsSummary.complaintRiskContacts || 0),
+    leadsWithoutNextStep: Number(contactsSummary.leadsWithoutNextStep || 0),
+    customersAwaitingFollowUp: Number(contactsSummary.customersAwaitingFollowUp || 0),
     topTask: getOpenTaskHeadline(tasks),
   };
 }
