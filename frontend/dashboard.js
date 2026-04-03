@@ -14,12 +14,12 @@ const CLAIM_DISMISS_PREFIX = "vonza_claim_dismissed_";
 const LIMITED_CONTENT_MARKER = "Limited content available. This assistant may give general answers.";
 const LAUNCH_STEPS = [
   {
-    title: "Creating your assistant",
-    copy: "Setting up the core identity of your assistant."
+    title: "Creating your front desk",
+    copy: "Setting up the core identity of your website front desk."
   },
   {
     title: "Connecting your website",
-    copy: "Saving the website and brand details your assistant should represent."
+    copy: "Saving the website and brand details your front desk should represent."
   },
   {
     title: "Importing website knowledge",
@@ -663,7 +663,7 @@ function buildPreviewMarkup(installId) {
   <body style="margin:0;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;background:linear-gradient(180deg,#f8fafc 0%,#e2e8f0 100%);color:#0f172a;">
 <main style="padding:32px;">
   <h2 style="margin:0 0 8px;">Preview site</h2>
-  <p style="margin:0;max-width:520px;color:#475569;line-height:1.6;">This simulates how your assistant will appear when installed on a real website.</p>
+  <p style="margin:0;max-width:520px;color:#475569;line-height:1.6;">This simulates how your website front desk will answer, route, and capture visitor intent when it is installed on a real website.</p>
 </main>
 <script async defer src="${publicAppUrl}/embed.js" data-install-id="${escapeHtml(installId)}"><\/script>
   </body>
@@ -721,14 +721,14 @@ function classifyImportResult(result) {
     return {
       knowledgeState: "limited",
       label: "Limited",
-      description: "Some website content was imported, but the assistant still needs a better knowledge pass.",
+      description: "Some website content was imported, but the front desk still needs a better knowledge pass.",
     };
   }
 
   return {
     knowledgeState: "ready",
     label: "Ready",
-    description: "Your assistant has website knowledge and is ready to answer real customer questions.",
+    description: "Your website front desk has enough knowledge to answer real customer questions.",
   };
 }
 
@@ -791,8 +791,8 @@ function getAccessCopy(agent) {
   if (!agent?.id) {
     return {
       eyebrow: "Purchase step",
-      headline: "Unlock Vonza to open your setup workspace.",
-      copy: "Start with secure checkout. Right after payment, Vonza will take you into the workspace where you customize your assistant, connect your website, and add it to your business.",
+      headline: "Unlock Vonza to open your front desk and operator workspace.",
+      copy: "Start with secure checkout. Right after payment, Vonza takes you into the workspace where you tune the website front desk, connect Google, review Today, and launch the operator flow.",
     };
   }
 
@@ -801,23 +801,23 @@ function getAccessCopy(agent) {
   if (accessStatus === "active") {
     return {
       eyebrow: "Workspace active",
-      headline: "Your assistant workspace is open.",
-      copy: "Everything is in place and you can manage how Vonza appears, responds, and performs for your business.",
+      headline: "Your Vonza workspace is open.",
+      copy: "Everything is in place for the website front desk and the owner workflow around it: Today, Inbox, Calendar, Contacts, Automations, Customize, and Outcomes.",
     };
   }
 
   if (accessStatus === "suspended") {
     return {
       eyebrow: "Access paused",
-      headline: "Your assistant workspace is currently paused.",
-      copy: "Your assistant record is still here, but workspace access is not active right now. Once access is restored, you will land straight back in your Vonza workspace.",
+      headline: "Your Vonza workspace is currently paused.",
+      copy: "Your front-desk setup is still here, but workspace access is not active right now. Once access is restored, you will land straight back in Vonza.",
     };
   }
 
   return {
     eyebrow: "Access pending",
-    headline: "Your assistant is set up, and workspace access is not active yet.",
-    copy: "Your assistant is connected to your account, but full workspace access still needs to be activated before you can manage it here.",
+    headline: "Your front desk is connected, and workspace access is not active yet.",
+    copy: "Your setup is tied to your account, but full workspace access still needs to be activated before you can manage Today, Contacts, Automations, and outcomes here.",
   };
 }
 
@@ -833,8 +833,8 @@ function renderAccessLocked(agent) {
     ? `
       <section class="handoff-card">
         <span class="handoff-step">${arrival.arrivedFromSite ? "Step 2 of 3" : "Welcome to your workspace"}</span>
-        <h2 class="handoff-title">The next step is simple: unlock Vonza, then set everything up in one place.</h2>
-        <p class="handoff-copy">You do not need to fully customize anything before payment. Once checkout is complete, you will land straight in your setup workspace with Overview, Customize, and Analytics ready to use.</p>
+        <h2 class="handoff-title">Unlock Vonza, then finish the front desk and operator setup in one place.</h2>
+        <p class="handoff-copy">You do not need to finish everything before payment. Once checkout is complete, you land in the workspace with Today, Customize, Contacts, Automations, and Outcomes ready to guide the next step.</p>
       </section>
     `
     : "";
@@ -863,11 +863,11 @@ function renderAccessLocked(agent) {
         </div>
         <div class="overview-card">
           <p class="overview-label">2. Setup workspace</p>
-          <p class="overview-card-copy">Customize the assistant, connect your website, and review install progress.</p>
+          <p class="overview-card-copy">Tune the front desk, connect Google, and review Today, Contacts, and approval-first workflows.</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">3. Add to website</p>
-          <p class="overview-card-copy">Copy the install code and place Vonza on the live site when you are ready.</p>
+          <p class="overview-card-copy">Copy the install code and place Vonza on the live site when you are ready to answer and route real visitors.</p>
         </div>
       </div>
     `;
@@ -883,12 +883,12 @@ function renderAccessLocked(agent) {
         <div>
           <p class="overview-label">Vonza access</p>
           <h2 class="pricing-title">One premium workspace</h2>
-          <p class="pricing-copy">Unlock your assistant studio, live preview, analytics, install flow, and customer-facing customization in one place.</p>
+          <p class="pricing-copy">Unlock the website front desk, Today, Contacts, Inbox, Calendar, Automations, install flow, and outcome visibility in one place.</p>
           <div class="pricing-bullets">
-            <div class="pill">Appearance and brand studio</div>
-            <div class="pill">Website-grounded assistant setup</div>
-            <div class="pill">Live preview and install tools</div>
-            <div class="pill">Real usage and message insights</div>
+            <div class="pill">Website front desk and routing</div>
+            <div class="pill">Contacts, Inbox, and Calendar</div>
+            <div class="pill">Approval-first automations</div>
+            <div class="pill">Outcomes, proof, and install tools</div>
           </div>
         </div>
         <div class="pricing-actions">
@@ -900,7 +900,7 @@ function renderAccessLocked(agent) {
         <p id="checkout-feedback" class="auth-note" data-state="idle"></p>
       </div>
       ${detailsMarkup}
-      <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the setup workspace.</p>
+      <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the operator workspace.</p>
       ${showDevTools ? '<div id="setup-doctor-results" class="auth-note" style="margin-top:16px;"></div>' : ""}
     </section>
   `;
@@ -1349,11 +1349,11 @@ function renderOnboarding() {
     ? `
       <section class="handoff-card">
         <span class="handoff-step">${arrival.arrivedFromSite ? "Step 1 of 4" : "Welcome to Vonza"}</span>
-        <h2 class="handoff-title">${arrival.arrivedFromSite ? "You’re now in the place where your assistant comes to life." : "This is where you create your website AI assistant."}</h2>
-        <p class="handoff-copy">${arrival.arrivedFromSite ? "You’ve moved from the Vonza site into your assistant workspace. In the next step, you’ll connect your website, shape the voice, and try the live experience before you install it." : "Connect your website, shape the assistant around your brand, and see how it answers real customer questions before you launch it."}</p>
+        <h2 class="handoff-title">${arrival.arrivedFromSite ? "You’re now in the place where the front desk and operator workspace come together." : "This is where you create the website front desk that feeds the operator workspace."}</h2>
+        <p class="handoff-copy">${arrival.arrivedFromSite ? "You’ve moved from the Vonza site into the app. Next you’ll connect your website, shape routing and voice, try the live front desk, and then unlock the full operator workspace around it." : "Connect your website, shape the front desk around your brand, and make the preview strong before you install it and start working from Today."}</p>
         <div class="handoff-actions">
           <button id="handoff-start-button" class="primary-button" type="button">Start creating</button>
-          <span class="handoff-note">A few focused details are enough to get your assistant ready to try.</span>
+          <span class="handoff-note">A few focused details are enough to get the front desk ready to try.</span>
         </div>
       </section>
     `
@@ -1362,15 +1362,15 @@ function renderOnboarding() {
   rootEl.innerHTML = `
     ${handoffMarkup}
     <section class="hero-card">
-      <span class="eyebrow">Create your AI assistant</span>
-      <h1 class="headline">Create a website-based AI assistant for your business.</h1>
-      <p class="subtext">Launch an assistant that learns from your website, answers customer questions clearly, and helps visitors move toward contact, consultation, or purchase.</p>
+      <span class="eyebrow">Create your website front desk</span>
+      <h1 class="headline">Turn your website into an AI front desk for your business.</h1>
+      <p class="subtext">Vonza learns from your website, answers customer questions, routes high-intent visitors toward the right next step, and becomes the front door for the operator workspace behind it.</p>
     </section>
 
     <div class="state-grid">
       <section id="onboarding-create" class="section-card">
-        <h2 class="section-heading">Create your assistant</h2>
-        <p class="section-copy">Start with the essentials. We’ll turn your website into a customer-facing assistant you can shape, preview, and install with confidence.</p>
+        <h2 class="section-heading">Create your front desk</h2>
+        <p class="section-copy">Start with the essentials. We’ll turn your website into a customer-facing front desk you can shape, preview, install, and later connect to Today, Inbox, Calendar, Contacts, and approval-first workflows.</p>
         <form id="create-assistant-form" class="form-grid spacer">
           <div class="field">
             <label for="create-website-url">Website URL</label>
@@ -1405,7 +1405,7 @@ function renderOnboarding() {
 
       <section class="section-card">
         <h2 class="section-heading">What you get</h2>
-        <p class="section-copy">Your assistant becomes a polished front door for your business.</p>
+        <p class="section-copy">Your front desk becomes a polished front door for your business.</p>
         <div class="pill-row">
           <div class="pill">Answers real customer questions</div>
           <div class="pill">Matches your brand voice</div>
@@ -1483,19 +1483,19 @@ function renderLaunchSuccess(agent, options = {}) {
   const actionLabel = isLocked
     ? "Continue"
     : ready
-      ? "Try your assistant"
+      ? "Try your front desk"
       : "Finish setup";
   const copy = isLocked
-    ? "Your assistant has been created successfully. The next screen will show your workspace access and what to do next."
+    ? "Your front desk has been created successfully. The next screen will show your workspace access and what to do next."
     : ready
-      ? "Your assistant is ready to answer customer questions and show what your business offers."
-      : "Your assistant is created and close to ready. One more website knowledge pass can make the experience even stronger.";
+      ? "Your front desk is ready to answer customer questions and show what your business offers."
+      : "Your front desk is created and close to ready. One more website knowledge pass can make the experience even stronger.";
 
   rootEl.innerHTML = `
     <section class="launch-card">
       <div class="launch-success">
         <span class="eyebrow">${ready ? "Ready to try" : "Ready for final setup"}</span>
-        <h1 class="headline">${ready ? "Your assistant is ready." : "Your assistant is created."}</h1>
+        <h1 class="headline">${ready ? "Your front desk is ready." : "Your front desk is created."}</h1>
         <p class="launch-success-copy">${escapeHtml(copy)}</p>
         <h2 class="assistant-name">${escapeHtml(agent.assistantName || agent.name || "Your assistant")}</h2>
         <div class="launch-action-row">
@@ -1530,9 +1530,9 @@ function buildWorkspaceTabs(activeSection, setup, operatorWorkspace = createEmpt
   const tabDefinitions = [
     {
       key: "overview",
-      label: "Overview",
+      label: "Today",
       note: operatorWorkspace.enabled === false
-        ? (setup.isReady ? "Workspace health, install state, and launch progress" : "Setup progress and what to finish next")
+        ? (setup.isReady ? "Front-desk health, install state, and the next move" : "Setup progress and what to finish next")
         : (setup.isReady ? "Today, workload, approvals, and connected systems" : "Activation checklist plus operator rollout"),
     },
     {
@@ -1558,12 +1558,12 @@ function buildWorkspaceTabs(activeSection, setup, operatorWorkspace = createEmpt
     {
       key: "customize",
       label: "Customize",
-      note: "Name, website, welcome message, colors, behavior",
+      note: "Front-desk name, website, routing, welcome, colors, behavior",
     },
     {
       key: "analytics",
-      label: "Analytics",
-      note: "Usage, action queue signals, and where the assistant needs work",
+      label: "Outcomes",
+      note: "Proof, signals, install state, and where the front desk needs work",
     },
   ].filter((tab) => availableSections.includes(tab.key));
 
@@ -1602,7 +1602,7 @@ function formatOperatorCount(value, singular, plural = `${singular}s`) {
 
 function buildOperatorNextActionButton(nextAction = {}) {
   const actionType = trimText(nextAction.actionType || "stay_put");
-  const label = trimText(nextAction.buttonLabel || nextAction.title || "Open Overview");
+  const label = trimText(nextAction.buttonLabel || nextAction.title || "Open Today");
   const targetSection = trimText(nextAction.targetSection || "overview");
   const disabled = nextAction.disabled === true;
 
@@ -1640,7 +1640,7 @@ function buildOperatorChecklistMarkup(operatorWorkspace = createEmptyOperatorWor
       <div class="workspace-panel-header">
         <div>
           <p class="studio-kicker">Activation checklist</p>
-          <h3 class="studio-group-title">Guide the first operator session to value.</h3>
+          <h3 class="studio-group-title">Guide the first operator session into real daily use.</h3>
           <p class="workspace-panel-copy">${escapeHtml(`${activation.completedCount || 0} of ${activation.totalCount || checklist.length} steps completed. Progress persists for this owner.`)}</p>
         </div>
         <span class="${getBadgeClass(activation.isComplete ? "Ready" : "Limited")}">${activation.isComplete ? "Activation complete" : "In progress"}</span>
@@ -1666,12 +1666,12 @@ function buildOperatorChecklistMarkup(operatorWorkspace = createEmptyOperatorWor
                   <option value="${escapeHtml(option.value)}" ${option.value === selectedMailbox ? "selected" : ""}>${escapeHtml(option.label)}</option>
                 `).join("")}
               </select>
-              <p class="field-help">Choose the first mailbox Vonza should watch for owner-facing work.</p>
+              <p class="field-help">Choose the first mailbox Vonza should watch for owner-facing work inside Today and Inbox.</p>
             </div>
             <div class="field">
               <label for="operator-calendar-context">Calendar context</label>
               <input id="operator-calendar-context" type="text" value="Primary calendar" disabled>
-              <p class="field-help">Vonza uses the primary Google calendar for the first-run daily summary and approval drafts.</p>
+              <p class="field-help">Vonza uses the primary Google calendar for Today, booking context, and approval drafts.</p>
             </div>
           </div>
           <div class="inline-actions">
@@ -2026,7 +2026,7 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
         <div>
           <p class="studio-kicker">Operator home</p>
           <h2 class="workspace-panel-title">Today</h2>
-          <p class="workspace-panel-copy">Overview is now the operator command center for inbox, calendar, approvals, follow-ups, and the next owner action.</p>
+          <p class="workspace-panel-copy">Today is the operator command center for inbox, calendar, contacts, approvals, follow-ups, and the next owner action.</p>
         </div>
         <div class="workspace-badge-row">
           <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected ? "Google connected" : "Google not connected"}</span>
@@ -2057,15 +2057,15 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
       </div>
       ${buildOperatorChecklistMarkup(operatorWorkspace)}
       <div class="overview-grid operator-metric-grid">
-        <div class="overview-card">
-          <p class="overview-label">Google connection</p>
-          <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Awaiting connection")}</p>
-          <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
-            ? `Mailbox ${primaryAccount.selectedMailbox || "INBOX"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
-            : status.googleConfigReady
-              ? "Connect Gmail and Calendar so Vonza can sync inbox, calendar, and approvals into one workspace."
-              : "Google connection is not configured on this deployment yet.")}</p>
-        </div>
+            <div class="overview-card">
+              <p class="overview-label">Google connection</p>
+              <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Awaiting connection")}</p>
+              <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
+                ? `Mailbox ${primaryAccount.selectedMailbox || "INBOX"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
+                : status.googleConfigReady
+                  ? "Connect Gmail and Calendar so Vonza can sync inbox, calendar, contacts, and approvals into one workspace."
+                  : "Google connection is not configured on this deployment yet.")}</p>
+            </div>
         <div class="overview-card">
           <p class="overview-label">Inbox needing attention</p>
           <p class="overview-value">${escapeHtml(formatOperatorCount(today.inboxNeedingAttention, "thread"))}</p>
@@ -2186,15 +2186,15 @@ function buildCustomizePanel(agent, setup) {
     <section class="workspace-panel" data-shell-section="customize" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Customize</h2>
-        <p class="workspace-panel-copy">Shape how Vonza looks, sounds, and connects to the business before you add it to the live site.</p>
+        <p class="workspace-panel-copy">Shape how the website front desk looks, sounds, routes, and hands work into the operator workspace before you add it to the live site.</p>
       </div>
       <form data-settings-form data-form-kind="customize">
         <div class="studio-layout">
           <div class="studio-groups">
             <section class="studio-group">
-              <p class="studio-kicker">Assistant basics</p>
+              <p class="studio-kicker">Front-desk basics</p>
               <h3 class="studio-group-title">Set the identity your customers will meet.</h3>
-              <p class="studio-group-copy">Use these core settings to make the assistant feel like part of the business from the very first interaction.</p>
+              <p class="studio-group-copy">Use these core settings to make the front desk feel like part of the business from the very first interaction.</p>
               <div class="form-grid two-col">
                 <div class="field">
                   <label for="assistant-name">Assistant name</label>
@@ -2332,7 +2332,7 @@ function buildCustomizePanel(agent, setup) {
 
             <section class="studio-group">
               <h3 class="studio-group-title">Brand colors</h3>
-              <p class="studio-group-copy">Keep the assistant aligned with the brand your customers already know.</p>
+              <p class="studio-group-copy">Keep the front desk aligned with the brand your customers already know.</p>
               <div class="form-grid two-col">
                 <div class="field">
                   <label for="assistant-primary-color">Primary color</label>
@@ -2356,7 +2356,7 @@ function buildCustomizePanel(agent, setup) {
 
             <section class="studio-group secondary">
               <h3 class="studio-group-title">Advanced guidance</h3>
-              <p class="studio-group-copy">Optional guidance for emphasis, tone, and edge cases. Keep it focused on how the assistant should represent the business.</p>
+              <p class="studio-group-copy">Optional guidance for emphasis, tone, and edge cases. Keep it focused on how the front desk should represent the business.</p>
               <div class="form-grid">
                 <div class="field">
                   <label for="assistant-instructions">Advanced guidance</label>
@@ -2374,7 +2374,7 @@ function buildCustomizePanel(agent, setup) {
           <aside class="studio-summary">
             <p class="studio-summary-label">Live summary</p>
             <h3 id="studio-summary-name" class="studio-summary-name">${escapeHtml(agent.assistantName || agent.name)}</h3>
-            <p id="studio-summary-copy" class="studio-summary-copy">${escapeHtml(agent.welcomeMessage || "Your assistant is ready to greet visitors with a clear, helpful first message.")}</p>
+            <p id="studio-summary-copy" class="studio-summary-copy">${escapeHtml(agent.welcomeMessage || "Your front desk is ready to greet visitors with a clear, helpful first message.")}</p>
             <div class="studio-summary-badge-row">
               <span id="studio-summary-tone" class="badge success">${escapeHtml(agent.tone || "friendly")}</span>
               <span id="studio-summary-button" class="pill">${escapeHtml(agent.buttonLabel || "Chat")}</span>
@@ -2429,7 +2429,7 @@ function buildAppearanceStudio(agent) {
 
             <section class="studio-group">
               <h3 class="studio-group-title">Assistant identity</h3>
-              <p class="studio-group-copy">Set the name customers will associate with your business when the assistant appears on your site.</p>
+              <p class="studio-group-copy">Set the name customers will associate with your business when the front desk appears on your site.</p>
               <div class="form-grid">
                 <div class="field">
                   <label for="assistant-name">Assistant name</label>
@@ -2441,7 +2441,7 @@ function buildAppearanceStudio(agent) {
 
             <section class="studio-group">
               <h3 class="studio-group-title">Opening moment</h3>
-              <p class="studio-group-copy">Refine the text that frames the first customer interaction and makes the assistant feel welcoming.</p>
+              <p class="studio-group-copy">Refine the text that frames the first customer interaction and makes the front desk feel welcoming.</p>
               <div class="form-grid two-col">
                 <div class="field">
                   <label for="assistant-button-label">Launcher text</label>
@@ -2451,14 +2451,14 @@ function buildAppearanceStudio(agent) {
                 <div class="field">
                   <label for="assistant-welcome">Welcome message</label>
                   <textarea id="assistant-welcome" name="welcome_message">${escapeHtml(agent.welcomeMessage || "")}</textarea>
-                  <p class="field-help">This becomes the first message visitors see when they open the assistant.</p>
+                  <p class="field-help">This becomes the first message visitors see when they open the front desk.</p>
                 </div>
               </div>
             </section>
 
             <section class="studio-group">
               <h3 class="studio-group-title">Brand color system</h3>
-              <p class="studio-group-copy">Use your primary and secondary colors so the assistant feels like a natural extension of your website.</p>
+              <p class="studio-group-copy">Use your primary and secondary colors so the front desk feels like a natural extension of your website.</p>
               <div class="form-grid two-col">
                 <div class="field">
                   <label for="assistant-primary-color">Primary color</label>
@@ -2483,7 +2483,7 @@ function buildAppearanceStudio(agent) {
           <aside class="studio-summary">
             <p class="studio-summary-label">Live appearance preview</p>
             <h3 id="studio-summary-name" class="studio-summary-name">${escapeHtml(agent.assistantName || agent.name)}</h3>
-            <p id="studio-summary-copy" class="studio-summary-copy">${escapeHtml(agent.welcomeMessage || "Your assistant is ready to greet visitors with a clear, helpful first message.")}</p>
+            <p id="studio-summary-copy" class="studio-summary-copy">${escapeHtml(agent.welcomeMessage || "Your front desk is ready to greet visitors with a clear, helpful first message.")}</p>
             <div class="studio-summary-badge-row">
               <span id="studio-summary-tone" class="badge success">${escapeHtml(agent.tone || "friendly")}</span>
               <span id="studio-summary-button" class="pill">${escapeHtml(agent.buttonLabel || "Chat")}</span>
@@ -2499,12 +2499,12 @@ function buildAppearanceStudio(agent) {
                     <div id="brand-widget-avatar" class="brand-widget-avatar" style="--brand-primary:${escapeHtml(agent.primaryColor || "#14b8a6")};--brand-secondary:${escapeHtml(agent.secondaryColor || "#0f766e")}">V</div>
                     <div>
                       <p id="brand-widget-title" class="brand-widget-title">${escapeHtml(agent.assistantName || agent.name)}</p>
-                      <p class="brand-widget-subtitle">Your website assistant</p>
+                      <p class="brand-widget-subtitle">Your website front desk</p>
                     </div>
                   </div>
                   <div id="brand-widget-message" class="brand-message">${escapeHtml(agent.welcomeMessage || "Welcome. I’m here to answer questions, route ready visitors to the right next step, and capture follow-up when needed.")}</div>
                   <div class="brand-cta-row">
-                    <span class="brand-cta-note">This preview reflects the real name, opening message, button text, and brand colors you support today.</span>
+                    <span class="brand-cta-note">This preview reflects the real name, opening message, launcher text, and brand colors you support today.</span>
                     <div id="brand-launcher" class="brand-launcher" style="--brand-primary:${escapeHtml(agent.primaryColor || "#14b8a6")};--brand-secondary:${escapeHtml(agent.secondaryColor || "#0f766e")}">
                       <span class="brand-launcher-dot"></span>
                       <span id="brand-launcher-label">${escapeHtml(agent.buttonLabel || "Chat")}</span>
@@ -2527,7 +2527,7 @@ function buildConfigurationStudio(agent, setup) {
     <section class="workspace-panel" data-shell-section="configuration" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Business behavior</h2>
-        <p class="workspace-panel-copy">Shape how Vonza talks to customers, what it should emphasize, and which website knowledge it should rely on.</p>
+        <p class="workspace-panel-copy">Shape how Vonza handles front-desk conversations, what it should emphasize, and which website knowledge and routing setup it should rely on.</p>
       </div>
       <form data-settings-form data-form-kind="configuration">
         <div class="workspace-section-stack">
@@ -2612,7 +2612,7 @@ function buildConfigurationStudio(agent, setup) {
               <div class="guidance-list">
                 <div class="guidance-item">Grounded in your website, not in a separate knowledge system.</div>
                 <div class="guidance-item">Answers best when website knowledge is strong and up to date.</div>
-                <div class="guidance-item">Calendar and booking automation can come later, but they are not part of the product yet.</div>
+                <div class="guidance-item">Approval-first automations draft work for review instead of silently sending on their own.</div>
               </div>
             </div>
           </section>
@@ -2837,7 +2837,7 @@ function getUsageTrend(userMessages) {
   if (!userMessages.length) {
     return {
       label: "No real customer usage yet",
-      copy: "Once visitors start using the assistant on a live site, Vonza will show what they ask about and which conversations need help.",
+      copy: "Once visitors start using the front desk on a live site, Vonza will show what they ask about and which conversations need help.",
       recentCount: 0,
       previousCount: 0,
     };
@@ -3151,12 +3151,12 @@ function createEmptyOperatorWorkspace() {
     },
     briefing: {
       title: "Operator briefing",
-      text: "Connect Google and run the first sync to turn Overview into your operator command center.",
+      text: "Connect Google and run the first sync to turn Today into your operator command center.",
     },
     nextAction: {
       key: "connect_google",
       title: "Connect Google",
-      description: "Connect Gmail and Calendar so Vonza can start building your operator summary.",
+      description: "Connect Gmail and Calendar so Vonza can start building Today, Inbox, Calendar, and Contacts.",
       buttonLabel: "Connect Google",
       actionType: "connect_google",
       targetSection: "overview",
@@ -4034,7 +4034,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
   const visibleItems = compact ? items.slice(0, 3) : items;
   const sectionTitle = compact ? "Action queue feed" : "Action queue";
   const sectionCopy = compact
-    ? "Analytics turns into action here. These are the individual conversations that deserve owner follow-up or a better answer path."
+    ? "Outcomes turns into action here. These are the individual conversations that deserve owner follow-up or a better answer path."
     : "These items are surfaced from real visitor conversations so the owner can work specific follow-up moments instead of broad signal buckets.";
   const emptyCopy = compact
     ? "No conversation-derived actions yet. As soon as visitors show stronger commercial intent or Vonza gives a weak answer, the next owner actions will appear here."
@@ -4513,7 +4513,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       ${visibleItems.length ? `
         ${compact ? `
           <div class="action-queue-secondary-action">
-            <button class="ghost-button" type="button" data-overview-target="overview">Review in Overview</button>
+            <button class="ghost-button" type="button" data-overview-target="overview">Review in Today</button>
           </div>
         ` : `
           <div class="action-queue-filter-row">
@@ -4578,12 +4578,12 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
 
   const nextActions = [];
   let primaryAction = null;
-  let title = "Your assistant workspace";
-  let copy = "Your assistant is set up in Vonza and ready for the next step.";
+  let title = "Your front desk and workspace";
+  let copy = "Your front desk is set up in Vonza and ready for the next step.";
 
   if (!setup.isReady) {
-    title = "Your workspace is open. The next step is finishing setup.";
-    copy = "Use Customize to shape the assistant, confirm the website, and make sure everything feels right before you install it.";
+    title = "Today is open. The next step is finishing the front desk setup.";
+    copy = "Use Customize to shape the front desk, confirm routing and website knowledge, and make sure the experience feels right before you install it.";
     primaryAction = {
       label: "Continue setup",
       type: "section",
@@ -4591,14 +4591,14 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     };
     if (trimText(agent.publicAgentKey)) {
       nextActions.push({
-        label: "Try your assistant",
+        label: "Try your front desk",
         type: "preview",
       });
     }
   } else if (isInstallSeen(installStatus)) {
     if (queueSummary.attentionNeeded > 0) {
-      title = `Your assistant is live and ${queueSummary.attentionNeeded} action item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
-      copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations that deserve owner follow-up or a stronger answer path.`;
+      title = `Your front desk is live and ${queueSummary.attentionNeeded} action item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
+      copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations, follow-up work, and operator tasks that deserve attention.`;
       primaryAction = {
         label: "Review action queue",
         type: "focus",
@@ -4610,8 +4610,8 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         value: "analytics",
       });
     } else if (analyticsSummary.weakAnswerCount > 0) {
-      title = "Your assistant is live, and a few answers need strengthening";
-      copy = `Vonza is active on ${installStatus.host || "your site"}, and some real customer questions are showing where the assistant still needs help.`;
+      title = "Your front desk is live, and a few answers need strengthening";
+      copy = `Vonza is active on ${installStatus.host || "your site"}, and some real customer questions are showing where the front desk still needs help.`;
       primaryAction = {
         label: "Review weak answers",
         type: "section",
@@ -4623,7 +4623,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         value: "customize",
       });
     } else if (highIntentSignals > 0) {
-      title = "Your assistant is live and showing real buyer intent";
+      title = "Your front desk is live and showing real buyer intent";
       copy = `Vonza is live on ${installStatus.host || "your site"} and is already capturing high-value visitor intent you can act on.`;
       primaryAction = {
         label: "Review analytics",
@@ -4636,8 +4636,8 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         value: "customize",
       });
     } else if (messageCount > 0) {
-      title = "Your assistant is live and already working";
-      copy = `Vonza is live on ${installStatus.host || "your site"} and has already started handling real customer questions.`;
+      title = "Your front desk is live and already working";
+      copy = `Vonza is live on ${installStatus.host || "your site"} and has already started handling real customer questions and next-step routing.`;
       primaryAction = {
         label: "Review analytics",
         type: "section",
@@ -4649,10 +4649,10 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         value: "customize",
       });
     } else {
-      title = "Your assistant is live";
+      title = "Your front desk is live";
       copy = `Vonza has been detected on ${installStatus.host || "your site"} and is ready for customer questions, even if activity is still early.`;
       primaryAction = {
-        label: "Try your assistant",
+        label: "Try your front desk",
         type: "preview",
       };
       nextActions.push({
@@ -4661,12 +4661,12 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
         value: "customize",
       });
       nextActions.push({
-        label: "Try your assistant",
+        label: "Try your front desk",
         type: "preview",
       });
     }
   } else if (installStatus.state === "installed_unseen") {
-    title = "Your assistant is published and waiting for first live traffic";
+    title = "Your front desk is published and waiting for first live traffic";
     copy = "Vonza found the install snippet on the website. The next step is letting a real page load trigger the first live ping.";
     primaryAction = {
       label: "Verify installation",
@@ -4690,7 +4690,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       type: "install",
     });
   } else if (installStatus.state === "verify_failed") {
-    title = "Your assistant is ready for verification";
+    title = "Your front desk is ready for verification";
     copy = "The setup is in place, but the live install has not verified yet. Publish the snippet, then run the check again.";
     primaryAction = {
       label: "Add to website",
@@ -4702,8 +4702,8 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       type: "install",
     });
   } else {
-    title = "Your assistant is almost ready to go live";
-    copy = "The setup is in place, and the next step is getting the widget onto your live site so Vonza can start helping visitors.";
+    title = "Your front desk is almost ready to go live";
+    copy = "The setup is in place, and the next step is getting the widget onto your live site so Vonza can start answering, routing, and capturing real visitor intent.";
     primaryAction = {
       label: "Add to website",
       type: "focus",
@@ -4732,10 +4732,10 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       done: true,
     },
     {
-      title: "Assistant setup",
+      title: "Front-desk setup",
       copy: setup.isReady
-        ? "The assistant has the core details it needs."
-        : "The assistant still needs a few setup details before launch.",
+        ? "The front desk has the core details it needs."
+        : "The front desk still needs a few setup details before launch.",
       done: setup.isReady,
     },
     {
@@ -4752,7 +4752,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
   if (isInstallSeen(installStatus) && messageCount === 0) {
     cards.push({
       title: "Now help visitors notice it",
-      copy: "Make the launcher text and welcome message stronger, then test a few common customer questions to make sure the first interaction feels clear and helpful.",
+      copy: "Make the launcher text and welcome message stronger, then test a few common customer questions so the first interaction feels clear and helpful.",
     });
   }
 
@@ -4770,7 +4770,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       title: "Customers are already using it",
       copy: topIntent?.[1]
         ? `Recent activity suggests customers are asking most often about ${topIntentLabelMap[topIntent[0]]}.`
-        : "Recent activity shows customers are starting to use the assistant on your site.",
+        : "Recent activity shows customers are starting to use the front desk on your site.",
     });
 
     if (recentQuestions.length) {
@@ -4785,8 +4785,8 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
     cards.push({
       title: "Next best move",
       copy: isInstallSeen(installStatus)
-        ? "Keep testing the assistant on your site and review the wording, welcome message, and response style until it feels like a natural part of the business."
-        : "Once the assistant is installed on a live site, Vonza will start showing real usage and recent customer questions here.",
+        ? "Keep testing the front desk on your site and review the wording, welcome message, routing, and response style until it feels like a natural part of the business."
+        : "Once the front desk is installed on a live site, Vonza will start showing real usage and recent customer questions here.",
     });
   }
 
@@ -4843,17 +4843,17 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
           ? "Review buyer intent"
           : "Keep learning from live usage";
   const recommendationCopy = !setup.knowledgeReady
-    ? "Run another website import so the assistant can answer with stronger business context."
+    ? "Run another website import so the front desk can answer with stronger business context."
     : !isInstallSeen(overview.installStatus)
       ? "Place Vonza on the live site so it can start detecting real visitor behavior and customer intent."
       : overview.queueSummary.attentionNeeded > 0
         ? "Important high-intent or weak-answer items are in the Action Queue. Review them first so the owner knows which visitors or answer paths still need attention."
         : overview.queueSummary.total > 0
-          ? "The Action Queue already holds important conversation follow-up. Keep moving items through review so the assistant becomes more operational, not just informative."
+          ? "The Action Queue already holds important conversation follow-up. Keep moving items through review so the front desk becomes more operational, not just informative."
       : overview.analyticsSummary.weakAnswerCount > 0
-        ? "Several live questions ended in weak or uncertain answers. Use Analytics to review those conversations, then refine website knowledge or assistant setup."
+        ? "Several live questions ended in weak or uncertain answers. Use Outcomes to review those conversations, then refine website knowledge or front-desk setup."
         : highIntentSignals > 0
-          ? "High-intent questions are already coming in. Review Analytics to see whether visitors want pricing, booking, contact, or support help most."
+          ? "High-intent questions are already coming in. Review Outcomes to see whether visitors want pricing, booking, contact, or support help most."
           : "Keep an eye on the first real visitor questions so you can tighten the welcome, website copy, or install placement if needed.";
   const weakAnswerMarkup = overview.signals.weakAnswerExamples.length
     ? overview.signals.weakAnswerExamples.map((question) => `
@@ -4911,7 +4911,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
   return `
     <section class="overview-shell">
       <section class="overview-hero">
-        <span class="eyebrow">${isInstallSeen(overview.installStatus) ? "Live performance" : "Assistant overview"}</span>
+        <span class="eyebrow">${isInstallSeen(overview.installStatus) ? "Live front desk" : "Today"}</span>
         <h2 class="overview-title">${escapeHtml(overview.title)}</h2>
         <p class="overview-copy">${escapeHtml(overview.copy)}</p>
         <div class="overview-metric-grid">
@@ -5057,8 +5057,8 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     opportunityItems.push({
       title: "Strengthen website knowledge",
       copy: setup.knowledgeLimited
-        ? "Your assistant has some website knowledge, but another import could help it answer with more confidence."
-        : "Your assistant still needs website knowledge before it can answer customer questions in a grounded way.",
+        ? "Your front desk has some website knowledge, but another import could help it answer with more confidence."
+        : "Your front desk still needs website knowledge before it can answer customer questions in a grounded way.",
       subtle: "Run website import again after your site is updated or fully live.",
     });
   }
@@ -5070,7 +5070,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
         ? "The snippet is on the site, but a live widget ping has not been seen yet."
         : installStatus.state === "domain_mismatch"
           ? "A different install id or blocked domain was detected on the site."
-          : "Vonza has not yet detected the assistant on a live site.",
+          : "Vonza has not yet detected the front desk on a live site.",
       subtle: "Run verification, then load a real published page that includes the widget snippet.",
     });
   }
@@ -5103,7 +5103,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
     opportunityItems.unshift({
       title: "Weak answers need review",
       copy: `${signals.weakAnswerCount} customer question${signals.weakAnswerCount === 1 ? "" : "s"} ended in a weak or uncertain answer.`,
-      subtle: "Review the weak-answer list below, then improve website knowledge or adjust the assistant setup.",
+      subtle: "Review the weak-answer list below, then improve website knowledge or adjust the front-desk setup.",
     });
   }
 
@@ -5117,7 +5117,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
 
   if (!opportunityItems.length) {
     opportunityItems.push({
-      title: "Your assistant is in a healthy early state",
+      title: "Your front desk is in a healthy early state",
       copy: "There are no strong warning signals in the current data yet, which is a good baseline as more real usage comes in.",
       subtle: "More insights will appear as customers ask more questions.",
     });
@@ -5126,8 +5126,8 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
   return `
     <section class="workspace-panel" data-shell-section="analytics" hidden>
       <div class="workspace-panel-header">
-        <h2 class="workspace-panel-title">Analytics</h2>
-        <p class="workspace-panel-copy">See what customers are asking, where the assistant is active, and where a small improvement could make the experience stronger.</p>
+        <h2 class="workspace-panel-title">Outcomes</h2>
+        <p class="workspace-panel-copy">See what customers are asking, where the front desk is active, what the operator needs to review, and which outcomes Vonza can prove conservatively.</p>
       </div>
       <div class="analytics-stack">
         ${analyticsSummary.syncState === "pending" ? `
@@ -5162,11 +5162,11 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
 
         <div class="analytics-grid">
           <section class="workspace-card-soft">
-            <h3 class="studio-group-title">Overview</h3>
+            <h3 class="studio-group-title">Today snapshot</h3>
             <p class="studio-group-copy">A quick read on what the product really knows right now.</p>
             <div class="analytics-list">
               <div class="analytics-item">
-                <p class="analytics-item-title">Assistant visibility</p>
+                <p class="analytics-item-title">Front-desk visibility</p>
                 <p class="analytics-item-copy">${escapeHtml(installStatus.label)}</p>
                 <p class="analytics-subtle">${escapeHtml(
                   installStatus.lastSeenAt
@@ -5184,7 +5184,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
               <div class="analytics-item">
                 <p class="analytics-item-title">Knowledge state</p>
                 <p class="analytics-item-copy">${escapeHtml(setup.knowledgeDescription)}</p>
-                <p class="analytics-subtle">${escapeHtml(setup.knowledgePageCount ? `${setup.knowledgePageCount} imported page${setup.knowledgePageCount === 1 ? "" : "s"} currently support the assistant.` : "Website knowledge is still being built from your site.")}</p>
+                <p class="analytics-subtle">${escapeHtml(setup.knowledgePageCount ? `${setup.knowledgePageCount} imported page${setup.knowledgePageCount === 1 ? "" : "s"} currently support the front desk.` : "Website knowledge is still being built from your site.")}</p>
               </div>
               <div class="analytics-item">
                 <p class="analytics-item-title">Operator signal</p>
@@ -5306,7 +5306,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
                 <div class="question-row">${escapeHtml(item.label)}${item.count > 1 ? ` (${item.count})` : ""} · ${escapeHtml(getIntentLabel(item.intent))}</div>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">No strong question themes yet. As soon as visitors start asking recurring questions, Vonza will group them here so the owner can see what the assistant is really handling.</div>`}
+          ` : `<div class="placeholder-card">No strong question themes yet. As soon as visitors start asking recurring questions, Vonza will group them here so the owner can see what the front desk is really handling.</div>`}
         </section>
 
         <section class="workspace-card-soft">
@@ -5351,7 +5351,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">What needs attention</h3>
-          <p class="studio-group-copy">Practical opportunities surfaced from current usage, install state, and assistant behavior.</p>
+          <p class="studio-group-copy">Practical opportunities surfaced from current usage, install state, and front-desk behavior.</p>
           <div class="analytics-list">
             ${opportunityItems.slice(0, 4).map((item) => `
               <div class="analytics-item">
@@ -5375,7 +5375,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">Recent interactions will appear here once customers start using the assistant.</div>`}
+          ` : `<div class="placeholder-card">Recent interactions will appear here once customers start using the front desk.</div>`}
           ${recentInteractions.length ? `<p class="analytics-subtle">This section shows recent stored messages, not full reconstructed chat threads.</p>` : ""}
         </section>
       </div>
@@ -5802,7 +5802,7 @@ function renderAssistantShell(
     ? `<button class="primary-button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>Add to website</button>`
     : `<button class="primary-button" type="button" data-shell-target="customize">Continue setup</button>`;
   const secondaryAction = trimText(agent.publicAgentKey)
-    ? `<a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">Try assistant</a>`
+    ? `<a class="test-link" data-action="open-preview" href="${buildWidgetUrl(agent.publicAgentKey)}" target="_blank" rel="noreferrer">Try front desk</a>`
     : "";
 
   rootEl.innerHTML = `
@@ -5831,7 +5831,7 @@ function renderAssistantShell(
 
       ${operatorEnabled && !setup.isReady ? `
         <div class="shell-status-banner">
-          Your website front desk is unlocked and this workspace now guides the inbox, calendar, and approval-first automation rollout. Finish the key details in Customize, connect Google, then run the first sync.
+          Your website front desk is unlocked and this workspace now guides Today, Contacts, Inbox, Calendar, and approval-first automations. Finish the key details in Customize, connect Google, then run the first sync.
         </div>
       ` : ""}
 
@@ -5890,13 +5890,13 @@ function buildPreviewSection(agent, setup) {
   ].join("");
 
   const warning = setup.knowledgeState !== "ready"
-    ? `<p class="preview-warning">Your assistant can already be tested here, but the website knowledge is still ${setup.knowledgeState === "limited" ? "limited" : "incomplete"}. Run another import if you want a stronger launch-ready result.</p>`
+    ? `<p class="preview-warning">Your front desk can already be tested here, but the website knowledge is still ${setup.knowledgeState === "limited" ? "limited" : "incomplete"}. Run another import if you want a stronger launch-ready result.</p>`
     : "";
 
   return `
     <div class="preview-header">
-      <h2 class="section-heading">Try your assistant</h2>
-      <p class="section-copy">See how your assistant answers real customer questions.</p>
+      <h2 class="section-heading">Try your website front desk</h2>
+      <p class="section-copy">See how Vonza answers questions, routes the next step, and captures follow-up before it feeds the operator workspace.</p>
       <div class="preview-status-row">
         ${statusPills}
         <span class="preview-status-pill">${escapeHtml(agent.websiteUrl || "No website URL")}</span>
@@ -5904,9 +5904,9 @@ function buildPreviewSection(agent, setup) {
       ${warning}
       <div class="prompt-chip-row">
         <button class="prompt-chip" type="button" data-preview-prompt="What services do you offer?">What services do you offer?</button>
-        <button class="prompt-chip" type="button" data-preview-prompt="How much does it cost?">How much does it cost?</button>
+        <button class="prompt-chip" type="button" data-preview-prompt="Can I book with you?">Can I book with you?</button>
+        <button class="prompt-chip" type="button" data-preview-prompt="Can I get a quote?">Can I get a quote?</button>
         <button class="prompt-chip" type="button" data-preview-prompt="How can I contact you?">How can I contact you?</button>
-        <button class="prompt-chip" type="button" data-preview-prompt="What makes this business different?">What makes this business different?</button>
       </div>
     </div>
     <div class="preview-control-row">
@@ -5955,7 +5955,7 @@ function buildInstallSection(agent, options = {}) {
     : "";
 
   return `
-    ${upcoming ? `<p class="install-upcoming">This becomes the final step once your assistant feels ready to go live.</p>` : ""}
+    ${upcoming ? `<p class="install-upcoming">This becomes the final step once your front desk feels ready to go live.</p>` : ""}
     <p class="section-copy">${escapeHtml(installStatus.label)}</p>
     <p class="install-help">${escapeHtml(statusCopy)}</p>
     ${allowedDomains.length ? `<p class="install-help">Allowed domains: ${escapeHtml(allowedDomains.join(", "))}</p>` : ""}
@@ -5992,9 +5992,9 @@ function buildInstallSection(agent, options = {}) {
       <button class="primary-button" data-action="copy-install" ${hasInstall ? "" : "disabled"}>Copy install code</button>
       <button class="ghost-button" data-action="copy-install-instructions" ${hasInstall ? "" : "disabled"}>Copy instructions</button>
       <button class="ghost-button" data-action="verify-install" ${hasInstall ? "" : "disabled"}>Verify installation</button>
-      <a class="test-link ${hasInstall ? "" : "disabled"}" data-action="open-preview" href="${hasInstall ? buildWidgetUrl(agent.publicAgentKey) : "#"}" target="_blank" rel="noreferrer">Test assistant</a>
+      <a class="test-link ${hasInstall ? "" : "disabled"}" data-action="open-preview" href="${hasInstall ? buildWidgetUrl(agent.publicAgentKey) : "#"}" target="_blank" rel="noreferrer">Test front desk</a>
     </div>
-    <p class="install-help">${hasInstall ? "Keep it simple: place the script in the live site head. Vonza will verify the snippet server-side and mark the install live once a real page load pings back." : "Install will be available as soon as your assistant has a live install id."}</p>
+    <p class="install-help">${hasInstall ? "Keep it simple: place the script in the live site head. Vonza will verify the snippet server-side and mark the install live once a real page load pings back." : "Install will be available as soon as your front desk has a live install id."}</p>
     <details class="code-toggle">
       <summary>View code</summary>
       <textarea id="install-script-output" readonly>${script}</textarea>
@@ -6281,6 +6281,24 @@ function createWorkspaceWarning(label, error) {
 }
 
 async function loadOperatorWorkspace(agentId, options = {}) {
+  if (!isOperatorWorkspaceFlagEnabled()) {
+    return {
+      ...createEmptyOperatorWorkspace(),
+      enabled: false,
+      featureEnabled: false,
+      briefing: {
+        title: "Operator workspace is off",
+        text: "The full operator workspace is disabled on this deployment, so Vonza is keeping the lighter front-desk workspace active.",
+      },
+      status: {
+        ...createEmptyOperatorWorkspace().status,
+        enabled: false,
+        featureEnabled: false,
+        googleConnectReady: false,
+      },
+    };
+  }
+
   const url = new URL("/agents/operator-workspace", window.location.origin);
   url.searchParams.set("agent_id", agentId);
   url.searchParams.set("client_id", getClientId());
@@ -6687,15 +6705,15 @@ async function createAssistant(event) {
   const launchState = {
     status: "running",
     stepIndex: 0,
-    headline: "We’re preparing your assistant.",
-    detail: "We’re setting up your assistant, connecting your website, and getting a preview ready for you.",
+    headline: "We’re preparing your front desk.",
+    detail: "We’re setting up your front desk, connecting your website, and getting a preview ready for you.",
     note: "Website import can take a little longer if your site is larger or slower to respond.",
     websiteUrl,
   };
 
   saveLaunchState(launchState);
   renderLaunchSequence(launchState);
-  setStatus("Creating your assistant...");
+  setStatus("Creating your front desk...");
 
   try {
     const createData = await fetchJson("/agents/create", {
@@ -6719,7 +6737,7 @@ async function createAssistant(event) {
       stepIndex: 1,
       agentId: createData.agent_id,
       agentKey: createData.agent_key,
-      detail: "Your assistant is created. Now we’re saving the website and brand details it should represent.",
+      detail: "Your front desk is created. Now we’re saving the website and brand details it should represent.",
     });
     trackProductEvent("assistant_created", {
       agentId: createData.agent_id,
@@ -6734,7 +6752,7 @@ async function createAssistant(event) {
     saveLaunchState({
       ...getLaunchState(),
       stepIndex: 2,
-      detail: "We’re now reading the most useful parts of your website so the assistant can answer with confidence.",
+      detail: "We’re now reading the most useful parts of your website so the front desk can answer with confidence.",
     });
     renderLaunchSequence(getLaunchState());
 
@@ -6751,7 +6769,7 @@ async function createAssistant(event) {
       stepIndex: 3,
       detail: nextSetup.knowledgeState === "ready"
         ? "Your website knowledge is in place. We’re preparing your preview now."
-        : "Your assistant is created. The website knowledge needs another pass, and we’re preparing the next best setup view for you.",
+        : "Your front desk is created. The website knowledge needs another pass, and we’re preparing the next best setup view for you.",
       knowledgeState: nextSetup.knowledgeState,
     });
     renderLaunchSequence(getLaunchState());
@@ -6761,7 +6779,7 @@ async function createAssistant(event) {
       stepIndex: 4,
       detail: nextSetup.knowledgeState === "ready"
         ? "Everything is coming together. We’re opening the best next view for you now."
-        : "Your assistant is ready for final setup. You’ll be able to retry website import from the next screen.",
+        : "Your front desk is ready for final setup. You’ll be able to retry website import from the next screen.",
       nextState: nextSetup.knowledgeState === "ready" ? "ready" : "setup",
     });
     renderLaunchSequence(getLaunchState());
@@ -6772,8 +6790,8 @@ async function createAssistant(event) {
     });
 
     setStatus(nextSetup.knowledgeState === "ready"
-      ? "Your assistant is ready to try."
-      : nextSetup.errorMessage || "Your assistant is created. Website knowledge needs another pass."
+      ? "Your front desk is ready to try."
+      : nextSetup.errorMessage || "Your front desk is created. Website knowledge needs another pass."
     );
 
     const successAgent = {
@@ -8667,7 +8685,7 @@ async function boot() {
         clearLaunchState();
         setStatus("Setup was interrupted before your assistant was created. You can start again whenever you're ready.");
       }
-      setStatus("Sign in complete. Unlock Vonza to open your setup workspace.");
+      setStatus("Sign in complete. Unlock Vonza to open your front desk and operator workspace.");
       renderAccessLocked(null);
       return;
     }
@@ -8679,7 +8697,7 @@ async function boot() {
       clearLaunchState();
       setStatus(accessStatus === "suspended"
         ? "Workspace access is currently paused."
-        : "Finish payment to open your Vonza setup workspace."
+        : "Finish payment to open your Vonza front desk and operator workspace."
       );
       renderAccessLocked(agent);
       return;

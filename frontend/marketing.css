@@ -222,7 +222,7 @@ button:hover {
 }
 
 .hero h1 {
-  max-width: 8.8ch;
+  max-width: 10.8ch;
   font-size: clamp(3.5rem, 6vw, 6.2rem);
 }
 
@@ -562,7 +562,7 @@ button:hover {
 }
 
 .workspace-columns {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .workspace-summary {
