@@ -662,6 +662,30 @@ create unique index if not exists operator_tasks_source_dedupe_idx
 create index if not exists operator_tasks_status_idx
   on public.operator_tasks (status, priority, created_at desc);
 
+create table if not exists public.operator_workspace_activations (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  business_id uuid references public.businesses (id) on delete cascade,
+  owner_user_id uuid,
+  operator_workspace_enabled boolean not null default true,
+  google_connected boolean not null default false,
+  inbox_context_selected boolean not null default false,
+  calendar_context_selected boolean not null default false,
+  inbox_synced boolean not null default false,
+  calendar_synced boolean not null default false,
+  first_inbox_review_completed boolean not null default false,
+  first_reply_draft_created boolean not null default false,
+  first_campaign_draft_created boolean not null default false,
+  first_calendar_action_reviewed boolean not null default false,
+  activation_completed_at timestamp with time zone,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists operator_workspace_activations_agent_owner_idx
+  on public.operator_workspace_activations (agent_id, owner_user_id);
+
 create table if not exists public.operator_audit_logs (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,

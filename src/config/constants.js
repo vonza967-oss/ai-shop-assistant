@@ -16,4 +16,5 @@ export const OPERATOR_TASK_TABLE = "operator_tasks";
 export const OPERATOR_CAMPAIGN_TABLE = "operator_campaigns";
 export const OPERATOR_CAMPAIGN_RECIPIENT_TABLE = "operator_campaign_recipients";
 export const OPERATOR_CAMPAIGN_STEP_TABLE = "operator_campaign_steps";
+export const OPERATOR_ACTIVATION_TABLE = "operator_workspace_activations";
 export const MAX_CRAWL_PAGES = 8;

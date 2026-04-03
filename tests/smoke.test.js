@@ -1438,14 +1438,14 @@ test("marketing homepage and app routes load without broken handoff paths", { co
       try {
         const marketingHome = await getText(server.baseUrl, "/");
         assert.equal(marketingHome.status, 200);
-        assert.match(marketingHome.text, /Make your website feel like it already has a smart first salesperson/);
-        assert.match(marketingHome.text, /create an account with email and password/i);
+        assert.match(marketingHome.text, /Run the website, inbox, calendar, and approvals from one AI operator workspace/i);
+        assert.match(marketingHome.text, /connect Google/i);
         assert.match(marketingHome.text, /href="\/dashboard\?from=site"/);
         assert.match(marketingHome.text, /id="site-auth-link"/);
         assert.match(marketingHome.text, /id="site-primary-cta"/);
         assert.match(marketingHome.text, /data-app-link/);
         assert.match(marketingHome.text, /Vonza workspace/);
-        assert.match(marketingHome.text, /see what visitors want and what to improve next/i);
+        assert.match(marketingHome.text, /website front desk and operator workspace/i);
         assert.match(marketingHome.text, /\/marketing\.js/);
 
         const dashboard = await getText(server.baseUrl, "/dashboard");
@@ -1514,7 +1514,11 @@ test("dashboard bundle exposes password auth entry, purchase-first handoff, and 
         assert.match(dashboardScript.text, /Analytics/);
         assert.match(dashboardScript.text, /Continue setup/);
         assert.match(dashboardScript.text, /Add to website/);
-        assert.match(dashboardScript.text, /Open operator actions/);
+        assert.match(dashboardScript.text, /Today/);
+        assert.match(dashboardScript.text, /Activation checklist/);
+        assert.match(dashboardScript.text, /Single best next action/);
+        assert.match(dashboardScript.text, /Connect Google to unlock Inbox/);
+        assert.match(dashboardScript.text, /Connect Google to unlock Calendar/);
         assert.match(dashboardScript.text, /Answers needing work/);
         assert.match(dashboardScript.text, /Top customer questions/);
         assert.match(dashboardScript.text, /Pricing interest/);

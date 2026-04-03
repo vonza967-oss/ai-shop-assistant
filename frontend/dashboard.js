@@ -36,6 +36,8 @@ const LAUNCH_STEPS = [
 ];
 const trackedEventKeys = new Set();
 const SHELL_SECTIONS = ["overview", "inbox", "calendar", "automations", "customize", "analytics"];
+const FULL_SHELL_SECTIONS = SHELL_SECTIONS.slice();
+const LEGACY_SHELL_SECTIONS = ["overview", "customize", "analytics"];
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const AUTH_VIEW_MODES = {
   SIGN_IN: "sign-in",
@@ -601,18 +603,25 @@ function clearClaimBridgeDismissal() {
   window.localStorage.removeItem(getClaimDismissKey());
 }
 
-function getActiveShellSection(setup) {
-  const storedSection = trimText(window.localStorage.getItem(DASHBOARD_SECTION_KEY)).toLowerCase();
+function getAvailableShellSections(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  return operatorWorkspace?.enabled === false
+    ? LEGACY_SHELL_SECTIONS
+    : FULL_SHELL_SECTIONS;
+}
 
-  if (SHELL_SECTIONS.includes(storedSection)) {
+function getActiveShellSection(setup, operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const storedSection = trimText(window.localStorage.getItem(DASHBOARD_SECTION_KEY)).toLowerCase();
+  const availableSections = getAvailableShellSections(operatorWorkspace);
+
+  if (availableSections.includes(storedSection)) {
     return storedSection;
   }
 
   return "overview";
 }
 
-function setActiveShellSection(section) {
-  if (!SHELL_SECTIONS.includes(section)) {
+function setActiveShellSection(section, operatorWorkspace = workspaceState?.operatorWorkspace || createEmptyOperatorWorkspace()) {
+  if (!getAvailableShellSections(operatorWorkspace).includes(section)) {
     return;
   }
 
@@ -1517,33 +1526,51 @@ function renderLaunchSuccess(agent, options = {}) {
   }
 }
 
-function buildWorkspaceTabs(activeSection, setup) {
+function buildWorkspaceTabs(activeSection, setup, operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const availableSections = getAvailableShellSections(operatorWorkspace);
+  const tabDefinitions = [
+    {
+      key: "overview",
+      label: "Overview",
+      note: operatorWorkspace.enabled === false
+        ? (setup.isReady ? "Workspace health, install state, and launch progress" : "Setup progress and what to finish next")
+        : (setup.isReady ? "Today, workload, approvals, and connected systems" : "Activation checklist plus operator rollout"),
+    },
+    {
+      key: "inbox",
+      label: "Inbox",
+      note: "Connected Gmail threads, complaint drafts, and owner-approved replies",
+    },
+    {
+      key: "calendar",
+      label: "Calendar",
+      note: "Upcoming events, slot suggestions, booking opportunities, and approval-first changes",
+    },
+    {
+      key: "automations",
+      label: "Automations",
+      note: "Complaint queue, campaign drafts, send timing, and operator tasks",
+    },
+    {
+      key: "customize",
+      label: "Customize",
+      note: "Name, website, welcome message, colors, behavior",
+    },
+    {
+      key: "analytics",
+      label: "Analytics",
+      note: "Usage, action queue signals, and where the assistant needs work",
+    },
+  ].filter((tab) => availableSections.includes(tab.key));
+
   return `
     <nav class="workspace-tabs" aria-label="Workspace sections">
-      <button class="workspace-tab ${activeSection === "overview" ? "active" : ""}" type="button" data-shell-target="overview">
-        <span class="nav-label">Overview</span>
-        <span class="nav-note">${setup.isReady ? "Today, workload, approvals, and connected systems" : "Setup progress plus operator rollout"}</span>
-      </button>
-      <button class="workspace-tab ${activeSection === "inbox" ? "active" : ""}" type="button" data-shell-target="inbox">
-        <span class="nav-label">Inbox</span>
-        <span class="nav-note">Connected Gmail threads, complaint drafts, and owner-approved replies</span>
-      </button>
-      <button class="workspace-tab ${activeSection === "calendar" ? "active" : ""}" type="button" data-shell-target="calendar">
-        <span class="nav-label">Calendar</span>
-        <span class="nav-note">Upcoming events, slot suggestions, booking opportunities, and approval-first changes</span>
-      </button>
-      <button class="workspace-tab ${activeSection === "automations" ? "active" : ""}" type="button" data-shell-target="automations">
-        <span class="nav-label">Automations</span>
-        <span class="nav-note">Complaint queue, campaign drafts, send timing, and operator tasks</span>
-      </button>
-      <button class="workspace-tab ${activeSection === "customize" ? "active" : ""}" type="button" data-shell-target="customize">
-        <span class="nav-label">Customize</span>
-        <span class="nav-note">Name, website, welcome message, colors, behavior</span>
-      </button>
-      <button class="workspace-tab ${activeSection === "analytics" ? "active" : ""}" type="button" data-shell-target="analytics">
-        <span class="nav-label">Analytics</span>
-        <span class="nav-note">Usage, action queue signals, and where the assistant needs work</span>
-      </button>
+      ${tabDefinitions.map((tab) => `
+        <button class="workspace-tab ${activeSection === tab.key ? "active" : ""}" type="button" data-shell-target="${escapeHtml(tab.key)}">
+          <span class="nav-label">${escapeHtml(tab.label)}</span>
+          <span class="nav-note">${escapeHtml(tab.note)}</span>
+        </button>
+      `).join("")}
     </nav>
   `;
 }
@@ -1569,53 +1596,189 @@ function formatOperatorCount(value, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function buildOperatorNextActionButton(nextAction = {}) {
+  const actionType = trimText(nextAction.actionType || "stay_put");
+  const label = trimText(nextAction.buttonLabel || nextAction.title || "Open Overview");
+  const targetSection = trimText(nextAction.targetSection || "overview");
+  const disabled = nextAction.disabled === true;
+
+  if (actionType === "connect_google") {
+    return `<button class="primary-button" type="button" data-google-connect ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+  }
+
+  if (actionType === "run_first_sync") {
+    return `<button class="primary-button" type="button" data-refresh-operator data-force-sync="true" ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+  }
+
+  if (actionType === "review_context") {
+    return `<button class="primary-button" type="button" data-shell-target="overview">${escapeHtml(label)}</button>`;
+  }
+
+  return `<button class="ghost-button" type="button" data-shell-target="${escapeHtml(targetSection)}" ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+function buildOperatorChecklistMarkup(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const activation = operatorWorkspace.activation || createEmptyOperatorWorkspace().activation;
+  const checklist = activation.checklist || [];
+  const mailboxOptions = operatorWorkspace.contextOptions?.mailboxes || createEmptyOperatorWorkspace().contextOptions.mailboxes;
+  const selectedMailbox = trimText(
+    operatorWorkspace.connectedAccounts?.[0]?.selectedMailbox
+    || activation.metadata?.selectedMailbox
+    || "INBOX"
+  );
+
+  if (!checklist.length) {
+    return "";
+  }
+
+  return `
+    <section class="workspace-card-soft operator-checklist-card">
+      <div class="workspace-panel-header">
+        <div>
+          <p class="studio-kicker">Activation checklist</p>
+          <h3 class="studio-group-title">Guide the first operator session to value.</h3>
+          <p class="workspace-panel-copy">${escapeHtml(`${activation.completedCount || 0} of ${activation.totalCount || checklist.length} steps completed. Progress persists for this owner.`)}</p>
+        </div>
+        <span class="${getBadgeClass(activation.isComplete ? "Ready" : "Limited")}">${activation.isComplete ? "Activation complete" : "In progress"}</span>
+      </div>
+      <div class="operator-checklist-list">
+        ${checklist.map((step) => `
+          <article class="operator-checklist-item ${step.complete ? "complete" : ""}">
+            <div class="operator-checklist-copy">
+              <p class="operator-checklist-title">${escapeHtml(step.title)}</p>
+              <p class="operator-checklist-note">${escapeHtml(step.description)}</p>
+            </div>
+            <span class="${getBadgeClass(step.complete ? "Ready" : "Limited")}">${step.complete ? "Done" : "Next"}</span>
+          </article>
+        `).join("")}
+      </div>
+      ${operatorWorkspace.status?.googleConnected ? `
+        <form class="operator-context-form" data-operator-context-form>
+          <div class="form-grid two-col">
+            <div class="field">
+              <label for="operator-mailbox-context">Inbox context</label>
+              <select id="operator-mailbox-context" name="selected_mailbox">
+                ${mailboxOptions.map((option) => `
+                  <option value="${escapeHtml(option.value)}" ${option.value === selectedMailbox ? "selected" : ""}>${escapeHtml(option.label)}</option>
+                `).join("")}
+              </select>
+              <p class="field-help">Choose the first mailbox Vonza should watch for owner-facing work.</p>
+            </div>
+            <div class="field">
+              <label for="operator-calendar-context">Calendar context</label>
+              <input id="operator-calendar-context" type="text" value="Primary calendar" disabled>
+              <p class="field-help">Vonza uses the primary Google calendar for the first-run daily summary and approval drafts.</p>
+            </div>
+          </div>
+          <div class="inline-actions">
+            <button class="ghost-button" type="submit">Save context</button>
+            <button class="ghost-button" type="button" data-complete-operator-step="inbox_review">Mark inbox review complete</button>
+            <button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar reviewed</button>
+          </div>
+        </form>
+      ` : ""}
+    </section>
+  `;
+}
+
+function buildOperatorEmptyState({ title, copy, actionMarkup = "" } = {}) {
+  return `
+    <div class="operator-empty-state">
+      <p class="operator-empty-title">${escapeHtml(title || "Nothing here yet")}</p>
+      <p class="operator-empty-copy">${escapeHtml(copy || "Vonza will fill this area as soon as there is useful operator context.")}</p>
+      ${actionMarkup ? `<div class="inline-actions">${actionMarkup}</div>` : ""}
+    </div>
+  `;
+}
+
 function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOperatorWorkspace()) {
+  if (operatorWorkspace.enabled === false) {
+    return "";
+  }
+
   const accounts = operatorWorkspace.connectedAccounts || [];
   const primaryAccount = accounts[0] || null;
   const summary = operatorWorkspace.summary || createEmptyOperatorWorkspace().summary;
+  const today = operatorWorkspace.today || createEmptyOperatorWorkspace().today;
+  const nextAction = operatorWorkspace.nextAction || createEmptyOperatorWorkspace().nextAction;
+  const briefing = operatorWorkspace.briefing || createEmptyOperatorWorkspace().briefing;
+  const health = operatorWorkspace.health || createEmptyOperatorWorkspace().health;
+  const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
   const dailySummary = operatorWorkspace.calendar?.dailySummary
     || "Connect Google Workspace to see daily operator context here.";
-  const connectable = isOperatorWorkspaceConnectable(operatorWorkspace);
-  const availabilityCopy = getOperatorWorkspaceAvailabilityCopy(operatorWorkspace);
 
   return `
-    <section class="workspace-card-soft">
+    <section class="workspace-card-soft operator-home-card">
       <div class="workspace-panel-header">
-        <h2 class="workspace-panel-title">Connected operator workspace</h2>
-        <p class="workspace-panel-copy">Vonza now combines chat, connected inbox, calendar awareness, complaint handling, follow-ups, and approval-first campaigns in one owner workspace.</p>
+        <div>
+          <p class="studio-kicker">Operator home</p>
+          <h2 class="workspace-panel-title">Today</h2>
+          <p class="workspace-panel-copy">Overview is now the operator command center for inbox, calendar, approvals, follow-ups, and the next owner action.</p>
+        </div>
+        <div class="workspace-badge-row">
+          <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected ? "Google connected" : "Google not connected"}</span>
+          <span class="${getBadgeClass(status.migrationRequired ? "Needs attention" : "Ready")}">${status.migrationRequired ? "Migration needed" : "Workspace ready"}</span>
+        </div>
       </div>
-      <div class="overview-grid">
+      <div class="operator-home-grid">
+        <section class="operator-focus-card">
+          <p class="overview-label">Single best next action</p>
+          <h3 class="operator-focus-title">${escapeHtml(nextAction.title || "Review today")}</h3>
+          <p class="operator-focus-copy">${escapeHtml(nextAction.description || "Vonza will keep this focused on the most useful thing to do next.")}</p>
+          <div class="inline-actions">
+            ${buildOperatorNextActionButton(nextAction)}
+          </div>
+        </section>
+        <section class="operator-focus-card operator-briefing-card">
+          <p class="overview-label">${escapeHtml(briefing.title || "Operator briefing")}</p>
+          <p class="workspace-panel-copy">${escapeHtml(briefing.text || dailySummary)}</p>
+          ${health.globalError ? `<div class="operator-inline-alert"><p>${escapeHtml(`Workspace note: ${health.globalError}`)}</p></div>` : ""}
+          ${health.inboxSyncError || health.calendarSyncError ? `
+            <div class="operator-inline-alert">
+              ${health.inboxSyncError ? `<p>${escapeHtml(`Inbox sync issue: ${health.inboxSyncError}`)}</p>` : ""}
+              ${health.calendarSyncError ? `<p>${escapeHtml(`Calendar sync issue: ${health.calendarSyncError}`)}</p>` : ""}
+            </div>
+          ` : ""}
+        </section>
+      </div>
+      ${buildOperatorChecklistMarkup(operatorWorkspace)}
+      <div class="overview-grid operator-metric-grid">
         <div class="overview-card">
-          <p class="overview-label">Google Workspace</p>
-          <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Not connected")}</p>
+          <p class="overview-label">Google connection</p>
+          <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Awaiting connection")}</p>
           <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
-            ? `Scopes: ${(primaryAccount.scopes || []).length}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "pending"}.`
-            : (availabilityCopy || "Connect Gmail and Calendar so Vonza can manage scheduling, inbox replies, and approval-first sends from one place."))}</p>
-          ${primaryAccount?.status === "connected"
-            ? `<button class="ghost-button" type="button" data-shell-target="inbox">Open Inbox</button>`
-            : `<button class="primary-button" type="button" data-google-connect ${connectable ? "" : "disabled"}>Connect Google Workspace</button>`}
+            ? `Mailbox ${primaryAccount.selectedMailbox || "INBOX"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
+            : status.googleConfigReady
+              ? "Connect Gmail and Calendar so Vonza can sync inbox, calendar, and approvals into one workspace."
+              : "Google connection is not configured on this deployment yet.")}</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">Inbox needing attention</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(summary.inboxNeedingAttention, "thread"))}</p>
-          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.overdueThreads, "ignored thread")} are at risk of being ignored.`)}</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.inboxNeedingAttention, "thread"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.overdueThreads, "overdue thread")} and ${formatOperatorCount(today.complaintsNeedingReview, "complaint")} still need review.`)}</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">Calendar today</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(summary.upcomingBookings, "booking"))}</p>
-          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.openAvailabilityCount, "open slot")} available.`)}</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.upcomingBookings, "event"))}</p>
+          <p class="overview-card-copy">${escapeHtml(today.nextEventTitle
+            ? `Next up: ${today.nextEventTitle}. ${formatOperatorCount(today.openAvailabilityCount, "open slot")} still available.`
+            : `${formatOperatorCount(today.openAvailabilityCount, "open slot")} available for follow-up or booking work.`)}</p>
         </div>
         <div class="overview-card">
-          <p class="overview-label">Active campaigns</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(summary.activeCampaigns, "campaign"))}</p>
+          <p class="overview-label">Leads and follow-ups</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.leadsNeedingAction, "lead"))}</p>
           <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.followUpsNeedingApproval, "follow-up")} still need approval.`)}</p>
         </div>
-      </div>
-      <div class="workspace-section-stack">
-        <section class="workspace-card-soft operator-summary-card">
-          <p class="studio-kicker">Daily operator summary</p>
-          <p class="workspace-panel-copy">${escapeHtml(dailySummary)}</p>
-        </section>
+        <div class="overview-card">
+          <p class="overview-label">Automations and campaigns</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.activeCampaigns, "active automation"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(today.campaignsAwaitingApproval, "campaign awaiting approval", "campaigns awaiting approval")} across draft and live work.`)}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Top operator priority</p>
+          <p class="overview-value">${escapeHtml(today.topTask || "No urgent queue item")}</p>
+          <p class="overview-card-copy">${escapeHtml(dailySummary)}</p>
+        </div>
       </div>
     </section>
   `;
@@ -2569,6 +2732,86 @@ function createEmptyActionQueue() {
 
 function createEmptyOperatorWorkspace() {
   return {
+    enabled: true,
+    featureEnabled: true,
+    status: {
+      enabled: true,
+      featureEnabled: true,
+      googleConfigReady: true,
+      googleConnectReady: true,
+      googleConnected: false,
+      persistenceAvailable: true,
+      migrationRequired: false,
+      syncRequested: false,
+    },
+    activation: {
+      operatorWorkspaceEnabled: true,
+      googleConnected: false,
+      inboxContextSelected: false,
+      calendarContextSelected: false,
+      inboxSynced: false,
+      calendarSynced: false,
+      firstInboxReviewCompleted: false,
+      firstReplyDraftCreated: false,
+      firstCampaignDraftCreated: false,
+      firstCalendarActionReviewed: false,
+      activationCompletedAt: null,
+      checklist: [],
+      completedCount: 0,
+      totalCount: 0,
+      isComplete: false,
+      metadata: {},
+    },
+    briefing: {
+      title: "Operator briefing",
+      text: "Connect Google and run the first sync to turn Overview into your operator command center.",
+    },
+    nextAction: {
+      key: "connect_google",
+      title: "Connect Google",
+      description: "Connect Gmail and Calendar so Vonza can start building your operator summary.",
+      buttonLabel: "Connect Google",
+      actionType: "connect_google",
+      targetSection: "overview",
+      disabled: false,
+    },
+    today: {
+      inboxNeedingAttention: 0,
+      complaintsNeedingReview: 0,
+      supportNeedingReview: 0,
+      leadsNeedingAction: 0,
+      campaignsAwaitingApproval: 0,
+      followUpsAwaitingApproval: 0,
+      activeCampaigns: 0,
+      upcomingBookings: 0,
+      nextEventTitle: "",
+      nextEventAt: null,
+      openAvailabilityCount: 0,
+      campaignCount: 0,
+      followUpCount: 0,
+      topTask: "",
+    },
+    contextOptions: {
+      mailboxes: [
+        {
+          value: "INBOX",
+          label: "Primary inbox",
+          description: "Sync the main inbox first.",
+        },
+      ],
+      calendars: [
+        {
+          value: "primary",
+          label: "Primary calendar",
+          description: "Use the main Google calendar.",
+        },
+      ],
+    },
+    health: {
+      inboxSyncError: "",
+      calendarSyncError: "",
+      globalError: "",
+    },
     connectedAccounts: [],
     inbox: {
       threads: [],
@@ -2597,13 +2840,13 @@ function createEmptyOperatorWorkspace() {
       operatorLoad: 0,
     },
     capabilities: {
-      featureEnabled: false,
+      featureEnabled: true,
       googleAvailable: false,
       googleMissingEnv: [],
-      persistenceAvailable: false,
+      persistenceAvailable: true,
       migrationRequired: false,
       missingTables: [],
-      status: "disabled",
+      status: "ready",
     },
     alerts: [],
   };
@@ -4670,6 +4913,8 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
   const accounts = operatorWorkspace.connectedAccounts || [];
   const primaryAccount = accounts[0] || null;
   const threads = (operatorWorkspace.inbox?.threads || []).slice(0, 10);
+  const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
+  const activation = operatorWorkspace.activation || createEmptyOperatorWorkspace().activation;
   const connectable = isOperatorWorkspaceConnectable(operatorWorkspace);
   const availabilityCopy = getOperatorWorkspaceAvailabilityCopy(operatorWorkspace);
 
@@ -4686,14 +4931,16 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
             <h3 class="studio-group-title">Google connection</h3>
             <p class="workspace-panel-copy">${escapeHtml(primaryAccount?.status === "connected"
               ? `Connected as ${primaryAccount.accountEmail || primaryAccount.displayName || "Google account"}. Mailbox: ${primaryAccount.selectedMailbox || "INBOX"}.`
-              : "Connect Google Workspace to ingest recent inbox threads and keep Gmail permissions explicit and auditable.")}</p>
+              : status.googleConfigReady
+                ? "Connect Google to unlock Inbox, sync recent threads, and keep Gmail permissions explicit and auditable."
+                : "Google connection is not configured on this deployment yet, so Inbox will stay in preview mode.")}</p>
           </div>
           <div class="inline-actions">
             <button class="${primaryAccount?.status === "connected" ? "ghost-button" : "primary-button"}" type="button" data-google-connect ${connectable ? "" : "disabled"}>${primaryAccount?.status === "connected" ? "Reconnect Google" : "Connect Google Workspace"}</button>
-            <button class="ghost-button" type="button" data-refresh-operator>Refresh workspace</button>
+            <button class="ghost-button" type="button" data-refresh-operator data-force-sync="${primaryAccount?.status === "connected" ? "true" : "false"}" ${primaryAccount?.status === "connected" ? "" : "disabled"}>${primaryAccount?.status === "connected" ? "Run inbox sync" : "Refresh workspace"}</button>
           </div>
           ${primaryAccount?.status === "connected"
-            ? `<p class="section-note">Scopes granted: ${(primaryAccount.scopes || []).length}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "pending"}.</p>`
+            ? `<p class="section-note">Scopes granted: ${(primaryAccount.scopes || []).length}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.</p>`
             : `<p class="section-note">${escapeHtml(connectable
               ? "Vonza requests Gmail read, compose, and send plus Calendar read and event mutation scopes so all sends and event changes can stay approval-first."
               : availabilityCopy || "Google connection is unavailable right now.")}</p>`}
@@ -4702,7 +4949,17 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Threads needing attention</h3>
           <p class="workspace-panel-copy">Lead, support, complaint, billing, and follow-up buckets are preserved on reload and stay linked to related leads or queue context when available.</p>
-          ${threads.length ? `
+          ${primaryAccount?.status !== "connected" ? buildOperatorEmptyState({
+            title: "Connect Google to unlock Inbox",
+            copy: status.googleConfigReady
+              ? "Vonza will sync recent Gmail threads, classify them into operator buckets, and prepare approval-first drafts here."
+              : "Add the Google env vars and redeploy before owners can connect Gmail and unlock Inbox.",
+            actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
+          }) : !activation.inboxSynced ? buildOperatorEmptyState({
+            title: "Run your first inbox sync",
+            copy: "The Google account is connected, but Vonza has not pulled the first inbox snapshot yet. Run the first sync to make Inbox useful.",
+            actionMarkup: `<button class="primary-button" type="button" data-refresh-operator data-force-sync="true">Run first sync</button>`,
+          }) : threads.length ? `
             <div class="operator-thread-grid">
               ${threads.map((thread) => {
                 const draft = getThreadDraft(thread);
@@ -4740,7 +4997,11 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
                 `;
               }).join("")}
             </div>
-          ` : `<div class="placeholder-card">No connected Gmail threads yet. Once Gmail is connected, Vonza will sync recent threads, bucket them, and prepare owner-approved drafts here.</div>`}
+          ` : buildOperatorEmptyState({
+            title: "Inbox is synced but quiet",
+            copy: "No qualifying Gmail threads are stored yet. Vonza will surface complaints, support threads, and follow-up opportunities here as soon as they arrive.",
+            actionMarkup: `<button class="ghost-button" type="button" data-complete-operator-step="inbox_review">Mark inbox review complete</button>`,
+          })}
         </section>
       </div>
     </section>
@@ -4753,6 +5014,8 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
   const calendar = operatorWorkspace.calendar || createEmptyOperatorWorkspace().calendar;
   const events = (calendar.events || []).slice(0, 8);
   const pendingApprovals = events.filter((event) => event.approvalStatus === "pending_owner");
+  const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
+  const activation = operatorWorkspace.activation || createEmptyOperatorWorkspace().activation;
   const connectable = isOperatorWorkspaceConnectable(operatorWorkspace);
   const availabilityCopy = getOperatorWorkspaceAvailabilityCopy(operatorWorkspace);
 
@@ -4768,13 +5031,23 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
           <h3 class="studio-group-title">Daily summary</h3>
           <p class="workspace-panel-copy">${escapeHtml(calendar.dailySummary || "Connect Google Calendar to see today’s schedule and open booking slots.")}</p>
           ${primaryAccount?.status === "connected"
-            ? `<p class="section-note">Connected as ${escapeHtml(primaryAccount.accountEmail || "Google Workspace")}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "pending"}.</p>`
+            ? `<div class="inline-actions"><button class="ghost-button" type="button" data-refresh-operator data-force-sync="true">Run calendar sync</button><button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar reviewed</button></div><p class="section-note">Connected as ${escapeHtml(primaryAccount.accountEmail || "Google Workspace")}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.</p>`
             : `<div class="inline-actions"><button class="primary-button" type="button" data-google-connect ${connectable ? "" : "disabled"}>Connect Google Workspace</button></div>`}
         </section>
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Suggested open slots</h3>
-          ${(calendar.suggestedSlots || []).length ? `
+          ${primaryAccount?.status !== "connected" ? buildOperatorEmptyState({
+            title: "Connect Google to unlock Calendar",
+            copy: status.googleConfigReady
+              ? "Vonza will bring in today’s events, spot open gaps, and keep calendar changes approval-first."
+              : "Google connection is not configured on this deployment yet, so Calendar stays in explanation mode.",
+            actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
+          }) : !activation.calendarSynced ? buildOperatorEmptyState({
+            title: "Run your first calendar sync",
+            copy: "The Google account is connected, but the calendar has not been synced into Vonza yet.",
+            actionMarkup: `<button class="primary-button" type="button" data-refresh-operator data-force-sync="true">Run first sync</button>`,
+          }) : (calendar.suggestedSlots || []).length ? `
             <div class="analytics-list">
               ${(calendar.suggestedSlots || []).map((slot) => `
                 <div class="analytics-item">
@@ -4783,7 +5056,11 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">No slot suggestions yet. Once the calendar is connected, Vonza will highlight likely openings.</div>`}
+          ` : buildOperatorEmptyState({
+            title: "Calendar is synced with a clean slate",
+            copy: "No suggested slots are standing out yet. Vonza will show schedule gaps and booking opportunities here as the calendar fills in.",
+            actionMarkup: `<button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar reviewed</button>`,
+          })}
         </section>
 
         <section class="workspace-card-soft">
@@ -4839,7 +5116,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Upcoming events and booking opportunities</h3>
-          ${events.length ? `
+          ${primaryAccount?.status !== "connected" ? "" : events.length ? `
             <div class="operator-thread-grid">
               ${events.map((event) => `
                 <article class="operator-thread-card">
@@ -4869,7 +5146,10 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
                 </article>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">No calendar events synced yet.</div>`}
+          ` : buildOperatorEmptyState({
+            title: "No calendar events synced yet",
+            copy: "That is still a useful state. Vonza will keep this area warm with empty-state guidance, slot suggestions, and booking opportunities once they exist.",
+          })}
           ${(calendar.missedBookingOpportunities || []).length ? `
             <div class="analytics-list" style="margin-top:16px;">
               ${(calendar.missedBookingOpportunities || []).map((opportunity) => `
@@ -4890,6 +5170,8 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
   const automations = operatorWorkspace.automations || createEmptyOperatorWorkspace().automations;
   const complaintTasks = (automations.tasks || []).filter((task) => ["complaint_queue", "support_follow_up"].includes(task.taskType));
   const campaigns = automations.campaigns || [];
+  const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
+  const googleConnected = status.googleConnected === true;
   const availabilityCopy = getOperatorWorkspaceAvailabilityCopy(operatorWorkspace);
   const workspaceReady = operatorWorkspace.capabilities.featureEnabled && operatorWorkspace.capabilities.persistenceAvailable;
 
@@ -4903,7 +5185,11 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
         ${availabilityCopy ? `<div class="workspace-warning-banner">${escapeHtml(availabilityCopy)}</div>` : ""}
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Complaint and support queue</h3>
-          ${complaintTasks.length ? `
+          ${!googleConnected ? buildOperatorEmptyState({
+            title: "Approval-first automations start after connection",
+            copy: "Once Google is connected, Vonza can draft complaint recovery, support follow-up, and campaign work without silently sending on its own.",
+            actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
+          }) : complaintTasks.length ? `
             <div class="analytics-list">
               ${complaintTasks.map((task) => `
                 <div class="analytics-item">
@@ -4916,7 +5202,10 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">No complaint or support tasks are open right now.</div>`}
+          ` : buildOperatorEmptyState({
+            title: "No complaint or support tasks are open",
+            copy: "That means Vonza is not currently holding any support or complaint work in the approval queue.",
+          })}
         </section>
 
         <section class="workspace-card-soft">
@@ -4946,7 +5235,7 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Campaigns and send timing</h3>
-          ${campaigns.length ? `
+          ${!googleConnected ? "" : campaigns.length ? `
             <div class="operator-thread-grid">
               ${campaigns.map((campaign) => `
                 <article class="operator-thread-card">
@@ -4974,7 +5263,10 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
                 </article>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">No campaigns drafted yet. Generate a goal-based sequence from captured leads when you’re ready.</div>`}
+          ` : buildOperatorEmptyState({
+            title: "No campaigns drafted yet",
+            copy: "Create the first automation draft once Google is connected to turn Vonza into an approval-first operator workspace, not just a monitor.",
+          })}
         </section>
 
         <section class="workspace-card-soft">
@@ -5004,8 +5296,9 @@ function renderAssistantShell(
   diagnostics = createEmptyWorkspaceDiagnostics()
 ) {
   renderTopbarMeta();
-  const activeSection = getActiveShellSection(setup);
+  const activeSection = getActiveShellSection(setup, operatorWorkspace);
   const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
+  const operatorEnabled = operatorWorkspace.enabled !== false;
   const primaryAction = setup.isReady
     ? `<button class="primary-button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>Add to website</button>`
     : `<button class="primary-button" type="button" data-shell-target="customize">Continue setup</button>`;
@@ -5018,12 +5311,12 @@ function renderAssistantShell(
       <section class="workspace-header">
         <div class="workspace-header-top">
           <div>
-            <span class="eyebrow">${setup.isReady ? "Workspace" : "Post-purchase setup"}</span>
+            <span class="eyebrow">${operatorEnabled ? (setup.isReady ? "Operator workspace" : "Operator activation") : (setup.isReady ? "Workspace" : "Post-purchase setup")}</span>
             <h1 class="workspace-title">${escapeHtml(agent.assistantName || agent.name)}</h1>
             <p class="workspace-subtitle">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
             <div class="workspace-badge-row">
               <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
-              <span class="${getBadgeClass((operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Ready" : "Limited")}">${(operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Google connected" : "Google not connected"}</span>
+              ${operatorEnabled ? `<span class="${getBadgeClass((operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Ready" : "Limited")}">${(operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Google connected" : "Google not connected"}</span>` : ""}
               <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
               <span class="${getBadgeClass(isInstallSeen(getDefaultInstallStatus(agent)) ? "Ready" : getDefaultInstallStatus(agent).state === "installed_unseen" ? "Limited" : getDefaultInstallStatus(agent).state === "domain_mismatch" || getDefaultInstallStatus(agent).state === "verify_failed" ? "Needs attention" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not installed yet")}</span>
             </div>
@@ -5034,20 +5327,20 @@ function renderAssistantShell(
             ${!setup.knowledgeReady ? `<button class="ghost-button" data-action="import-knowledge">Retry website import</button>` : ""}
           </div>
         </div>
-        ${buildWorkspaceTabs(activeSection, setup)}
+        ${buildWorkspaceTabs(activeSection, setup, operatorWorkspace)}
       </section>
 
-      ${!setup.isReady ? `
+      ${operatorEnabled && !setup.isReady ? `
         <div class="shell-status-banner">
-          Your assistant is unlocked and this is now your operator workspace. Finish the key details in Customize, connect Google, then use Inbox, Calendar, and Automations to run the business side of Vonza.
+          Your website front desk is unlocked and this workspace now guides the inbox, calendar, and approval-first automation rollout. Finish the key details in Customize, connect Google, then run the first sync.
         </div>
       ` : ""}
 
       ${buildWorkspaceDiagnosticsMarkup(diagnostics)}
       ${buildOverviewPanel(agent, messages, setup, actionQueue, operatorWorkspace)}
-      ${buildInboxPanel(agent, operatorWorkspace)}
-      ${buildCalendarPanel(agent, operatorWorkspace)}
-      ${buildAutomationsPanel(agent, operatorWorkspace)}
+      ${operatorEnabled ? buildInboxPanel(agent, operatorWorkspace) : ""}
+      ${operatorEnabled ? buildCalendarPanel(agent, operatorWorkspace) : ""}
+      ${operatorEnabled ? buildAutomationsPanel(agent, operatorWorkspace) : ""}
       ${buildCustomizePanel(agent, setup)}
       ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
     </div>
@@ -5487,14 +5780,54 @@ function createWorkspaceWarning(label, error) {
   return detail ? `${label} ${detail}` : label;
 }
 
-async function loadOperatorWorkspace(agentId) {
+async function loadOperatorWorkspace(agentId, options = {}) {
   const url = new URL("/agents/operator-workspace", window.location.origin);
   url.searchParams.set("agent_id", agentId);
   url.searchParams.set("client_id", getClientId());
+  url.searchParams.set("force_sync", options.forceSync === true ? "true" : "false");
   const data = await fetchJson(url.toString());
   return {
     ...createEmptyOperatorWorkspace(),
     ...(data || {}),
+    status: {
+      ...createEmptyOperatorWorkspace().status,
+      ...(data?.status || {}),
+    },
+    activation: {
+      ...createEmptyOperatorWorkspace().activation,
+      ...(data?.activation || {}),
+      checklist: Array.isArray(data?.activation?.checklist) ? data.activation.checklist : [],
+      metadata: {
+        ...createEmptyOperatorWorkspace().activation.metadata,
+        ...(data?.activation?.metadata || {}),
+      },
+    },
+    briefing: {
+      ...createEmptyOperatorWorkspace().briefing,
+      ...(data?.briefing || {}),
+    },
+    nextAction: {
+      ...createEmptyOperatorWorkspace().nextAction,
+      ...(data?.nextAction || {}),
+    },
+    today: {
+      ...createEmptyOperatorWorkspace().today,
+      ...(data?.today || {}),
+    },
+    contextOptions: {
+      ...createEmptyOperatorWorkspace().contextOptions,
+      ...(data?.contextOptions || {}),
+      mailboxes: Array.isArray(data?.contextOptions?.mailboxes)
+        ? data.contextOptions.mailboxes
+        : createEmptyOperatorWorkspace().contextOptions.mailboxes,
+      calendars: Array.isArray(data?.contextOptions?.calendars)
+        ? data.contextOptions.calendars
+        : createEmptyOperatorWorkspace().contextOptions.calendars,
+    },
+    health: {
+      ...createEmptyOperatorWorkspace().health,
+      ...(data?.health || {}),
+    },
     inbox: {
       ...createEmptyOperatorWorkspace().inbox,
       ...(data?.inbox || {}),
@@ -5553,6 +5886,10 @@ async function loadWorkspaceSupplementalData(agentId) {
     ? operatorResult.value
     : {
       ...createEmptyOperatorWorkspace(),
+      health: {
+        ...createEmptyOperatorWorkspace().health,
+        globalError: "We couldn't load the operator workspace.",
+      },
       capabilities: {
         ...createEmptyOperatorWorkspace().capabilities,
         featureEnabled: true,
@@ -6460,13 +6797,15 @@ function bindSharedDashboardEvents(
   const approveCampaignButtons = document.querySelectorAll("[data-approve-campaign]");
   const sendCampaignButtons = document.querySelectorAll("[data-send-campaign-steps]");
   const operatorTaskButtons = document.querySelectorAll("[data-update-operator-task]");
+  const operatorContextForms = document.querySelectorAll("[data-operator-context-form]");
+  const completeOperatorStepButtons = document.querySelectorAll("[data-complete-operator-step]");
 
   const showShellSection = (targetSection) => {
-    if (!SHELL_SECTIONS.includes(targetSection)) {
+    if (!getAvailableShellSections(operatorWorkspace).includes(targetSection)) {
       return;
     }
 
-    setActiveShellSection(targetSection);
+    setActiveShellSection(targetSection, operatorWorkspace);
 
     document.querySelectorAll("[data-shell-target]").forEach((navButton) => {
       navButton.classList.toggle("active", navButton.dataset.shellTarget === targetSection);
@@ -6623,11 +6962,12 @@ function bindSharedDashboardEvents(
     }
   };
 
-  const refreshOperatorWorkspace = async () => {
-    setStatus("Refreshing connected workspace...");
+  const refreshOperatorWorkspace = async (event = null) => {
+    const forceSync = event?.currentTarget?.dataset?.forceSync === "true";
+    setStatus(forceSync ? "Running first sync..." : "Refreshing connected workspace...");
 
     try {
-      const operatorSnapshot = await loadOperatorWorkspace(agent.id);
+      const operatorSnapshot = await loadOperatorWorkspace(agent.id, { forceSync });
       workspaceState = {
         ...(workspaceState || {}),
         agent,
@@ -6638,7 +6978,7 @@ function bindSharedDashboardEvents(
         diagnostics,
       };
       renderWorkspaceFromState();
-      setStatus("Connected workspace refreshed.");
+      setStatus(forceSync ? "Connected workspace synced." : "Connected workspace refreshed.");
     } catch (error) {
       setStatus(error.message || "We couldn't refresh the connected workspace.");
     }
@@ -6934,6 +7274,78 @@ function bindSharedDashboardEvents(
 
   refreshOperatorButtons.forEach((button) => {
     button.addEventListener("click", refreshOperatorWorkspace);
+  });
+
+  operatorContextForms.forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+
+      setStatus("Saving operator context...");
+
+      try {
+        const result = await fetchJson("/agents/operator/activation", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            client_id: getClientId(),
+            agent_id: agent.id,
+            selected_mailbox: trimText(formData.get("selected_mailbox")) || "INBOX",
+            calendar_context: "primary",
+          }),
+        });
+
+        workspaceState = {
+          ...(workspaceState || {}),
+          operatorWorkspace: {
+            ...(workspaceState?.operatorWorkspace || createEmptyOperatorWorkspace()),
+            activation: {
+              ...(workspaceState?.operatorWorkspace?.activation || createEmptyOperatorWorkspace().activation),
+              ...(result.activation || {}),
+            },
+          },
+        };
+        setStatus("Operator context saved.");
+        await refreshOperatorWorkspace();
+      } catch (error) {
+        setStatus(error.message || "We couldn't save the operator context.");
+      }
+    });
+  });
+
+  completeOperatorStepButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const step = button.dataset.completeOperatorStep;
+      const payload = {
+        client_id: getClientId(),
+        agent_id: agent.id,
+      };
+
+      if (step === "inbox_review") {
+        payload.mark_inbox_reviewed = true;
+      }
+
+      if (step === "calendar_review") {
+        payload.mark_calendar_reviewed = true;
+      }
+
+      setStatus("Saving operator progress...");
+
+      try {
+        await fetchJson("/agents/operator/activation", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        await refreshOperatorWorkspace();
+      } catch (error) {
+        setStatus(error.message || "We couldn't save that activation step.");
+      }
+    });
   });
 
   draftInboxReplyButtons.forEach((button) => {
@@ -7303,11 +7715,11 @@ function bindSharedDashboardEvents(
     button.addEventListener("click", () => {
       const targetSection = button.dataset.shellTarget;
 
-      if (!SHELL_SECTIONS.includes(targetSection)) {
+      if (!getAvailableShellSections(operatorWorkspace).includes(targetSection)) {
         return;
       }
 
-      setActiveShellSection(targetSection);
+      setActiveShellSection(targetSection, operatorWorkspace);
 
       document.querySelectorAll("[data-shell-target]").forEach((navButton) => {
         navButton.classList.toggle("active", navButton.dataset.shellTarget === targetSection);
@@ -7319,7 +7731,7 @@ function bindSharedDashboardEvents(
     });
   });
 
-  const initialSection = getActiveShellSection(setup);
+  const initialSection = getActiveShellSection(setup, operatorWorkspace);
   document.querySelectorAll("[data-shell-section]").forEach((section) => {
     section.hidden = section.dataset.shellSection !== initialSection;
   });

@@ -85,6 +85,7 @@ import {
   sendInboxReply,
   updateOperatorTaskStatus,
 } from "../services/operator/operatorWorkspaceService.js";
+import { updateOperatorOnboardingState } from "../services/operator/operatorActivationService.js";
 
 export function createAgentRouter(deps = {}) {
   const router = express.Router();
@@ -154,6 +155,8 @@ export function createAgentRouter(deps = {}) {
     deps.sendDueCampaignSteps || sendDueCampaignSteps;
   const updateOperatorTaskStatusImpl =
     deps.updateOperatorTaskStatus || updateOperatorTaskStatus;
+  const updateOperatorOnboardingStateImpl =
+    deps.updateOperatorOnboardingState || updateOperatorOnboardingState;
   const getAdminToken = (req) => req.query.token || req.headers["x-admin-token"];
 
   function getCheckoutDraftBusinessName(user) {
@@ -584,7 +587,7 @@ export function createAgentRouter(deps = {}) {
       const result = await getOperatorWorkspaceSnapshotImpl(supabase, {
         agent,
         ownerUserId: user.id,
-        forceSync: req.query.force_sync !== "false",
+        forceSync: req.query.force_sync === "true",
       });
 
       res.json(result);
@@ -1152,6 +1155,37 @@ export function createAgentRouter(deps = {}) {
       });
 
       res.json({ task });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/operator/activation", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req);
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+      const activation = await updateOperatorOnboardingStateImpl(supabase, {
+        agent,
+        ownerUserId: user.id,
+        selectedMailbox: req.body.selected_mailbox || req.body.selectedMailbox,
+        calendarContext: req.body.calendar_context || req.body.calendarContext,
+        markInboxReviewed: req.body.mark_inbox_reviewed === true || req.body.markInboxReviewed === true,
+        markCalendarReviewed: req.body.mark_calendar_reviewed === true || req.body.markCalendarReviewed === true,
+      });
+
+      res.json({ activation });
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({

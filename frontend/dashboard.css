@@ -2146,6 +2146,126 @@ button:disabled {
     rgba(255, 255, 255, 0.03);
 }
 
+.operator-home-card {
+  display: grid;
+  gap: 18px;
+}
+
+.operator-home-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 16px;
+}
+
+.operator-focus-card {
+  padding: 22px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.12), transparent 30%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.operator-focus-title {
+  margin: 8px 0 10px;
+  color: white;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.operator-focus-copy {
+  margin: 0 0 14px;
+  color: var(--soft);
+  line-height: 1.7;
+}
+
+.operator-checklist-card {
+  display: grid;
+  gap: 16px;
+}
+
+.operator-checklist-list {
+  display: grid;
+  gap: 12px;
+}
+
+.operator-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.operator-checklist-item.complete {
+  border-color: rgba(52, 211, 153, 0.24);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.operator-checklist-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.operator-checklist-title {
+  margin: 0;
+  color: white;
+  font-weight: 700;
+}
+
+.operator-checklist-note {
+  margin: 0;
+  color: var(--soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.operator-context-form {
+  display: grid;
+  gap: 14px;
+}
+
+.operator-empty-state {
+  padding: 22px;
+  border-radius: 20px;
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 12px;
+}
+
+.operator-empty-title {
+  margin: 0;
+  color: white;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.operator-empty-copy {
+  margin: 0;
+  color: var(--soft);
+  line-height: 1.7;
+}
+
+.operator-inline-alert {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fde68a;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.operator-inline-alert p {
+  margin: 0;
+}
+
 .operator-thread-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2184,6 +2304,7 @@ button:disabled {
   .workspace-utility-grid,
   .workspace-tabs,
   .overview-grid,
+  .operator-home-grid,
   .overview-progress-row,
   .studio-layout,
   .form-grid.two-col,

@@ -67,11 +67,23 @@ function buildRouteDeps(overrides = {}) {
       redirectUrl: "/dashboard?google=connected",
     }),
     getOperatorWorkspaceSnapshot: async () => ({
+      enabled: true,
+      featureEnabled: true,
+      status: {
+        enabled: true,
+        featureEnabled: true,
+        googleConnected: true,
+      },
+      activation: {
+        checklist: [{ key: "connect_google", complete: true }],
+      },
       connectedAccounts: [{ status: "connected", accountEmail: "owner@example.com" }],
       inbox: { threads: [{ id: "thread-1" }], attentionCount: 1 },
       calendar: { events: [{ id: "event-1" }], suggestedSlots: [], dailySummary: "Busy day." },
       automations: { tasks: [{ id: "task-1" }], campaigns: [], followUps: [] },
       summary: { inboxNeedingAttention: 1 },
+      briefing: { text: "Review today." },
+      nextAction: { key: "review_inbox", title: "Review inbox" },
     }),
     draftInboxReply: async () => ({
       draft: { id: "draft-1", subject: "Re: Hello" },
@@ -103,6 +115,11 @@ function buildRouteDeps(overrides = {}) {
       id: "task-1",
       status: "resolved",
     }),
+    updateOperatorOnboardingState: async () => ({
+      googleConnected: true,
+      inboxContextSelected: true,
+      calendarContextSelected: true,
+    }),
     ...overrides,
   };
 }
@@ -132,30 +149,56 @@ test("operator workspace route exposes inbox, calendar, and automations surfaces
     const response = await requestJson(server.baseUrl, "/agents/operator-workspace?agent_id=agent-1");
 
     assert.equal(response.status, 200);
+    assert.equal(response.json.enabled, true);
     assert.equal(response.json.inbox.attentionCount, 1);
     assert.equal(response.json.calendar.events[0].id, "event-1");
     assert.equal(response.json.automations.tasks[0].id, "task-1");
+    assert.equal(response.json.nextAction.key, "review_inbox");
   } finally {
     await server.close();
   }
 });
 
-test("operator workspace route can return a safe limited fallback state", async () => {
+test("operator activation route persists onboarding progress for the owner scope", async () => {
+  const server = await startServer(createApp(buildRouteDeps()));
+
+  try {
+    const response = await requestJson(server.baseUrl, "/agents/operator/activation", {
+      method: "POST",
+      body: JSON.stringify({
+        agent_id: "agent-1",
+        selected_mailbox: "IMPORTANT",
+        mark_inbox_reviewed: true,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.json.activation.inboxContextSelected, true);
+    assert.equal(response.json.activation.calendarContextSelected, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("feature-flag-off snapshot falls back safely without operator surfaces", async () => {
   const server = await startServer(createApp(buildRouteDeps({
     getOperatorWorkspaceSnapshot: async () => ({
+      enabled: false,
+      featureEnabled: false,
+      status: {
+        enabled: false,
+        featureEnabled: false,
+        googleConnected: false,
+      },
+      activation: {
+        checklist: [],
+      },
       connectedAccounts: [],
       inbox: { threads: [], attentionCount: 0 },
-      calendar: { events: [], suggestedSlots: [], dailySummary: "Google unavailable." },
+      calendar: { events: [], suggestedSlots: [], dailySummary: "Disabled." },
       automations: { tasks: [], campaigns: [], followUps: [] },
       summary: { inboxNeedingAttention: 0 },
-      capabilities: {
-        featureEnabled: true,
-        googleAvailable: false,
-        persistenceAvailable: true,
-        migrationRequired: false,
-        status: "google_unavailable",
-      },
-      alerts: ["Google integration is not configured on this deployment yet."],
+      nextAction: { key: "legacy_workspace", title: "Continue setup" },
     }),
   })));
 
@@ -163,8 +206,8 @@ test("operator workspace route can return a safe limited fallback state", async 
     const response = await requestJson(server.baseUrl, "/agents/operator-workspace?agent_id=agent-1");
 
     assert.equal(response.status, 200);
-    assert.equal(response.json.capabilities.googleAvailable, false);
-    assert.match(response.json.alerts[0], /not configured/i);
+    assert.equal(response.json.enabled, false);
+    assert.equal(response.json.nextAction.key, "legacy_workspace");
   } finally {
     await server.close();
   }

@@ -14,6 +14,7 @@ import {
   CONNECTED_ACCOUNT_AUDIT_TABLE,
   CONNECTED_ACCOUNT_TABLE,
   GOOGLE_OAUTH_STATE_TABLE,
+  OPERATOR_ACTIVATION_TABLE,
   OPERATOR_CALENDAR_EVENT_TABLE,
   OPERATOR_CAMPAIGN_RECIPIENT_TABLE,
   OPERATOR_CAMPAIGN_STEP_TABLE,
@@ -25,6 +26,16 @@ import {
 import { listLeadCaptures } from "../leads/liveLeadCaptureService.js";
 import { listFollowUpWorkflows } from "../followup/followUpService.js";
 import { updateActionQueueStatus } from "../analytics/actionQueueService.js";
+import {
+  buildOperatorActivationChecklist,
+  buildOperatorBriefing,
+  buildOperatorSingleNextAction,
+  buildOperatorTodaySummary,
+  createDefaultOperatorActivationState,
+  getOperatorActivationState,
+  getOperatorMailboxOptions,
+  patchOperatorActivationState,
+} from "./operatorActivationService.js";
 import { cleanText } from "../../utils/text.js";
 import { decryptSecret, encryptSecret, hashToken } from "../../utils/crypto.js";
 
@@ -265,6 +276,7 @@ const OPERATOR_WORKSPACE_REQUIRED_TABLES = [
   OPERATOR_CAMPAIGN_STEP_TABLE,
   OPERATOR_CAMPAIGN_RECIPIENT_TABLE,
   OPERATOR_TASK_TABLE,
+  OPERATOR_ACTIVATION_TABLE,
   CONNECTED_ACCOUNT_AUDIT_TABLE,
 ];
 
@@ -275,8 +287,98 @@ function buildConfigError(message, statusCode = 503) {
   return error;
 }
 
-export function createEmptyOperatorWorkspaceSnapshot(overrides = {}) {
+function getDefaultOperatorContextOptions() {
   return {
+    mailboxes: getOperatorMailboxOptions(),
+    calendars: [
+      {
+        value: "primary",
+        label: "Primary calendar",
+        description: "Use the primary Google calendar for today's summary and approval drafts.",
+      },
+    ],
+  };
+}
+
+export function createEmptyOperatorWorkspaceSnapshot(overrides = {}) {
+  const capabilities = {
+    featureEnabled: false,
+    googleAvailable: false,
+    googleMissingEnv: [],
+    persistenceAvailable: false,
+    migrationRequired: false,
+    missingTables: [],
+    status: "disabled",
+    ...(overrides.capabilities || {}),
+  };
+  const featureEnabled = overrides.enabled ?? overrides.featureEnabled ?? capabilities.featureEnabled;
+  const status = {
+    enabled: featureEnabled === true,
+    featureEnabled: featureEnabled === true,
+    googleConfigReady: capabilities.googleAvailable === true,
+    googleConnectReady:
+      featureEnabled === true
+      && capabilities.persistenceAvailable === true
+      && capabilities.googleAvailable === true,
+    googleConnected: false,
+    persistenceAvailable: capabilities.persistenceAvailable === true,
+    migrationRequired: capabilities.migrationRequired === true,
+    syncRequested: false,
+    ...(overrides.status || {}),
+  };
+  const activation = {
+    ...createDefaultOperatorActivationState({
+      operatorWorkspaceEnabled: featureEnabled === true,
+      persistenceAvailable: capabilities.persistenceAvailable === true,
+      migrationRequired: capabilities.migrationRequired === true,
+    }),
+    ...(overrides.activation || {}),
+    metadata: {
+      ...createDefaultOperatorActivationState().metadata,
+      ...(overrides.activation?.metadata || {}),
+    },
+  };
+
+  return {
+    enabled: featureEnabled === true,
+    featureEnabled: featureEnabled === true,
+    status,
+    activation,
+    briefing: {
+      title: "Operator briefing",
+      text: "Connect Google and run the first sync to turn Overview into your operator command center.",
+      ...(overrides.briefing || {}),
+    },
+    nextAction: {
+      key: "connect_google",
+      title: "Connect Google",
+      description: "Connect Gmail and Calendar so Vonza can start building your operator summary.",
+      buttonLabel: "Connect Google",
+      actionType: "connect_google",
+      targetSection: "overview",
+      disabled: false,
+      ...(overrides.nextAction || {}),
+    },
+    today: {
+      ...buildOperatorTodaySummary(),
+      ...(overrides.today || {}),
+    },
+    contextOptions: {
+      ...getDefaultOperatorContextOptions(),
+      ...(overrides.contextOptions || {}),
+      mailboxes: Array.isArray(overrides.contextOptions?.mailboxes)
+        ? overrides.contextOptions.mailboxes
+        : getDefaultOperatorContextOptions().mailboxes,
+      calendars: Array.isArray(overrides.contextOptions?.calendars)
+        ? overrides.contextOptions.calendars
+        : getDefaultOperatorContextOptions().calendars,
+    },
+    health: {
+      inboxSyncError: "",
+      calendarSyncError: "",
+      globalError: "",
+      ...(overrides.health || {}),
+    },
     connectedAccounts: [],
     inbox: {
       threads: [],
@@ -304,16 +406,8 @@ export function createEmptyOperatorWorkspaceSnapshot(overrides = {}) {
       openAvailabilityCount: 0,
       operatorLoad: 0,
     },
-    capabilities: {
-      featureEnabled: false,
-      googleAvailable: false,
-      googleMissingEnv: [],
-      persistenceAvailable: false,
-      migrationRequired: false,
-      missingTables: [],
-      status: "disabled",
-    },
-    alerts: [],
+    capabilities,
+    alerts: Array.isArray(overrides.alerts) ? overrides.alerts : [],
     ...overrides,
   };
 }
@@ -1567,6 +1661,20 @@ export async function completeGoogleConnection(supabase, options = {}, deps = {}
     },
   });
 
+  await patchOperatorActivationState(supabase, {
+    agent: {
+      id: connectedAccount.agentId,
+      businessId: connectedAccount.businessId,
+    },
+    ownerUserId: connectedAccount.ownerUserId,
+    changes: {
+      googleConnected: true,
+      metadata: {
+        googleConnectedAt: new Date().toISOString(),
+      },
+    },
+  });
+
   return {
     connectedAccount,
     redirectUrl: `${redirectPath}${redirectPath.includes("?") ? "&" : "?"}google=connected`,
@@ -2387,6 +2495,18 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
     })
     .eq("id", account.id);
 
+  await patchOperatorActivationState(supabase, {
+    agent,
+    ownerUserId,
+    changes: {
+      googleConnected: true,
+      inboxSynced: true,
+      metadata: {
+        inboxLastSyncedAt: new Date().toISOString(),
+      },
+    },
+  });
+
   return {
     connected: true,
     account,
@@ -2509,6 +2629,18 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
     })
     .eq("id", account.id);
 
+  await patchOperatorActivationState(supabase, {
+    agent,
+    ownerUserId,
+    changes: {
+      googleConnected: true,
+      calendarSynced: true,
+      metadata: {
+        calendarLastSyncedAt: new Date().toISOString(),
+      },
+    },
+  });
+
   return {
     connected: true,
     account,
@@ -2586,12 +2718,91 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
   const capabilities = await getOperatorWorkspaceCapabilities(supabase);
   const alerts = [...(capabilities.alerts || [])];
   const emptySnapshot = createEmptyOperatorWorkspaceSnapshot({
+    enabled: capabilities.featureEnabled,
+    featureEnabled: capabilities.featureEnabled,
+    status: {
+      enabled: capabilities.featureEnabled,
+      featureEnabled: capabilities.featureEnabled,
+      googleConfigReady: capabilities.googleAvailable,
+      googleConnectReady:
+        capabilities.featureEnabled
+        && capabilities.persistenceAvailable
+        && capabilities.googleAvailable,
+      googleConnected: false,
+      persistenceAvailable: capabilities.persistenceAvailable,
+      migrationRequired: capabilities.migrationRequired,
+      syncRequested: options.forceSync === true,
+    },
+    activation: createDefaultOperatorActivationState({
+      agentId: agent.id,
+      businessId: agent.businessId,
+      ownerUserId,
+      operatorWorkspaceEnabled: capabilities.featureEnabled,
+      persistenceAvailable: capabilities.persistenceAvailable,
+      migrationRequired: capabilities.migrationRequired,
+    }),
     capabilities,
     alerts,
   });
 
-  if (!capabilities.featureEnabled || !capabilities.persistenceAvailable) {
-    return emptySnapshot;
+  if (!capabilities.featureEnabled) {
+    return createEmptyOperatorWorkspaceSnapshot({
+      ...emptySnapshot,
+      enabled: false,
+      featureEnabled: false,
+      status: {
+        ...emptySnapshot.status,
+        enabled: false,
+        featureEnabled: false,
+        googleConnectReady: false,
+      },
+      activation: {
+        ...emptySnapshot.activation,
+        operatorWorkspaceEnabled: false,
+      },
+      briefing: {
+        title: "Operator workspace is off",
+        text: "Operator Workspace v1 is disabled on this deployment, so Vonza is keeping the legacy setup workspace active.",
+      },
+      nextAction: {
+        key: "legacy_workspace",
+        title: "Continue setup",
+        description: "Overview, Customize, and Analytics stay available while the website front desk continues to work.",
+        buttonLabel: "Continue setup",
+        actionType: "open_customize",
+        targetSection: "customize",
+      },
+    });
+  }
+
+  const syncErrors = {
+    inboxSyncError: "",
+    calendarSyncError: "",
+    globalError: "",
+  };
+
+  if (!capabilities.persistenceAvailable) {
+    return createEmptyOperatorWorkspaceSnapshot({
+      ...emptySnapshot,
+      status: {
+        ...emptySnapshot.status,
+        googleConnectReady: false,
+      },
+      briefing: {
+        title: "Operator workspace needs its migration",
+        text: "Vonza kept the dashboard visible, but connected Inbox, Calendar, and Automations stay in safe fallback mode until db/connected_operator_workspace.sql is applied.",
+      },
+      nextAction: {
+        key: "apply_operator_workspace_migration",
+        title: "Finish the operator workspace migration",
+        description: "Apply db/connected_operator_workspace.sql before enabling live Inbox, Calendar, and Automations data on this deployment.",
+        buttonLabel: "Review workspace status",
+        actionType: "stay_put",
+        targetSection: "overview",
+        disabled: true,
+      },
+      health: syncErrors,
+    });
   }
 
   const connectedAccount = await loadWorkspaceSection(
@@ -2604,7 +2815,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     alerts
   );
 
-  if (connectedAccount?.status === "connected" && options.forceSync !== false) {
+  if (connectedAccount?.status === "connected" && options.forceSync === true) {
     if (capabilities.googleAvailable) {
       await Promise.all([
         syncInboxWorkspace(supabase, {
@@ -2613,6 +2824,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
           connectedAccount,
         }, deps).catch((error) => {
           console.warn("[operator] Inbox sync failed:", error.message);
+          syncErrors.inboxSyncError = cleanText(error.message) || "Inbox sync failed.";
           alerts.push(`Inbox sync could not complete. ${error.message || "Stored threads are still visible."}`);
         }),
         syncCalendarWorkspace(supabase, {
@@ -2621,6 +2833,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
           connectedAccount,
         }, deps).catch((error) => {
           console.warn("[operator] Calendar sync failed:", error.message);
+          syncErrors.calendarSyncError = cleanText(error.message) || "Calendar sync failed.";
           alerts.push(`Calendar sync could not complete. ${error.message || "Stored events are still visible."}`);
         }),
       ]);
@@ -2683,6 +2896,23 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     { records: [] },
     alerts
   );
+  const activationState = await loadWorkspaceSection(
+    "Activation state",
+    () => getOperatorActivationState(supabase, {
+      agent,
+      ownerUserId,
+      createIfMissing: true,
+    }),
+    createDefaultOperatorActivationState({
+      agentId: agent.id,
+      businessId: agent.businessId,
+      ownerUserId,
+      operatorWorkspaceEnabled: true,
+      persistenceAvailable: capabilities.persistenceAvailable,
+      migrationRequired: capabilities.migrationRequired,
+    }),
+    alerts
+  );
   const threadMessages = await loadWorkspaceSection(
     "Inbox message history",
     () => listStoredInboxMessages(supabase, {
@@ -2715,9 +2945,98 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     followUps: followUps.records || [],
     suggestedSlots,
   });
+  const googleConnected = accounts.some((account) => account.status === "connected");
+  const normalizedActivation = createDefaultOperatorActivationState({
+    ...activationState,
+    agentId: agent.id,
+    businessId: agent.businessId,
+    ownerUserId,
+    operatorWorkspaceEnabled: true,
+    googleConnected: googleConnected || activationState.googleConnected,
+    inboxSynced:
+      activationState.inboxSynced
+      || Boolean((activationState.metadata || {}).inboxLastSyncedAt)
+      || Boolean(threads.length)
+      || Boolean(accounts.find((account) => account.status === "connected" && account.lastSyncAt)),
+    calendarSynced:
+      activationState.calendarSynced
+      || Boolean((activationState.metadata || {}).calendarLastSyncedAt)
+      || Boolean(events.length)
+      || Boolean(accounts.find((account) => account.status === "connected" && account.lastSyncAt)),
+    persistenceAvailable:
+      activationState.persistenceAvailable !== false
+      && capabilities.persistenceAvailable === true,
+    migrationRequired:
+      activationState.migrationRequired === true
+      || capabilities.migrationRequired === true,
+  });
+  const status = {
+    ...emptySnapshot.status,
+    enabled: true,
+    featureEnabled: true,
+    googleConfigReady: capabilities.googleAvailable,
+    googleConnectReady: capabilities.googleAvailable && normalizedActivation.migrationRequired !== true,
+    googleConnected,
+    persistenceAvailable: normalizedActivation.persistenceAvailable !== false,
+    migrationRequired: normalizedActivation.migrationRequired === true,
+    syncRequested: options.forceSync === true,
+  };
+  const nextAction = buildOperatorSingleNextAction({
+    status,
+    activation: normalizedActivation,
+    summary,
+    tasks,
+    threads: enrichedThreads,
+    followUps: followUps.records || [],
+    campaigns,
+    events,
+    suggestedSlots,
+  });
+  const checklist = buildOperatorActivationChecklist({
+    activation: normalizedActivation,
+    status,
+    threads: enrichedThreads,
+    events,
+    suggestedSlots,
+  });
+  const completedCount = checklist.filter((step) => step.complete).length;
+  const activation = {
+    ...normalizedActivation,
+    checklist,
+    completedCount,
+    totalCount: checklist.length,
+    isComplete: checklist.length > 0 && completedCount === checklist.length,
+  };
+  const briefing = buildOperatorBriefing({
+    status,
+    activation,
+    summary,
+    tasks,
+    nextAction,
+    events,
+    suggestedSlots,
+    followUps: followUps.records || [],
+  });
+  const today = buildOperatorTodaySummary({
+    summary,
+    tasks,
+    events,
+    suggestedSlots,
+    campaigns,
+    followUps: followUps.records || [],
+  });
 
   return {
     ...emptySnapshot,
+    enabled: true,
+    featureEnabled: true,
+    status,
+    activation,
+    briefing,
+    nextAction,
+    today,
+    contextOptions: getDefaultOperatorContextOptions(),
+    health: syncErrors,
     connectedAccounts: accounts.map((account) => ({
       id: account.id,
       provider: account.provider,
@@ -2825,6 +3144,14 @@ export async function draftInboxReply(supabase, options = {}) {
     details: {
       classification: thread.classification,
       subject: draft.subject,
+    },
+  });
+
+  await patchOperatorActivationState(supabase, {
+    agent,
+    ownerUserId,
+    changes: {
+      firstReplyDraftCreated: true,
     },
   });
 
@@ -3187,6 +3514,14 @@ export async function approveCalendarAction(supabase, options = {}, deps = {}) {
     },
   });
 
+  await patchOperatorActivationState(supabase, {
+    agent,
+    ownerUserId,
+    changes: {
+      firstCalendarActionReviewed: true,
+    },
+  });
+
   return {
     event: mapCalendarEventRow(updatedRow),
   };
@@ -3332,6 +3667,14 @@ export async function createCampaignDraft(supabase, options = {}) {
     details: {
       goal,
       recipientCount: recipients.length,
+    },
+  });
+
+  await patchOperatorActivationState(supabase, {
+    agent,
+    ownerUserId,
+    changes: {
+      firstCampaignDraftCreated: true,
     },
   });
 
