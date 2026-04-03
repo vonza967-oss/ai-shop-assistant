@@ -24,6 +24,34 @@ const WEBSITE_CONTENT_TABLE = "website_content";
 const LIMITED_CONTENT_MARKER = "Limited content available. This assistant may give general answers.";
 const DEFAULT_ACCESS_STATUS = "pending";
 const CTA_MODES = ["booking", "quote", "checkout", "contact", "capture", "chat"];
+const ROUTING_WIDGET_CONFIG_COLUMNS = [
+  "booking_url",
+  "quote_url",
+  "checkout_url",
+  "contact_email",
+  "contact_phone",
+  "primary_cta_mode",
+  "fallback_cta_mode",
+  "business_hours_note",
+];
+const LEGACY_WIDGET_CONFIG_SELECT = [
+  "id",
+  "agent_id",
+  "assistant_name",
+  "welcome_message",
+  "button_label",
+  "primary_color",
+  "secondary_color",
+  "launcher_text",
+  "theme_mode",
+  "install_id",
+  "allowed_domains",
+  "last_verification_status",
+  "last_verified_at",
+  "last_verification_origin",
+  "last_verification_target_url",
+  "last_verification_details",
+].join(", ");
 const WIDGET_CONFIG_SELECT = [
   "id",
   "agent_id",
@@ -136,6 +164,44 @@ function buildInvalidPhoneError() {
 function normalizeCtaMode(value, fallbackValue) {
   const normalized = cleanText(value).toLowerCase();
   return CTA_MODES.includes(normalized) ? normalized : fallbackValue;
+}
+
+function isMissingWidgetRoutingColumnError(error) {
+  const message = cleanText(error?.message || "").toLowerCase();
+
+  return (
+    error?.code === "42703"
+    || error?.code === "PGRST204"
+    || ROUTING_WIDGET_CONFIG_COLUMNS.some((columnName) => message.includes(columnName))
+  );
+}
+
+function buildWidgetConfigUpsertPayload(agentId, config, options = {}) {
+  const payload = {
+    agent_id: agentId,
+    assistant_name: config.assistantName,
+    welcome_message: config.welcomeMessage,
+    button_label: config.buttonLabel,
+    primary_color: config.primaryColor,
+    secondary_color: config.secondaryColor,
+    launcher_text: config.launcherText,
+    theme_mode: config.themeMode,
+    allowed_domains: config.allowedDomains || [],
+    updated_at: new Date().toISOString(),
+  };
+
+  if (options.includeRoutingFields !== false) {
+    payload.booking_url = config.bookingUrl || null;
+    payload.quote_url = config.quoteUrl || null;
+    payload.checkout_url = config.checkoutUrl || null;
+    payload.contact_email = config.contactEmail || null;
+    payload.contact_phone = config.contactPhone || null;
+    payload.primary_cta_mode = config.primaryCtaMode;
+    payload.fallback_cta_mode = config.fallbackCtaMode;
+    payload.business_hours_note = config.businessHoursNote || null;
+  }
+
+  return payload;
 }
 
 async function findBusinessByWebsiteUrl(supabase, websiteUrl) {
@@ -295,11 +361,19 @@ function buildDefaultInstallStatus(widgetConfig = null, websiteUrl = "") {
 }
 
 export async function getWidgetConfigForAgent(supabase, agentId) {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from(WIDGET_CONFIGS_TABLE)
     .select(WIDGET_CONFIG_SELECT)
     .eq("agent_id", agentId)
     .maybeSingle();
+
+  if (error && isMissingWidgetRoutingColumnError(error)) {
+    ({ data, error } = await supabase
+      .from(WIDGET_CONFIGS_TABLE)
+      .select(LEGACY_WIDGET_CONFIG_SELECT)
+      .eq("agent_id", agentId)
+      .maybeSingle());
+  }
 
   if (error) {
     if (isMissingRelationError(error, WIDGET_CONFIGS_TABLE)) {
@@ -315,33 +389,19 @@ export async function getWidgetConfigForAgent(supabase, agentId) {
 export async function ensureWidgetConfigForAgent(supabase, agentId) {
   const existingConfig = await getWidgetConfigForAgent(supabase, agentId);
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from(WIDGET_CONFIGS_TABLE)
-    .upsert(
-      {
-        agent_id: agentId,
-        assistant_name: existingConfig.assistantName,
-        welcome_message: existingConfig.welcomeMessage,
-        button_label: existingConfig.buttonLabel,
-        primary_color: existingConfig.primaryColor,
-        secondary_color: existingConfig.secondaryColor,
-        launcher_text: existingConfig.launcherText,
-        theme_mode: existingConfig.themeMode,
-        booking_url: existingConfig.bookingUrl || null,
-        quote_url: existingConfig.quoteUrl || null,
-        checkout_url: existingConfig.checkoutUrl || null,
-        contact_email: existingConfig.contactEmail || null,
-        contact_phone: existingConfig.contactPhone || null,
-        primary_cta_mode: existingConfig.primaryCtaMode,
-        fallback_cta_mode: existingConfig.fallbackCtaMode,
-        business_hours_note: existingConfig.businessHoursNote || null,
-        allowed_domains: existingConfig.allowedDomains || [],
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "agent_id" }
-    )
+    .upsert(buildWidgetConfigUpsertPayload(agentId, existingConfig), { onConflict: "agent_id" })
     .select(WIDGET_CONFIG_SELECT)
     .single();
+
+  if (error && isMissingWidgetRoutingColumnError(error)) {
+    ({ data, error } = await supabase
+      .from(WIDGET_CONFIGS_TABLE)
+      .upsert(buildWidgetConfigUpsertPayload(agentId, existingConfig, { includeRoutingFields: false }), { onConflict: "agent_id" })
+      .select(LEGACY_WIDGET_CONFIG_SELECT)
+      .single());
+  }
 
   if (error) {
     if (isMissingRelationError(error, WIDGET_CONFIGS_TABLE)) {
@@ -794,10 +854,17 @@ export async function listAgents(supabase, options = {}) {
   let widgetMetricsByAgentId = new Map();
 
   if (agentIds.length) {
-    const { data: widgetRows, error: widgetError } = await supabase
+    let { data: widgetRows, error: widgetError } = await supabase
       .from(WIDGET_CONFIGS_TABLE)
       .select(WIDGET_CONFIG_SELECT)
       .in("agent_id", agentIds);
+
+    if (widgetError && isMissingWidgetRoutingColumnError(widgetError)) {
+      ({ data: widgetRows, error: widgetError } = await supabase
+        .from(WIDGET_CONFIGS_TABLE)
+        .select(LEGACY_WIDGET_CONFIG_SELECT)
+        .in("agent_id", agentIds));
+    }
 
     if (widgetError) {
       if (!isMissingRelationError(widgetError, WIDGET_CONFIGS_TABLE)) {
@@ -951,10 +1018,17 @@ export async function listAllAgents(supabase) {
   let widgetMetricsByAgentId = new Map();
 
   if (agentIds.length) {
-    const { data: widgetRows, error: widgetError } = await supabase
+    let { data: widgetRows, error: widgetError } = await supabase
       .from(WIDGET_CONFIGS_TABLE)
       .select(WIDGET_CONFIG_SELECT)
       .in("agent_id", agentIds);
+
+    if (widgetError && isMissingWidgetRoutingColumnError(widgetError)) {
+      ({ data: widgetRows, error: widgetError } = await supabase
+        .from(WIDGET_CONFIGS_TABLE)
+        .select(LEGACY_WIDGET_CONFIG_SELECT)
+        .in("agent_id", agentIds));
+    }
 
     if (widgetError) {
       if (!isMissingRelationError(widgetError, WIDGET_CONFIGS_TABLE)) {
@@ -1221,31 +1295,41 @@ export async function updateAgentSettings(
 
   const resolvedAllowedDomains = deriveAllowedDomains(allowedDomains, resolvedWebsiteUrl);
 
-  const { error: widgetError } = await supabase
+  let { error: widgetError } = await supabase
     .from(WIDGET_CONFIGS_TABLE)
-    .upsert(
-      {
-        agent_id: normalizedAgentId,
-        assistant_name: nextAssistantName,
-        welcome_message: cleanText(welcomeMessage) || currentWidgetConfig.welcomeMessage,
-        button_label: cleanText(buttonLabel) || currentWidgetConfig.buttonLabel,
-        primary_color: cleanText(primaryColor) || currentWidgetConfig.primaryColor,
-        secondary_color: cleanText(secondaryColor) || currentWidgetConfig.secondaryColor,
-        launcher_text: currentWidgetConfig.launcherText,
-        theme_mode: currentWidgetConfig.themeMode,
-        booking_url: normalizedBookingUrl || null,
-        quote_url: normalizedQuoteUrl || null,
-        checkout_url: normalizedCheckoutUrl || null,
-        contact_email: normalizedContactEmail || null,
-        contact_phone: normalizedContactPhone || null,
-        primary_cta_mode: normalizeCtaMode(primaryCtaMode, currentWidgetConfig.primaryCtaMode),
-        fallback_cta_mode: normalizeCtaMode(fallbackCtaMode, currentWidgetConfig.fallbackCtaMode),
-        business_hours_note: cleanText(businessHoursNote) || null,
-        allowed_domains: resolvedAllowedDomains,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "agent_id" }
-    );
+    .upsert(buildWidgetConfigUpsertPayload(normalizedAgentId, {
+      assistantName: nextAssistantName,
+      welcomeMessage: cleanText(welcomeMessage) || currentWidgetConfig.welcomeMessage,
+      buttonLabel: cleanText(buttonLabel) || currentWidgetConfig.buttonLabel,
+      primaryColor: cleanText(primaryColor) || currentWidgetConfig.primaryColor,
+      secondaryColor: cleanText(secondaryColor) || currentWidgetConfig.secondaryColor,
+      launcherText: currentWidgetConfig.launcherText,
+      themeMode: currentWidgetConfig.themeMode,
+      bookingUrl: normalizedBookingUrl || "",
+      quoteUrl: normalizedQuoteUrl || "",
+      checkoutUrl: normalizedCheckoutUrl || "",
+      contactEmail: normalizedContactEmail || "",
+      contactPhone: normalizedContactPhone || "",
+      primaryCtaMode: normalizeCtaMode(primaryCtaMode, currentWidgetConfig.primaryCtaMode),
+      fallbackCtaMode: normalizeCtaMode(fallbackCtaMode, currentWidgetConfig.fallbackCtaMode),
+      businessHoursNote: cleanText(businessHoursNote) || "",
+      allowedDomains: resolvedAllowedDomains,
+    }), { onConflict: "agent_id" });
+
+  if (widgetError && isMissingWidgetRoutingColumnError(widgetError)) {
+    ({ error: widgetError } = await supabase
+      .from(WIDGET_CONFIGS_TABLE)
+      .upsert(buildWidgetConfigUpsertPayload(normalizedAgentId, {
+        assistantName: nextAssistantName,
+        welcomeMessage: cleanText(welcomeMessage) || currentWidgetConfig.welcomeMessage,
+        buttonLabel: cleanText(buttonLabel) || currentWidgetConfig.buttonLabel,
+        primaryColor: cleanText(primaryColor) || currentWidgetConfig.primaryColor,
+        secondaryColor: cleanText(secondaryColor) || currentWidgetConfig.secondaryColor,
+        launcherText: currentWidgetConfig.launcherText,
+        themeMode: currentWidgetConfig.themeMode,
+        allowedDomains: resolvedAllowedDomains,
+      }, { includeRoutingFields: false }), { onConflict: "agent_id" }));
+  }
 
   if (widgetError) {
     if (!isMissingRelationError(widgetError, WIDGET_CONFIGS_TABLE)) {
