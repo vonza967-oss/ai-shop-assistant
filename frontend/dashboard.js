@@ -7843,7 +7843,7 @@ async function createAssistant(event) {
 async function saveAssistant(event, agent) {
   event.preventDefault();
   const form = event.currentTarget;
-  const formKind = form.dataset.formKind || "customize";
+  const formKind = form?.dataset?.formKind || "customize";
   const submitButton = form.querySelector('button[type="submit"]');
   const saveState = form.querySelector("[data-save-state]");
   const formData = new FormData(form);
