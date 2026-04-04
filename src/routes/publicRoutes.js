@@ -9,6 +9,7 @@ import {
   isOperatorWorkspaceV1Enabled,
   isLocalDevBillingRequestAllowed,
 } from "../config/env.js";
+import { getPublicLaunchProfile } from "../config/publicLaunch.js";
 
 const SETUP_DOCTOR_KEYS = [
   "PUBLIC_APP_URL",
@@ -56,6 +57,9 @@ export function createPublicRouter({ rootDir }) {
 
   router.get("/public-config.js", (req, res) => {
     const operatorWorkspaceEnabled = isOperatorWorkspaceV1Enabled();
+    const launchProfile = getPublicLaunchProfile({
+      operatorWorkspaceEnabled,
+    });
     res.type("application/javascript");
     res.send(`
 window.VONZA_PUBLIC_APP_URL = ${JSON.stringify(getPublicAppUrl())};
@@ -66,6 +70,7 @@ window.VONZA_OPERATOR_WORKSPACE_V1_ENABLED = ${JSON.stringify(operatorWorkspaceE
 window.VONZA_OPERATOR_WORKSPACE_V1 = window.VONZA_OPERATOR_WORKSPACE_V1_ENABLED;
 window.VONZA_APP_VERSION = ${JSON.stringify(getAppVersion())};
 window.VONZA_BUILD_SHA = ${JSON.stringify(getBuildSha())};
+window.VONZA_LAUNCH_PROFILE = ${JSON.stringify(launchProfile)};
 `.trim());
   });
 
@@ -123,20 +128,24 @@ window.VONZA_BUILD_SHA = ${JSON.stringify(getBuildSha())};
   });
 
   router.get("/health", (_req, res) => {
+    const operatorWorkspaceEnabled = isOperatorWorkspaceV1Enabled();
     res.json({
       ok: true,
       version: getAppVersion(),
       buildSha: getBuildSha() || null,
-      operatorWorkspaceV1Enabled: isOperatorWorkspaceV1Enabled(),
+      operatorWorkspaceV1Enabled: operatorWorkspaceEnabled,
+      launchMode: getPublicLaunchProfile({ operatorWorkspaceEnabled }).mode,
     });
   });
 
   router.get("/build", (_req, res) => {
+    const operatorWorkspaceEnabled = isOperatorWorkspaceV1Enabled();
     res.json({
       ok: true,
       version: getAppVersion(),
       buildSha: getBuildSha() || null,
-      operatorWorkspaceV1Enabled: isOperatorWorkspaceV1Enabled(),
+      operatorWorkspaceV1Enabled: operatorWorkspaceEnabled,
+      launchMode: getPublicLaunchProfile({ operatorWorkspaceEnabled }).mode,
     });
   });
 
