@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PERSISTENCE_SCHEMA_HINTS } from "../src/services/schema/persistenceSchema.js";
+import { SUPABASE_MIGRATIONS_DIR } from "../src/services/schema/supabaseMigrationCatalog.js";
 import {
   buildRequiredTables,
   evaluateSchemaFileChanges,
@@ -21,6 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const dbDir = path.join(repoRoot, "db");
+const supabaseMigrationsDir = path.join(repoRoot, SUPABASE_MIGRATIONS_DIR);
 const srcDir = path.join(repoRoot, "src");
 
 function listJavaScriptFiles(dirPath) {
@@ -43,13 +45,13 @@ function listJavaScriptFiles(dirPath) {
   return files;
 }
 
-function loadSqlFiles() {
-  return readdirSync(dbDir)
+function loadSupabaseMigrationFiles() {
+  return readdirSync(supabaseMigrationsDir)
     .filter((fileName) => fileName.endsWith(".sql"))
     .sort()
     .map((fileName) => ({
-      name: fileName,
-      sql: readFileSync(path.join(dbDir, fileName), "utf8"),
+      name: path.posix.join(SUPABASE_MIGRATIONS_DIR, fileName),
+      sql: readFileSync(path.join(supabaseMigrationsDir, fileName), "utf8"),
     }));
 }
 
@@ -59,10 +61,10 @@ function formatInventorySummary(inventory) {
 
 function main() {
   const schemaSql = readFileSync(path.join(dbDir, "schema.sql"), "utf8");
-  const sqlFiles = loadSqlFiles();
-  const migrationFiles = sqlFiles.filter((entry) => entry.name !== "schema.sql");
   const schemaInventory = parseSqlInventory(schemaSql);
-  const { inventory: migrationInventory, coverageByFile } = parseMigrationInventory(migrationFiles);
+  const { inventory: migrationInventory, coverageByFile } = parseMigrationInventory(
+    loadSupabaseMigrationFiles()
+  );
   const sharedConstants = parseStringConstants(
     readFileSync(path.join(srcDir, "config", "constants.js"), "utf8")
   );

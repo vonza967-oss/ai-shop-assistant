@@ -574,7 +574,7 @@ export async function getOperatorWorkspaceCapabilities(supabase) {
 
   if (schema.missingTables.length) {
     alerts.push(
-      `Operator workspace tables are missing on this deployment. Apply db/connected_operator_workspace.sql before enabling connected Inbox, Calendar, and Automations. Missing tables: ${schema.missingTables.join(", ")}.`
+      `Operator workspace tables are missing on this deployment. Run the production deploy workflow so Supabase applies the latest workspace migrations before enabling connected Inbox, Calendar, and Automations. Missing tables: ${schema.missingTables.join(", ")}.`
     );
   }
 
@@ -609,7 +609,7 @@ async function assertOperatorWorkspaceMutationReady(supabase, options = {}) {
 
   if (!capabilities.persistenceAvailable) {
     const error = new Error(
-      `Connected Operator Workspace tables are missing. Apply db/connected_operator_workspace.sql first. Missing tables: ${capabilities.missingTables.join(", ")}.`
+      `Connected Operator Workspace tables are missing. Run the production deploy workflow so Supabase applies the latest workspace migrations first. Missing tables: ${capabilities.missingTables.join(", ")}.`
     );
     error.statusCode = 503;
     throw error;
@@ -3031,12 +3031,12 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
       },
       briefing: {
         title: "Operator workspace needs its migration",
-        text: "Vonza kept the dashboard visible, but connected Inbox, Calendar, and Automations stay in safe fallback mode until db/connected_operator_workspace.sql is applied.",
+        text: "Vonza kept the dashboard visible, but connected Inbox, Calendar, and Automations stay in safe fallback mode until the production deploy workflow applies the latest workspace migrations.",
       },
       nextAction: {
         key: "apply_operator_workspace_migration",
         title: "Finish the operator workspace migration",
-        description: "Apply db/connected_operator_workspace.sql before enabling live Inbox, Calendar, and Automations data on this deployment.",
+        description: "Run the production deploy workflow before enabling live Inbox, Calendar, and Automations data on this deployment.",
         buttonLabel: "Review workspace status",
         actionType: "stay_put",
         targetSection: "overview",

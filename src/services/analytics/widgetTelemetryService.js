@@ -409,6 +409,7 @@ export async function assertWidgetTelemetrySchemaReady(supabase) {
       const schemaError = new Error(
         `[startup] Missing required widget telemetry schema for '${WIDGET_EVENTS_TABLE}'. Apply the latest database migration before starting this build.`
       );
+      schemaError.code = "schema_not_ready";
       schemaError.statusCode = 500;
       throw schemaError;
     }

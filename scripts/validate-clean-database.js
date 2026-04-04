@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import pg from "pg";
 
 import { validateStartupSchemaReady } from "../src/services/schema/startupSchemaService.js";
+import { SUPABASE_MIGRATIONS_DIR } from "../src/services/schema/supabaseMigrationCatalog.js";
 import { createPgSupabaseCompat } from "./lib/createPgSupabaseCompat.js";
 
 dotenv.config();
@@ -14,7 +15,7 @@ const { Client } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
-const dbDir = path.join(repoRoot, "db");
+const migrationsDir = path.join(repoRoot, SUPABASE_MIGRATIONS_DIR);
 
 function requireCleanDatabaseUrl() {
   const value = process.env.CLEAN_DATABASE_URL || process.env.DATABASE_URL || "";
@@ -29,7 +30,7 @@ function requireCleanDatabaseUrl() {
 }
 
 async function applySqlFile(client, fileName) {
-  const absolutePath = path.join(dbDir, fileName);
+  const absolutePath = path.join(migrationsDir, fileName);
   const sql = readFileSync(absolutePath, "utf8");
   await client.query(sql);
 }
@@ -45,10 +46,8 @@ async function main() {
     await client.query("drop schema if exists public cascade");
     await client.query("create schema public");
 
-    await applySqlFile(client, "schema.sql");
-
-    const migrationFiles = readdirSync(dbDir)
-      .filter((fileName) => fileName.endsWith(".sql") && fileName !== "schema.sql")
+    const migrationFiles = readdirSync(migrationsDir)
+      .filter((fileName) => fileName.endsWith(".sql"))
       .sort();
 
     for (const fileName of migrationFiles) {

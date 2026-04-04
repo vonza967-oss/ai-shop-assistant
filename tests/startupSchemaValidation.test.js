@@ -72,6 +72,22 @@ test("startup schema validation fails loudly for missing widget config schema", 
   );
 });
 
+test("startup schema validation fails loudly for missing widget telemetry schema with manifest guidance", async () => {
+  await assert.rejects(
+    () =>
+      validateStartupSchemaReady(
+        createSchemaProbeSupabase({
+          agent_widget_events: {
+            code: "42P01",
+            message: "relation public.agent_widget_events does not exist",
+          },
+        }),
+        { phase: "test" }
+      ),
+    /supabase\/migrations\/20260404000300_install_verification_activation_loop\.sql/i
+  );
+});
+
 test("startup schema validation fails loudly for missing action queue schema", async () => {
   await assert.rejects(
     () =>
@@ -101,5 +117,21 @@ test("startup schema validation fails loudly for missing follow-up workflow sche
         { phase: "test" }
       ),
     /follow-up workflow schema/i
+  );
+});
+
+test("startup schema validation errors map directly to the recovery bundle docs", async () => {
+  await assert.rejects(
+    () =>
+      validateStartupSchemaReady(
+        createSchemaProbeSupabase({
+          messages: {
+            code: "42P01",
+            message: "relation public.messages does not exist",
+          },
+        }),
+        { phase: "test" }
+      ),
+    /docs\/sql\/prod_recovery_startup\.sql/i
   );
 });

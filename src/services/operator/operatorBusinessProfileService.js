@@ -262,7 +262,7 @@ export async function upsertOperatorBusinessProfile(supabase, { agent, ownerUser
   if (error) {
     if (isMissingRelationError(error, OPERATOR_BUSINESS_PROFILE_TABLE)) {
       const migrationError = new Error(
-        "Operator business profile persistence is not ready on this deployment. Apply db/operator_business_profiles.sql and try again."
+        "Operator business profile persistence is not ready on this deployment. Run the production deploy workflow so Supabase applies the latest migrations, including operator business profiles."
       );
       migrationError.statusCode = 503;
       throw migrationError;

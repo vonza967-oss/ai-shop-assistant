@@ -1,3 +1,5 @@
+import { SUPABASE_MIGRATION_FILE_BY_ID } from "./supabaseMigrationCatalog.js";
+
 export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
   businesses: {
     requiredColumns: [
@@ -38,7 +40,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["owner_access.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.owner_access],
     migrationColumns: ["owner_user_id", "access_status"],
   },
   widget_configs: {
@@ -78,9 +80,9 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "updated_at",
     ],
     migrationFiles: [
-      "direct_conversion_routing.sql",
-      "conversion_outcomes.sql",
-      "install_verification_activation_loop.sql",
+      SUPABASE_MIGRATION_FILE_BY_ID.direct_conversion_routing,
+      SUPABASE_MIGRATION_FILE_BY_ID.conversion_outcomes,
+      SUPABASE_MIGRATION_FILE_BY_ID.install_verification_activation_loop,
     ],
     migrationColumns: [
       "booking_url",
@@ -116,7 +118,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "session_key",
       "created_at",
     ],
-    migrationFiles: ["messages_visitor_identity.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.messages_visitor_identity],
     migrationColumns: ["session_key"],
   },
   agent_action_queue_statuses: {
@@ -135,7 +137,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["action_queue_statuses.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.action_queue_statuses],
     migrationColumns: [
       "note",
       "outcome",
@@ -177,7 +179,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["agent_follow_up_workflows.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.agent_follow_up_workflows,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: [
       "linked_action_keys",
       "action_type",
@@ -232,7 +237,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["agent_knowledge_fix_workflows.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.agent_knowledge_fix_workflows],
     migrationColumns: [
       "linked_action_keys",
       "action_type",
@@ -278,7 +283,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "first_seen_at",
       "last_seen_at",
     ],
-    migrationFiles: ["install_verification_activation_loop.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.install_verification_activation_loop],
     migrationColumns: ["origin", "last_session_id", "last_fingerprint"],
   },
   agent_widget_events: {
@@ -295,7 +300,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "dedupe_key",
       "created_at",
     ],
-    migrationFiles: ["install_verification_activation_loop.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.install_verification_activation_loop],
   },
   agent_contact_leads: {
     requiredColumns: [
@@ -337,7 +342,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["live_conversion_loop.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.live_conversion_loop,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   agent_conversion_outcomes: {
@@ -374,7 +382,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["conversion_outcomes.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.conversion_outcomes,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   google_oauth_states: {
@@ -395,7 +406,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
   google_connected_accounts: {
     requiredColumns: [
@@ -421,7 +432,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
   operator_contacts: {
     requiredColumns: [
@@ -447,27 +458,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["contacts_people_workspace.sql"],
-  },
-  operator_business_profiles: {
-    requiredColumns: [
-      "id",
-      "agent_id",
-      "business_id",
-      "owner_user_id",
-      "business_summary",
-      "services",
-      "pricing",
-      "policies",
-      "service_areas",
-      "operating_hours",
-      "approved_contact_channels",
-      "approval_preferences",
-      "metadata",
-      "created_at",
-      "updated_at",
-    ],
-    migrationFiles: ["operator_business_profiles.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace],
   },
   operator_contact_identities: {
     requiredColumns: [
@@ -486,7 +477,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["contacts_people_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace],
   },
   operator_inbox_threads: {
     requiredColumns: [
@@ -518,7 +509,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   operator_inbox_messages: {
@@ -544,7 +538,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
   operator_calendar_events: {
     requiredColumns: [
@@ -573,7 +567,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   operator_campaigns: {
@@ -598,7 +595,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
   operator_campaign_steps: {
     requiredColumns: [
@@ -617,7 +614,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
   operator_campaign_recipients: {
     requiredColumns: [
@@ -641,7 +638,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   operator_tasks: {
@@ -669,7 +669,10 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "created_at",
       "updated_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql", "contacts_people_workspace.sql"],
+    migrationFiles: [
+      SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace,
+      SUPABASE_MIGRATION_FILE_BY_ID.contacts_people_workspace,
+    ],
     migrationColumns: ["contact_id"],
   },
   operator_audit_logs: {
@@ -687,7 +690,7 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
       "details",
       "created_at",
     ],
-    migrationFiles: ["connected_operator_workspace.sql"],
+    migrationFiles: [SUPABASE_MIGRATION_FILE_BY_ID.connected_operator_workspace],
   },
 });
 

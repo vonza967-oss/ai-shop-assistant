@@ -17,7 +17,6 @@ test("schema hints cover recent required persistence tables", () => {
     "agent_action_queue_statuses",
     "agent_follow_up_workflows",
     "operator_contacts",
-    "operator_business_profiles",
     "operator_contact_identities",
   ];
 
@@ -67,21 +66,30 @@ test("schema sync detects missing canonical and migration coverage", () => {
   });
 
   assert.ok(errors.some((message) => message.includes("db/schema.sql is missing required column 'messages.session_key'")));
-  assert.ok(errors.some((message) => message.includes("db migrations do not represent required column 'messages.session_key'")));
+  assert.ok(
+    errors.some((message) =>
+      message.includes("Supabase migrations do not represent required column 'messages.session_key'")
+    )
+  );
 });
 
 test("schema file enforcement requires schema.sql and migrations together", () => {
   assert.deepEqual(
     evaluateSchemaFileChanges(["db/schema.sql"]),
-    ["db/schema.sql changed without a matching incremental migration in db/."]
+    ["db/schema.sql changed without a matching migration in supabase/migrations/."]
   );
 
-  const migrationOnlyErrors = evaluateSchemaFileChanges(["db/messages_visitor_identity.sql"]);
+  const migrationOnlyErrors = evaluateSchemaFileChanges([
+    "supabase/migrations/20260404000200_messages_visitor_identity.sql",
+  ]);
   assert.equal(migrationOnlyErrors.length, 1);
-  assert.match(migrationOnlyErrors[0], /without updating db\/schema\.sql/i);
+  assert.match(migrationOnlyErrors[0], /supabase migrations changed/i);
 
   assert.deepEqual(
-    evaluateSchemaFileChanges(["db/schema.sql", "db/messages_visitor_identity.sql"]),
+    evaluateSchemaFileChanges([
+      "db/schema.sql",
+      "supabase/migrations/20260404000200_messages_visitor_identity.sql",
+    ]),
     []
   );
 });

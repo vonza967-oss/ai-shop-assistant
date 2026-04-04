@@ -1,26 +1,144 @@
 -- Vonza production full recovery / current-main parity bundle.
--- Audited against origin/main on 2026-04-03.
--- Source: exact incremental migration SQL, concatenated in the audited order.
+-- Audited against origin/main on 2026-04-04.
+-- Source: exact supabase/migrations SQL, concatenated in the audited order.
 --
 -- Use this bundle when:
 -- - production drift is unknown
--- - db/owner_access.sql may not be present
+-- - you need to bootstrap or reconcile migration history on an existing project
 -- - you want full current-main schema parity, not only a startup fix
 --
 -- Ordering dependencies preserved here:
--- - db/owner_access.sql before db/action_queue_statuses.sql
--- - db/live_conversion_loop.sql and db/agent_follow_up_workflows.sql before db/connected_operator_workspace.sql
--- - db/connected_operator_workspace.sql and db/conversion_outcomes.sql before db/contacts_people_workspace.sql
--- - db/conversion_outcomes.sql before db/cross_channel_outcomes.sql
+-- - 20260404000100_owner_access before 20260404000500_action_queue_statuses
+-- - 20260404000400_live_conversion_loop and 20260404000600_agent_follow_up_workflows before 20260404001000_connected_operator_workspace
+-- - 20260404001000_connected_operator_workspace and 20260404000800_conversion_outcomes before 20260404001100_contacts_people_workspace
+-- - 20260404000800_conversion_outcomes before 20260404001200_cross_channel_outcomes
 --
 -- Safety notes:
--- - This file intentionally preserves the original migration bodies and order.
+-- - This file intentionally preserves the audited migration bodies and order.
 -- - It is not wrapped in a transaction so Supabase surfaces the first failing statement.
 -- - Unique indexes can still fail if legacy duplicate data already exists.
--- - On a fresh database created from current db/schema.sql, the final cross-channel section is redundant
---   but still idempotent because it uses add column if not exists / create index if not exists.
---
--- Source: db/owner_access.sql
+-- - The first section is the foundational bootstrap baseline for pre-CLI projects.
+
+-- Source: supabase/migrations/20260404000000_initial_schema_base.sql
+-- Bootstrap baseline for Vonza projects that existed before Supabase CLI migrations.
+-- Legacy source: db/schema.sql (foundational tables only)
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.businesses (
+  id uuid primary key default gen_random_uuid(),
+  name text,
+  website_url text unique,
+  created_at timestamp with time zone default now()
+);
+
+create table if not exists public.website_content (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid references public.businesses (id) on delete cascade,
+  website_url text,
+  page_title text,
+  meta_description text,
+  content text,
+  crawled_urls text[],
+  page_count integer,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists website_content_business_id_idx
+  on public.website_content (business_id);
+
+create table if not exists public.agents (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid references public.businesses (id) on delete cascade,
+  client_id text,
+  public_agent_key text unique,
+  name text,
+  purpose text,
+  system_prompt text,
+  tone text,
+  language text,
+  is_active boolean default true,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create index if not exists agents_business_id_idx
+  on public.agents (business_id);
+
+create index if not exists agents_client_id_idx
+  on public.agents (client_id);
+
+create table if not exists public.widget_configs (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  assistant_name text,
+  welcome_message text,
+  button_label text,
+  primary_color text,
+  secondary_color text,
+  launcher_text text,
+  theme_mode text,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists widget_configs_agent_id_idx
+  on public.widget_configs (agent_id);
+
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  role text not null,
+  content text not null,
+  created_at timestamp with time zone default now()
+);
+
+create index if not exists messages_agent_id_idx
+  on public.messages (agent_id);
+
+create index if not exists messages_agent_id_created_at_idx
+  on public.messages (agent_id, created_at desc);
+
+create table if not exists public.product_events (
+  id uuid primary key default gen_random_uuid(),
+  client_id text not null,
+  agent_id uuid references public.agents (id) on delete set null,
+  event_name text not null,
+  source text,
+  metadata jsonb,
+  created_at timestamp with time zone default now()
+);
+
+create index if not exists product_events_client_id_idx
+  on public.product_events (client_id);
+
+create index if not exists product_events_event_name_idx
+  on public.product_events (event_name);
+
+create index if not exists product_events_created_at_idx
+  on public.product_events (created_at desc);
+
+create table if not exists public.agent_installations (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  host text not null,
+  page_url text,
+  first_seen_at timestamp with time zone default now(),
+  last_seen_at timestamp with time zone default now()
+);
+
+create unique index if not exists agent_installations_agent_host_idx
+  on public.agent_installations (agent_id, host);
+
+create index if not exists agent_installations_agent_id_idx
+  on public.agent_installations (agent_id);
+
+create index if not exists agent_installations_last_seen_at_idx
+  on public.agent_installations (last_seen_at desc);
+-- Source: supabase/migrations/20260404000100_owner_access.sql
+-- Legacy source: db/owner_access.sql
+
 alter table public.agents
   add column if not exists owner_user_id uuid;
 
@@ -33,15 +151,17 @@ where access_status is null;
 
 create index if not exists agents_owner_user_id_idx
   on public.agents (owner_user_id);
+-- Source: supabase/migrations/20260404000200_messages_visitor_identity.sql
+-- Legacy source: db/messages_visitor_identity.sql
 
--- Source: db/messages_visitor_identity.sql
 alter table public.messages
   add column if not exists session_key text;
 
 create index if not exists messages_agent_id_session_key_created_at_idx
   on public.messages (agent_id, session_key, created_at desc);
+-- Source: supabase/migrations/20260404000300_install_verification_activation_loop.sql
+-- Legacy source: db/install_verification_activation_loop.sql
 
--- Source: db/install_verification_activation_loop.sql
 alter table if exists public.widget_configs
   add column if not exists install_id uuid default gen_random_uuid(),
   add column if not exists allowed_domains text[] not null default '{}',
@@ -105,8 +225,9 @@ create index if not exists agent_widget_events_event_name_idx
 
 create index if not exists agent_widget_events_created_at_idx
   on public.agent_widget_events (created_at desc);
+-- Source: supabase/migrations/20260404000400_live_conversion_loop.sql
+-- Legacy source: db/live_conversion_loop.sql
 
--- Source: db/live_conversion_loop.sql
 create table if not exists public.agent_contact_leads (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -166,8 +287,9 @@ create index if not exists agent_contact_leads_agent_owner_updated_idx
 
 create index if not exists agent_contact_leads_agent_person_idx
   on public.agent_contact_leads (agent_id, person_key);
+-- Source: supabase/migrations/20260404000500_action_queue_statuses.sql
+-- Legacy source: db/action_queue_statuses.sql
 
--- Source: db/action_queue_statuses.sql
 create table if not exists public.agent_action_queue_statuses (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -202,38 +324,6 @@ alter table public.agent_action_queue_statuses
 alter table public.agent_action_queue_statuses
   add column if not exists contact_status text;
 
-update public.agent_action_queue_statuses as statuses
-set owner_user_id = agents.owner_user_id
-from public.agents
-where statuses.agent_id = agents.id
-  and statuses.owner_user_id is null
-  and agents.owner_user_id is not null;
-
-update public.agent_action_queue_statuses
-set status = lower(trim(status))
-where status is not null
-  and status <> lower(trim(status));
-
-update public.agent_action_queue_statuses
-set status = 'new'
-where status is null
-  or status not in ('new', 'reviewed', 'done', 'dismissed');
-
-update public.agent_action_queue_statuses
-set contact_status = null
-where contact_status is not null
-  and lower(trim(contact_status)) = '';
-
-update public.agent_action_queue_statuses
-set contact_status = lower(trim(contact_status))
-where contact_status is not null
-  and contact_status <> lower(trim(contact_status));
-
-update public.agent_action_queue_statuses
-set contact_status = null
-where contact_status is not null
-  and contact_status not in ('not_contacted', 'attempted', 'contacted', 'qualified');
-
 create unique index if not exists agent_action_queue_statuses_agent_action_key_idx
   on public.agent_action_queue_statuses (agent_id, action_key);
 
@@ -242,51 +332,9 @@ create index if not exists agent_action_queue_statuses_owner_user_id_idx
 
 create index if not exists agent_action_queue_statuses_status_idx
   on public.agent_action_queue_statuses (status);
+-- Source: supabase/migrations/20260404000600_agent_follow_up_workflows.sql
+-- Legacy source: db/agent_follow_up_workflows.sql
 
-create index if not exists agent_action_queue_statuses_agent_owner_updated_idx
-  on public.agent_action_queue_statuses (agent_id, owner_user_id, updated_at desc);
-
-create index if not exists agent_action_queue_statuses_agent_owner_status_updated_idx
-  on public.agent_action_queue_statuses (agent_id, owner_user_id, status, updated_at desc);
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'agent_action_queue_statuses_status_check'
-  ) then
-    alter table public.agent_action_queue_statuses
-      add constraint agent_action_queue_statuses_status_check
-      check (status in ('new', 'reviewed', 'done', 'dismissed')) not valid;
-  end if;
-end
-$$;
-
-alter table public.agent_action_queue_statuses
-  validate constraint agent_action_queue_statuses_status_check;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'agent_action_queue_statuses_contact_status_check'
-  ) then
-    alter table public.agent_action_queue_statuses
-      add constraint agent_action_queue_statuses_contact_status_check
-      check (
-        contact_status is null
-        or contact_status in ('not_contacted', 'attempted', 'contacted', 'qualified')
-      ) not valid;
-  end if;
-end
-$$;
-
-alter table public.agent_action_queue_statuses
-  validate constraint agent_action_queue_statuses_contact_status_check;
-
--- Source: db/agent_follow_up_workflows.sql
 create table if not exists public.agent_follow_up_workflows (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -389,8 +437,9 @@ create index if not exists agent_follow_up_workflows_agent_owner_idx
 
 create index if not exists agent_follow_up_workflows_status_idx
   on public.agent_follow_up_workflows (status);
+-- Source: supabase/migrations/20260404000700_agent_knowledge_fix_workflows.sql
+-- Legacy source: db/agent_knowledge_fix_workflows.sql
 
--- Source: db/agent_knowledge_fix_workflows.sql
 create table if not exists public.agent_knowledge_fix_workflows (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -485,8 +534,9 @@ create index if not exists agent_knowledge_fix_workflows_agent_owner_idx
 
 create index if not exists agent_knowledge_fix_workflows_status_idx
   on public.agent_knowledge_fix_workflows (status);
+-- Source: supabase/migrations/20260404000800_conversion_outcomes.sql
+-- Legacy source: db/conversion_outcomes.sql
 
--- Source: db/conversion_outcomes.sql
 alter table public.widget_configs
   add column if not exists booking_start_url text;
 
@@ -586,8 +636,9 @@ create index if not exists agent_conversion_outcomes_operator_task_idx
 
 create index if not exists agent_conversion_outcomes_attribution_path_idx
   on public.agent_conversion_outcomes (attribution_path);
+-- Source: supabase/migrations/20260404000900_direct_conversion_routing.sql
+-- Legacy source: db/direct_conversion_routing.sql
 
--- Source: db/direct_conversion_routing.sql
 alter table if exists public.widget_configs
   add column if not exists booking_url text;
 
@@ -611,8 +662,9 @@ alter table if exists public.widget_configs
 
 alter table if exists public.widget_configs
   add column if not exists business_hours_note text;
+-- Source: supabase/migrations/20260404001000_connected_operator_workspace.sql
+-- Legacy source: db/connected_operator_workspace.sql
 
--- Source: db/connected_operator_workspace.sql
 create table if not exists public.google_oauth_states (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -927,8 +979,9 @@ create table if not exists public.operator_audit_logs (
 
 create index if not exists operator_audit_logs_agent_owner_idx
   on public.operator_audit_logs (agent_id, owner_user_id, created_at desc);
+-- Source: supabase/migrations/20260404001100_contacts_people_workspace.sql
+-- Legacy source: db/contacts_people_workspace.sql
 
--- Source: db/contacts_people_workspace.sql
 create table if not exists public.operator_contacts (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -1031,8 +1084,9 @@ alter table public.operator_tasks
 
 create index if not exists operator_tasks_contact_idx
   on public.operator_tasks (contact_id);
+-- Source: supabase/migrations/20260404001200_cross_channel_outcomes.sql
+-- Legacy source: db/cross_channel_outcomes.sql
 
--- Source: db/cross_channel_outcomes.sql
 alter table public.agent_conversion_outcomes
   add column if not exists inbox_thread_id uuid,
   add column if not exists calendar_event_id uuid,
@@ -1063,3 +1117,29 @@ create index if not exists agent_conversion_outcomes_operator_task_idx
 
 create index if not exists agent_conversion_outcomes_attribution_path_idx
   on public.agent_conversion_outcomes (attribution_path);
+-- Source: supabase/migrations/20260404001300_operator_business_profiles.sql
+-- Legacy source: db/operator_business_profiles.sql
+
+create table if not exists public.operator_business_profiles (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid references public.agents (id) on delete cascade,
+  business_id uuid references public.businesses (id) on delete cascade,
+  owner_user_id uuid,
+  business_summary text,
+  services jsonb not null default '[]'::jsonb,
+  pricing jsonb not null default '[]'::jsonb,
+  policies jsonb not null default '[]'::jsonb,
+  service_areas jsonb not null default '[]'::jsonb,
+  operating_hours jsonb not null default '[]'::jsonb,
+  approved_contact_channels text[] not null default '{}',
+  approval_preferences jsonb not null default '{}'::jsonb,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
+);
+
+create unique index if not exists operator_business_profiles_agent_owner_idx
+  on public.operator_business_profiles (agent_id, owner_user_id);
+
+create index if not exists operator_business_profiles_business_idx
+  on public.operator_business_profiles (business_id, updated_at desc);

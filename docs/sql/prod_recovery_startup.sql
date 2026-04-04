@@ -1,30 +1,33 @@
 -- Vonza production startup recovery bundle for current main.
--- Audited against origin/main on 2026-04-03.
--- Source: exact incremental migration SQL, concatenated in the audited startup order.
+-- Audited against origin/main on 2026-04-04.
+-- Source: exact supabase/migrations SQL, concatenated in the audited startup order.
 --
 -- Use this bundle when production is failing startup schema validation and you only need
 -- the app to boot again.
 --
 -- Preconditions:
 -- - This is for an existing production database, not a fresh bootstrap.
--- - Base schema from db/schema.sql already exists.
--- - public.agents.owner_user_id already exists from db/owner_access.sql.
---   db/action_queue_statuses.sql reads that column. If you are unsure, run
+-- - Base schema from supabase/migrations/20260404000000_initial_schema_base.sql already exists.
+-- - public.agents.owner_user_id already exists from supabase/migrations/20260404000100_owner_access.sql.
+--   supabase/migrations/20260404000500_action_queue_statuses.sql reads that column. If you are unsure, run
 --   docs/sql/prod_recovery_full_current_main.sql instead.
 --
 -- Safety notes:
--- - This file intentionally preserves the original migration bodies and order.
+-- - This file intentionally preserves the audited migration bodies and order.
 -- - It is not wrapped in a transaction so Supabase surfaces the first failing statement.
 -- - Unique indexes can still fail if legacy duplicate data already exists.
---
--- Source: db/messages_visitor_identity.sql
+
+-- Source: supabase/migrations/20260404000200_messages_visitor_identity.sql
+-- Legacy source: db/messages_visitor_identity.sql
+
 alter table public.messages
   add column if not exists session_key text;
 
 create index if not exists messages_agent_id_session_key_created_at_idx
   on public.messages (agent_id, session_key, created_at desc);
+-- Source: supabase/migrations/20260404000300_install_verification_activation_loop.sql
+-- Legacy source: db/install_verification_activation_loop.sql
 
--- Source: db/install_verification_activation_loop.sql
 alter table if exists public.widget_configs
   add column if not exists install_id uuid default gen_random_uuid(),
   add column if not exists allowed_domains text[] not null default '{}',
@@ -88,8 +91,9 @@ create index if not exists agent_widget_events_event_name_idx
 
 create index if not exists agent_widget_events_created_at_idx
   on public.agent_widget_events (created_at desc);
+-- Source: supabase/migrations/20260404000400_live_conversion_loop.sql
+-- Legacy source: db/live_conversion_loop.sql
 
--- Source: db/live_conversion_loop.sql
 create table if not exists public.agent_contact_leads (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -149,8 +153,9 @@ create index if not exists agent_contact_leads_agent_owner_updated_idx
 
 create index if not exists agent_contact_leads_agent_person_idx
   on public.agent_contact_leads (agent_id, person_key);
+-- Source: supabase/migrations/20260404000500_action_queue_statuses.sql
+-- Legacy source: db/action_queue_statuses.sql
 
--- Source: db/action_queue_statuses.sql
 create table if not exists public.agent_action_queue_statuses (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -185,38 +190,6 @@ alter table public.agent_action_queue_statuses
 alter table public.agent_action_queue_statuses
   add column if not exists contact_status text;
 
-update public.agent_action_queue_statuses as statuses
-set owner_user_id = agents.owner_user_id
-from public.agents
-where statuses.agent_id = agents.id
-  and statuses.owner_user_id is null
-  and agents.owner_user_id is not null;
-
-update public.agent_action_queue_statuses
-set status = lower(trim(status))
-where status is not null
-  and status <> lower(trim(status));
-
-update public.agent_action_queue_statuses
-set status = 'new'
-where status is null
-  or status not in ('new', 'reviewed', 'done', 'dismissed');
-
-update public.agent_action_queue_statuses
-set contact_status = null
-where contact_status is not null
-  and lower(trim(contact_status)) = '';
-
-update public.agent_action_queue_statuses
-set contact_status = lower(trim(contact_status))
-where contact_status is not null
-  and contact_status <> lower(trim(contact_status));
-
-update public.agent_action_queue_statuses
-set contact_status = null
-where contact_status is not null
-  and contact_status not in ('not_contacted', 'attempted', 'contacted', 'qualified');
-
 create unique index if not exists agent_action_queue_statuses_agent_action_key_idx
   on public.agent_action_queue_statuses (agent_id, action_key);
 
@@ -225,51 +198,9 @@ create index if not exists agent_action_queue_statuses_owner_user_id_idx
 
 create index if not exists agent_action_queue_statuses_status_idx
   on public.agent_action_queue_statuses (status);
+-- Source: supabase/migrations/20260404000600_agent_follow_up_workflows.sql
+-- Legacy source: db/agent_follow_up_workflows.sql
 
-create index if not exists agent_action_queue_statuses_agent_owner_updated_idx
-  on public.agent_action_queue_statuses (agent_id, owner_user_id, updated_at desc);
-
-create index if not exists agent_action_queue_statuses_agent_owner_status_updated_idx
-  on public.agent_action_queue_statuses (agent_id, owner_user_id, status, updated_at desc);
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'agent_action_queue_statuses_status_check'
-  ) then
-    alter table public.agent_action_queue_statuses
-      add constraint agent_action_queue_statuses_status_check
-      check (status in ('new', 'reviewed', 'done', 'dismissed')) not valid;
-  end if;
-end
-$$;
-
-alter table public.agent_action_queue_statuses
-  validate constraint agent_action_queue_statuses_status_check;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'agent_action_queue_statuses_contact_status_check'
-  ) then
-    alter table public.agent_action_queue_statuses
-      add constraint agent_action_queue_statuses_contact_status_check
-      check (
-        contact_status is null
-        or contact_status in ('not_contacted', 'attempted', 'contacted', 'qualified')
-      ) not valid;
-  end if;
-end
-$$;
-
-alter table public.agent_action_queue_statuses
-  validate constraint agent_action_queue_statuses_contact_status_check;
-
--- Source: db/agent_follow_up_workflows.sql
 create table if not exists public.agent_follow_up_workflows (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -372,8 +303,9 @@ create index if not exists agent_follow_up_workflows_agent_owner_idx
 
 create index if not exists agent_follow_up_workflows_status_idx
   on public.agent_follow_up_workflows (status);
+-- Source: supabase/migrations/20260404000700_agent_knowledge_fix_workflows.sql
+-- Legacy source: db/agent_knowledge_fix_workflows.sql
 
--- Source: db/agent_knowledge_fix_workflows.sql
 create table if not exists public.agent_knowledge_fix_workflows (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid references public.agents (id) on delete cascade,
@@ -468,8 +400,9 @@ create index if not exists agent_knowledge_fix_workflows_agent_owner_idx
 
 create index if not exists agent_knowledge_fix_workflows_status_idx
   on public.agent_knowledge_fix_workflows (status);
+-- Source: supabase/migrations/20260404000800_conversion_outcomes.sql
+-- Legacy source: db/conversion_outcomes.sql
 
--- Source: db/conversion_outcomes.sql
 alter table public.widget_configs
   add column if not exists booking_start_url text;
 

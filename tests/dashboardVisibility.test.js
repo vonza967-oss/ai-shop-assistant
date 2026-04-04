@@ -531,7 +531,7 @@ test("missing operator tables show a visible migration fallback state", async ()
               status: "migration_required",
             },
             alerts: [
-              "Operator workspace tables are missing on this deployment. Apply db/connected_operator_workspace.sql before enabling connected Inbox, Calendar, and Automations. Missing tables: google_connected_accounts, operator_inbox_threads.",
+              "Operator workspace tables are missing on this deployment. Run the production deploy workflow so Supabase applies the latest workspace migrations before enabling connected Inbox, Calendar, and Automations. Missing tables: google_connected_accounts, operator_inbox_threads.",
             ],
           },
         });

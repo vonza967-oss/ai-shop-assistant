@@ -2,10 +2,10 @@ services:
   - type: web
     name: vonza-assistant
     runtime: node
-    buildCommand: npm install
+    buildCommand: npm install && npm run verify:deploy-readiness
     startCommand: npm run start:prod
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeploy: false
     envVars:
       - key: OPENAI_API_KEY
         sync: false
@@ -19,12 +19,6 @@ services:
         sync: false
       - key: PUBLIC_APP_URL
         sync: false
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_PRICE_ID
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
       - key: VONZA_OPERATOR_WORKSPACE_V1
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -34,4 +28,10 @@ services:
       - key: GOOGLE_OAUTH_REDIRECT_URI
         sync: false
       - key: GOOGLE_TOKEN_ENCRYPTION_SECRET
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
         sync: false
