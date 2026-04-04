@@ -944,6 +944,161 @@ function trimText(value) {
   return String(value || "").trim();
 }
 
+function createEmptyBusinessProfileState() {
+  return {
+    id: "",
+    agentId: "",
+    businessId: "",
+    ownerUserId: "",
+    businessSummary: "",
+    services: [],
+    pricing: [],
+    policies: [],
+    serviceAreas: [],
+    operatingHours: [],
+    approvedContactChannels: ["website_chat"],
+    approvalPreferences: {
+      followUpDrafts: "owner_required",
+      contactNextSteps: "owner_required",
+      taskRecommendations: "owner_required",
+      outcomeRecommendations: "owner_required",
+      profileChanges: "owner_required",
+    },
+    readiness: {
+      totalSections: 0,
+      completedSections: 0,
+      missingCount: 0,
+      missingSections: [],
+      summary: "",
+    },
+    prefill: {
+      available: false,
+      fieldCount: 0,
+      sourceSummary: "",
+      reviewRequired: true,
+      suggestions: {
+        businessSummary: {
+          value: "",
+          source: "",
+        },
+        services: [],
+        pricing: [],
+        policies: [],
+        serviceAreas: [],
+        operatingHours: [],
+        approvedContactChannels: ["website_chat"],
+        approvalPreferences: {
+          followUpDrafts: "owner_required",
+          contactNextSteps: "owner_required",
+          taskRecommendations: "owner_required",
+          outcomeRecommendations: "owner_required",
+          profileChanges: "owner_required",
+        },
+      },
+    },
+    persistenceAvailable: true,
+    migrationRequired: false,
+  };
+}
+
+function normalizeBusinessProfileItems(value) {
+  return Array.isArray(value)
+    ? value.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    : [];
+}
+
+function formatStructuredBusinessProfileLines(items = [], keys = []) {
+  return normalizeBusinessProfileItems(items)
+    .map((item) => keys.map((key) => trimText(item[key])).filter(Boolean).join(" | "))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseStructuredBusinessProfileLines(value, keys = []) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => trimText(line))
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split("|").map((part) => trimText(part));
+      return Object.fromEntries(
+        keys
+          .map((key, index) => [key, parts[index] || ""])
+          .filter(([, entry]) => entry)
+      );
+    })
+    .filter((entry) => Object.keys(entry).length > 0);
+}
+
+function getBusinessProfileViewModel(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const empty = createEmptyBusinessProfileState();
+  const profile = operatorWorkspace.businessProfile || empty;
+  const prefill = profile.prefill || empty.prefill;
+  const suggestions = prefill.suggestions || empty.prefill.suggestions;
+  const approvalPreferences = {
+    ...empty.approvalPreferences,
+    ...(suggestions.approvalPreferences || {}),
+    ...(profile.approvalPreferences || {}),
+  };
+  const approvedContactChannels = (profile.approvedContactChannels || []).length
+    ? profile.approvedContactChannels
+    : (suggestions.approvedContactChannels || empty.approvedContactChannels);
+
+  return {
+    ...empty,
+    ...profile,
+    approvalPreferences,
+    approvedContactChannels,
+    prefill,
+    fields: {
+      businessSummary: trimText(profile.businessSummary) || trimText(suggestions.businessSummary?.value),
+      services: formatStructuredBusinessProfileLines(
+        (profile.services || []).length ? profile.services : suggestions.services,
+        ["name", "note"]
+      ),
+      pricing: formatStructuredBusinessProfileLines(
+        (profile.pricing || []).length ? profile.pricing : suggestions.pricing,
+        ["label", "amount", "details"]
+      ),
+      policies: formatStructuredBusinessProfileLines(
+        (profile.policies || []).length ? profile.policies : suggestions.policies,
+        ["label", "details"]
+      ),
+      serviceAreas: formatStructuredBusinessProfileLines(
+        (profile.serviceAreas || []).length ? profile.serviceAreas : suggestions.serviceAreas,
+        ["name", "note"]
+      ),
+      operatingHours: formatStructuredBusinessProfileLines(
+        (profile.operatingHours || []).length ? profile.operatingHours : suggestions.operatingHours,
+        ["label", "hours"]
+      ),
+    },
+  };
+}
+
+function parseBusinessProfilePayload(form) {
+  const formData = new FormData(form);
+  const approvedContactChannels = ["website_chat", "email", "phone", "sms"]
+    .filter((channel) => formData.getAll("approved_contact_channels").includes(channel));
+
+  return {
+    businessSummary: trimText(formData.get("business_summary")),
+    services: parseStructuredBusinessProfileLines(formData.get("services"), ["name", "note"]),
+    pricing: parseStructuredBusinessProfileLines(formData.get("pricing"), ["label", "amount", "details"]),
+    policies: parseStructuredBusinessProfileLines(formData.get("policies"), ["label", "details"]),
+    serviceAreas: parseStructuredBusinessProfileLines(formData.get("service_areas"), ["name", "note"]),
+    operatingHours: parseStructuredBusinessProfileLines(formData.get("operating_hours"), ["label", "hours"]),
+    approvedContactChannels,
+    approvalPreferences: {
+      followUpDrafts: trimText(formData.get("approval_follow_up_drafts")) || "owner_required",
+      contactNextSteps: trimText(formData.get("approval_contact_next_steps")) || "owner_required",
+      taskRecommendations: trimText(formData.get("approval_task_recommendations")) || "owner_required",
+      outcomeRecommendations: trimText(formData.get("approval_outcome_recommendations")) || "owner_required",
+      profileChanges: trimText(formData.get("approval_profile_changes")) || "owner_required",
+    },
+  };
+}
+
 function formatSeenAt(value) {
   if (!value) {
     return "";
@@ -2277,26 +2432,35 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
   `;
 }
 
-function buildCopilotAnswerCards(copilot = createEmptyOperatorWorkspace().copilot) {
-  const answers = Array.isArray(copilot.answers) ? copilot.answers : [];
+function buildCopilotSummaryCards(copilot = createEmptyOperatorWorkspace().copilot) {
+  const summaryCards = Array.isArray(copilot.summaryCards) ? copilot.summaryCards : [];
 
-  if (!answers.length) {
+  if (!summaryCards.length) {
     return "";
   }
 
   return `
-    <div class="overview-grid operator-metric-grid" style="margin-top:16px;">
-      ${answers.map((answer) => `
+    <section class="workspace-card-soft" style="margin-top:16px;">
+      <div class="workspace-panel-header">
+        <div>
+          <p class="studio-kicker">Summary</p>
+          <h3 class="workspace-panel-title">Operational summary</h3>
+          <p class="workspace-panel-copy">This is the stable-core readout for today: what matters, which leads need attention, and whether complaints, pricing gaps, or outcomes need review.</p>
+        </div>
+      </div>
+      <div class="overview-grid operator-metric-grid">
+      ${summaryCards.map((card) => `
         <div class="overview-card">
-          <p class="overview-label">${escapeHtml(answer.question || "Copilot answer")}</p>
-          <p class="overview-card-copy">${escapeHtml(answer.answer || "Copilot is waiting for more stable-core context.")}</p>
+          <p class="overview-label">${escapeHtml(card.label || "Copilot summary")}</p>
+          <p class="overview-card-copy">${escapeHtml(card.text || "Copilot is waiting for more stable-core context.")}</p>
           <p class="analytics-subtle">${escapeHtml([
-            answer.confidence ? `Confidence: ${answer.confidence}` : "",
-            answer.rationale || "",
+            card.confidence ? `Confidence: ${card.confidence}` : "",
+            card.rationale || "",
           ].filter(Boolean).join(" · "))}</p>
         </div>
       `).join("")}
-    </div>
+      </div>
+    </section>
   `;
 }
 
@@ -2324,8 +2488,22 @@ function buildCopilotRecommendationList(copilot = createEmptyOperatorWorkspace()
             <p class="analytics-subtle">${escapeHtml([
               recommendation.priority ? `Priority: ${recommendation.priority}` : "",
               recommendation.confidence ? `Confidence: ${recommendation.confidence}` : "",
+              recommendation.surfaceLabel ? `Best surface: ${recommendation.surfaceLabel}` : "",
               recommendation.rationale || "",
             ].filter(Boolean).join(" · "))}</p>
+            ${recommendation.targetSection ? `
+              <div class="inline-actions" style="margin-top:12px;">
+                <button
+                  class="ghost-button"
+                  type="button"
+                  data-copilot-open-target
+                  data-shell-target="${escapeHtml(recommendation.targetSection || "overview")}"
+                  data-target-id="${escapeHtml(recommendation.targetId || "")}"
+                >
+                  ${escapeHtml(recommendation.surfaceLabel || "Open workflow")}
+                </button>
+              </div>
+            ` : ""}
           </div>
         `).join("")}
       </div>
@@ -2357,11 +2535,25 @@ function buildCopilotDraftList(copilot = createEmptyOperatorWorkspace().copilot)
             <p class="analytics-subtle">${escapeHtml([
               draft.channel ? `Channel: ${draft.channel}` : "",
               draft.confidence ? `Confidence: ${draft.confidence}` : "",
+              draft.surfaceLabel ? `Best surface: ${draft.surfaceLabel}` : "",
               "Owner approval required",
             ].filter(Boolean).join(" · "))}</p>
             <div class="placeholder-card" style="margin-top:12px;">
               <p style="white-space:pre-wrap;">${escapeHtml(draft.body || "Draft content is not available yet.")}</p>
             </div>
+            ${draft.targetSection ? `
+              <div class="inline-actions" style="margin-top:12px;">
+                <button
+                  class="ghost-button"
+                  type="button"
+                  data-copilot-open-target
+                  data-shell-target="${escapeHtml(draft.targetSection || "overview")}"
+                  data-target-id="${escapeHtml(draft.targetId || "")}"
+                >
+                  ${escapeHtml(draft.surfaceLabel || "Open workflow")}
+                </button>
+              </div>
+            ` : ""}
           </div>
         `).join("")}
       </div>
@@ -2371,14 +2563,16 @@ function buildCopilotDraftList(copilot = createEmptyOperatorWorkspace().copilot)
 
 function buildTodayCopilotSection(operatorWorkspace = createEmptyOperatorWorkspace()) {
   const copilot = operatorWorkspace.copilot || createEmptyOperatorWorkspace().copilot;
+  const businessProfile = operatorWorkspace.businessProfile || createEmptyOperatorWorkspace().businessProfile;
 
   if (!isTodayCopilotFlagEnabled() || copilot.featureEnabled !== true || copilot.enabled === false) {
     return "";
   }
 
-  const readiness = copilot.context?.businessProfile?.readiness || createEmptyOperatorWorkspace().copilot.context.businessProfile.readiness;
+  const readiness = businessProfile.readiness || copilot.context?.businessProfile?.readiness || createEmptyOperatorWorkspace().copilot.context.businessProfile.readiness;
   const warnings = Array.isArray(copilot.context?.warnings) ? copilot.context.warnings : [];
   const guidance = Array.isArray(copilot.fallback?.guidance) ? copilot.fallback.guidance : [];
+  const prefill = businessProfile.prefill || createEmptyBusinessProfileState().prefill;
 
   return `
     <section class="workspace-card-soft" style="margin-top:20px;">
@@ -2403,6 +2597,10 @@ function buildTodayCopilotSection(operatorWorkspace = createEmptyOperatorWorkspa
           <p class="overview-label">Business context foundation</p>
           <p class="workspace-panel-copy">${escapeHtml(readiness.summary || "Business context readiness will appear here.")}</p>
           ${readiness.missingCount ? `<p class="analytics-subtle">${escapeHtml(`${readiness.missingCount} areas are still missing context.`)}</p>` : `<p class="analytics-subtle">Core business context is filled for Copilot.</p>`}
+          <div class="inline-actions" style="margin-top:12px;">
+            <button class="ghost-button" type="button" data-copilot-open-target data-shell-target="customize" data-target-id="business-context-setup">Open business context setup</button>
+          </div>
+          ${prefill.available ? `<p class="analytics-subtle" style="margin-top:8px;">${escapeHtml(prefill.sourceSummary || `${prefill.fieldCount || 0} fields have safe suggestions ready for owner review.`)}</p>` : ""}
         </section>
       </div>
       ${warnings.length ? `
@@ -2417,7 +2615,7 @@ function buildTodayCopilotSection(operatorWorkspace = createEmptyOperatorWorkspa
           ${guidance.length ? `<p class="analytics-subtle" style="margin-top:8px;">${escapeHtml(guidance.join(" "))}</p>` : ""}
         </div>
       ` : ""}
-      ${buildCopilotAnswerCards(copilot)}
+      ${buildCopilotSummaryCards(copilot)}
       ${buildCopilotRecommendationList(copilot)}
       ${buildCopilotDraftList(copilot)}
     </section>
@@ -2599,7 +2797,144 @@ function buildOverviewPanel(agent, messages, setup, actionQueue, operatorWorkspa
   `;
 }
 
-function buildCustomizePanel(agent, setup) {
+function buildBusinessContextSetupPanel(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const profile = getBusinessProfileViewModel(operatorWorkspace);
+  const channelSet = new Set(profile.approvedContactChannels || []);
+  const approvalOptions = [
+    { value: "owner_required", label: "Owner approval required" },
+    { value: "draft_only", label: "Draft only" },
+    { value: "recommend_only", label: "Recommendation only" },
+  ];
+
+  return `
+    <form data-settings-form data-form-kind="business-context" class="workspace-card-soft" style="margin-top:20px;">
+      <div class="workspace-panel-header" id="business-context-setup">
+        <div>
+          <p class="studio-kicker">Business context</p>
+          <h3 class="workspace-panel-title">Business context setup</h3>
+          <p class="workspace-panel-copy">Give Today and Copilot the real operator context they need: what you sell, how pricing works, what policies matter, where you serve, when you operate, and which approval-first paths are allowed.</p>
+        </div>
+        <div class="workspace-badge-row">
+          <span class="${getBadgeClass(profile.readiness?.missingCount ? "Limited" : "Ready")}">${profile.readiness?.missingCount ? "Needs owner review" : "Context ready"}</span>
+          <span class="${getBadgeClass(profile.prefill?.available ? "Ready" : "Limited")}">${profile.prefill?.available ? "Safe suggestions loaded" : "No prefill available"}</span>
+        </div>
+      </div>
+      <div class="operator-home-grid">
+        <section class="operator-focus-card">
+          <p class="overview-label">Readiness</p>
+          <h3 class="operator-focus-title">${escapeHtml(profile.readiness?.completedSections || 0)} / ${escapeHtml(profile.readiness?.totalSections || 0)}</h3>
+          <p class="operator-focus-copy">${escapeHtml(profile.readiness?.summary || "Business context readiness will appear here.")}</p>
+        </section>
+        <section class="operator-focus-card operator-briefing-card">
+          <p class="overview-label">Prefill review</p>
+          <p class="workspace-panel-copy">${escapeHtml(profile.prefill?.sourceSummary || "Website import suggestions are not available yet.")}</p>
+          <p class="analytics-subtle">${escapeHtml(profile.prefill?.available ? `${profile.prefill?.fieldCount || 0} fields were safely prefilled for review before save.` : "Run website import to unlock more grounded suggestions.")}</p>
+        </section>
+      </div>
+      <div class="studio-groups" style="margin-top:20px;">
+        <section class="studio-group">
+          <h3 class="studio-group-title">Core business facts</h3>
+          <p class="studio-group-copy">Keep this concise and operator-facing. This is not website copy; it is the working context Copilot should trust when it prepares approval-first proposals.</p>
+          <div class="form-grid">
+            <div class="field">
+              <label for="business-summary">Business summary</label>
+              <textarea id="business-summary" name="business_summary">${escapeHtml(profile.fields.businessSummary || "")}</textarea>
+              <p class="field-help">One short paragraph. Explain what the business does, who it serves, and what matters operationally.</p>
+            </div>
+          </div>
+          <div class="form-grid two-col">
+            <div class="field">
+              <label for="business-services">Services</label>
+              <textarea id="business-services" name="services">${escapeHtml(profile.fields.services || "")}</textarea>
+              <p class="field-help">One service per line. Format: &#96;Service name | optional note&#96;.</p>
+            </div>
+            <div class="field">
+              <label for="business-pricing">Pricing</label>
+              <textarea id="business-pricing" name="pricing">${escapeHtml(profile.fields.pricing || "")}</textarea>
+              <p class="field-help">One pricing rule per line. Format: &#96;Label | amount or range | optional detail&#96;.</p>
+            </div>
+          </div>
+          <div class="form-grid two-col">
+            <div class="field">
+              <label for="business-policies">Policies</label>
+              <textarea id="business-policies" name="policies">${escapeHtml(profile.fields.policies || "")}</textarea>
+              <p class="field-help">One policy per line. Format: &#96;Policy label | detail&#96;.</p>
+            </div>
+            <div class="field">
+              <label for="business-service-areas">Service areas / locations</label>
+              <textarea id="business-service-areas" name="service_areas">${escapeHtml(profile.fields.serviceAreas || "")}</textarea>
+              <p class="field-help">One area per line. Format: &#96;Area | optional note&#96;.</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="business-operating-hours">Operating hours</label>
+              <textarea id="business-operating-hours" name="operating_hours">${escapeHtml(profile.fields.operatingHours || "")}</textarea>
+              <p class="field-help">One schedule line at a time. Format: &#96;Day or range | hours&#96;.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="studio-group">
+          <h3 class="studio-group-title">Approved owner paths</h3>
+          <p class="studio-group-copy">Copilot should stay approval-first. Use these settings to spell out which channels and proposal modes are allowed before any real deterministic workflow is used.</p>
+          <div class="form-grid two-col">
+            <div class="field">
+              <label>Approved contact channels</label>
+              <div class="contact-filter-group" style="margin-top:8px;">
+                ${[
+                  { value: "website_chat", label: "Website chat" },
+                  { value: "email", label: "Email" },
+                  { value: "phone", label: "Phone" },
+                  { value: "sms", label: "SMS / text" },
+                ].map((channel) => `
+                  <label class="pill" style="display:inline-flex;gap:8px;align-items:center;">
+                    <input
+                      type="checkbox"
+                      name="approved_contact_channels"
+                      value="${escapeHtml(channel.value)}"
+                      ${channelSet.has(channel.value) ? "checked" : ""}
+                    >
+                    <span>${escapeHtml(channel.label)}</span>
+                  </label>
+                `).join("")}
+              </div>
+              <p class="field-help">These do not send anything automatically. They define which owner-approved channels Copilot may prepare drafts for.</p>
+            </div>
+            <div class="field">
+              <label>Approval preferences</label>
+              <div class="overview-list">
+                ${[
+                  { name: "approval_follow_up_drafts", label: "Follow-up drafts", value: profile.approvalPreferences.followUpDrafts },
+                  { name: "approval_contact_next_steps", label: "Contact next-step recommendations", value: profile.approvalPreferences.contactNextSteps },
+                  { name: "approval_task_recommendations", label: "Task recommendations", value: profile.approvalPreferences.taskRecommendations },
+                  { name: "approval_outcome_recommendations", label: "Outcome review suggestions", value: profile.approvalPreferences.outcomeRecommendations },
+                  { name: "approval_profile_changes", label: "Profile changes", value: profile.approvalPreferences.profileChanges },
+                ].map((entry) => `
+                  <div class="overview-list-item">
+                    <p class="overview-list-title">${escapeHtml(entry.label)}</p>
+                    <select name="${escapeHtml(entry.name)}">
+                      ${approvalOptions.map((option) => `
+                        <option value="${escapeHtml(option.value)}" ${entry.value === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>
+                      `).join("")}
+                    </select>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="studio-save-row">
+          <button class="primary-button" type="submit">Save business context</button>
+          <span data-save-state class="save-state">No changes yet.</span>
+        </div>
+      </div>
+    </form>
+  `;
+}
+
+function buildCustomizePanel(agent, setup, operatorWorkspace = createEmptyOperatorWorkspace()) {
   const knowledgeActionLabel = setup.knowledgeState === "limited" ? "Retry website import" : "Import website knowledge";
   const behaviorSummary = buildBehaviorSummary(agent.tone, agent.systemPrompt);
   const manualOutcomeVisible = isCapabilityExplicitlyVisible("manual_outcome_marks");
@@ -2827,6 +3162,7 @@ function buildCustomizePanel(agent, setup) {
           </aside>
         </div>
       </form>
+      ${buildBusinessContextSetupPanel(operatorWorkspace)}
     </section>
   `;
 }
@@ -3690,6 +4026,8 @@ function createEmptyOperatorWorkspace() {
       headline: "",
       summary: "",
       questions: [],
+      summaryCards: [],
+      recommendedNextActionId: "",
       answers: [],
       recommendations: [],
       drafts: [],
@@ -3720,6 +4058,7 @@ function createEmptyOperatorWorkspace() {
         guidance: [],
       },
     },
+    businessProfile: createEmptyBusinessProfileState(),
     outcomes: {
       summary: null,
       recentOutcomes: [],
@@ -6356,7 +6695,7 @@ function renderAssistantShell(
       ${isCapabilityVisibleForWorkspace("inbox", operatorWorkspace) ? buildInboxPanel(agent, operatorWorkspace) : ""}
       ${isCapabilityVisibleForWorkspace("calendar", operatorWorkspace) ? buildCalendarPanel(agent, operatorWorkspace) : ""}
       ${isCapabilityVisibleForWorkspace("automations", operatorWorkspace) ? buildAutomationsPanel(agent, operatorWorkspace) : ""}
-      ${buildCustomizePanel(agent, setup)}
+      ${buildCustomizePanel(agent, setup, operatorWorkspace)}
       ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
     </div>
   `;
@@ -6808,7 +7147,13 @@ function normalizeOperatorWorkspace(data = null) {
   const inbox = normalizeOperatorRecord(source.inbox, emptyWorkspace.inbox);
   const calendar = normalizeOperatorRecord(source.calendar, emptyWorkspace.calendar);
   const automations = normalizeOperatorRecord(source.automations, emptyWorkspace.automations);
+  const outcomes = normalizeOperatorRecord(source.outcomes, emptyWorkspace.outcomes);
+  const contacts = normalizeOperatorRecord(source.contacts, emptyWorkspace.contacts);
   const copilot = normalizeOperatorRecord(source.copilot, emptyWorkspace.copilot);
+  const businessProfile = normalizeOperatorRecord(source.businessProfile, emptyWorkspace.businessProfile);
+  const contactsFilters = normalizeOperatorRecord(contacts.filters, emptyWorkspace.contacts.filters);
+  const contactsSummary = normalizeOperatorRecord(contacts.summary, emptyWorkspace.contacts.summary);
+  const contactsHealth = normalizeOperatorRecord(contacts.health, emptyWorkspace.contacts.health);
   const copilotContext = normalizeOperatorRecord(copilot.context, emptyWorkspace.copilot.context);
   const copilotBusinessProfile = normalizeOperatorRecord(
     copilotContext.businessProfile,
@@ -6819,12 +7164,19 @@ function normalizeOperatorWorkspace(data = null) {
     emptyWorkspace.copilot.context.businessProfile.readiness
   );
   const copilotFallback = normalizeOperatorRecord(copilot.fallback, emptyWorkspace.copilot.fallback);
-  const outcomes = normalizeOperatorRecord(source.outcomes, emptyWorkspace.outcomes);
-  const contacts = normalizeOperatorRecord(source.contacts, emptyWorkspace.contacts);
-  const contactsFilters = normalizeOperatorRecord(contacts.filters, emptyWorkspace.contacts.filters);
-  const contactsSummary = normalizeOperatorRecord(contacts.summary, emptyWorkspace.contacts.summary);
-  const contactsHealth = normalizeOperatorRecord(contacts.health, emptyWorkspace.contacts.health);
   const capabilities = normalizeOperatorRecord(source.capabilities, emptyWorkspace.capabilities);
+  const businessProfileReadiness = normalizeOperatorRecord(
+    businessProfile.readiness,
+    emptyWorkspace.businessProfile.readiness
+  );
+  const businessProfilePrefill = normalizeOperatorRecord(
+    businessProfile.prefill,
+    emptyWorkspace.businessProfile.prefill
+  );
+  const businessProfileSuggestions = normalizeOperatorRecord(
+    businessProfilePrefill.suggestions,
+    emptyWorkspace.businessProfile.prefill.suggestions
+  );
 
   return {
     ...emptyWorkspace,
@@ -6883,6 +7235,8 @@ function normalizeOperatorWorkspace(data = null) {
       ...emptyWorkspace.copilot,
       ...copilot,
       questions: normalizeOperatorTextArray(copilot.questions),
+      summaryCards: normalizeOperatorArray(copilot.summaryCards, normalizeOperatorRecord),
+      questions: normalizeOperatorTextArray(copilot.questions),
       answers: normalizeOperatorArray(copilot.answers, normalizeOperatorRecord),
       recommendations: normalizeOperatorArray(copilot.recommendations, normalizeOperatorRecord),
       drafts: normalizeOperatorArray(copilot.drafts, normalizeOperatorRecord),
@@ -6914,6 +7268,56 @@ function normalizeOperatorWorkspace(data = null) {
       ...emptyWorkspace.outcomes,
       ...outcomes,
       recentOutcomes: normalizeOperatorArray(outcomes.recentOutcomes, normalizeOperatorRecord),
+    },
+    businessProfile: {
+      ...emptyWorkspace.businessProfile,
+      ...businessProfile,
+      services: normalizeOperatorArray(businessProfile.services, normalizeOperatorRecord),
+      pricing: normalizeOperatorArray(businessProfile.pricing, normalizeOperatorRecord),
+      policies: normalizeOperatorArray(businessProfile.policies, normalizeOperatorRecord),
+      serviceAreas: normalizeOperatorArray(businessProfile.serviceAreas, normalizeOperatorRecord),
+      operatingHours: normalizeOperatorArray(businessProfile.operatingHours, normalizeOperatorRecord),
+      approvedContactChannels: normalizeOperatorArray(
+        businessProfile.approvedContactChannels,
+        (value) => trimText(value)
+      ),
+      approvalPreferences: normalizeOperatorRecord(
+        businessProfile.approvalPreferences,
+        emptyWorkspace.businessProfile.approvalPreferences
+      ),
+      readiness: {
+        ...emptyWorkspace.businessProfile.readiness,
+        ...businessProfileReadiness,
+        missingSections: normalizeOperatorArray(businessProfileReadiness.missingSections, (value) => trimText(value)),
+      },
+      prefill: {
+        ...emptyWorkspace.businessProfile.prefill,
+        ...businessProfilePrefill,
+        suggestions: {
+          ...emptyWorkspace.businessProfile.prefill.suggestions,
+          ...businessProfileSuggestions,
+          services: normalizeOperatorArray(businessProfileSuggestions.services, normalizeOperatorRecord),
+          pricing: normalizeOperatorArray(businessProfileSuggestions.pricing, normalizeOperatorRecord),
+          policies: normalizeOperatorArray(businessProfileSuggestions.policies, normalizeOperatorRecord),
+          serviceAreas: normalizeOperatorArray(businessProfileSuggestions.serviceAreas, normalizeOperatorRecord),
+          operatingHours: normalizeOperatorArray(businessProfileSuggestions.operatingHours, normalizeOperatorRecord),
+          approvedContactChannels: normalizeOperatorArray(
+            businessProfileSuggestions.approvedContactChannels,
+            (value) => trimText(value)
+          ),
+          approvalPreferences: normalizeOperatorRecord(
+            businessProfileSuggestions.approvalPreferences,
+            emptyWorkspace.businessProfile.prefill.suggestions.approvalPreferences
+          ),
+          businessSummary: {
+            ...emptyWorkspace.businessProfile.prefill.suggestions.businessSummary,
+            ...normalizeOperatorRecord(
+              businessProfileSuggestions.businessSummary,
+              emptyWorkspace.businessProfile.prefill.suggestions.businessSummary
+            ),
+          },
+        },
+      },
     },
     contacts: {
       ...emptyWorkspace.contacts,
@@ -7428,9 +7832,57 @@ async function createAssistant(event) {
 async function saveAssistant(event, agent) {
   event.preventDefault();
   const form = event.currentTarget;
+  const formKind = form.dataset.formKind || "customize";
   const submitButton = form.querySelector('button[type="submit"]');
   const saveState = form.querySelector("[data-save-state]");
   const formData = new FormData(form);
+
+  if (formKind === "business-context") {
+    const payload = parseBusinessProfilePayload(form);
+
+    submitButton.disabled = true;
+    if (saveState) {
+      saveState.textContent = "Saving business context...";
+      saveState.className = "save-state saving";
+      saveState.removeAttribute("title");
+    }
+    setStatus("Saving business context...");
+
+    try {
+      await fetchJson("/agents/operator/business-profile", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: getClientId(),
+          agent_id: agent.id,
+          profile: payload,
+        }),
+      });
+
+      setStatus("Business context saved.");
+      if (saveState) {
+        saveState.textContent = "Business context saved.";
+        saveState.className = "save-state saved";
+        saveState.removeAttribute("title");
+      }
+      await boot();
+    } catch (error) {
+      const message = error.message || "We couldn't save that business context just yet.";
+      setStatus(message);
+      if (saveState) {
+        saveState.textContent = "Could not save business context.";
+        saveState.className = "save-state unsaved";
+        saveState.title = message;
+      }
+    } finally {
+      submitButton.disabled = false;
+    }
+
+    return;
+  }
+
   const nextWebsiteUrl = trimText(formData.get("website_url"));
   const websiteChanged = Boolean(nextWebsiteUrl && nextWebsiteUrl !== trimText(agent.websiteUrl));
 
@@ -7904,6 +8356,31 @@ function bindStudioState(form, agent) {
   updateBehaviorSummary(form, agent);
 }
 
+function bindSimpleDirtyState(form) {
+  const saveState = form?.querySelector("[data-save-state]");
+
+  if (!form || !saveState) {
+    return;
+  }
+
+  const initialSnapshot = JSON.stringify(Array.from(new FormData(form).entries()));
+  const syncState = () => {
+    const currentSnapshot = JSON.stringify(Array.from(new FormData(form).entries()));
+
+    if (currentSnapshot === initialSnapshot) {
+      saveState.textContent = "No changes yet.";
+      saveState.className = "save-state";
+      return;
+    }
+
+    saveState.textContent = "Unsaved changes";
+    saveState.className = "save-state unsaved";
+  };
+
+  form.addEventListener("input", syncState);
+  form.addEventListener("change", syncState);
+}
+
 // Event wiring for the rendered shell
 function bindSharedDashboardEvents(
   agent,
@@ -7961,6 +8438,8 @@ function bindSharedDashboardEvents(
   const operatorTaskButtons = document.querySelectorAll("[data-update-operator-task]");
   const operatorContextForms = document.querySelectorAll("[data-operator-context-form]");
   const completeOperatorStepButtons = document.querySelectorAll("[data-complete-operator-step]");
+  const copilotTargetButtons = document.querySelectorAll("[data-copilot-open-target]");
+  const availableSections = getAvailableShellSections(operatorWorkspace);
 
   const showShellSection = (targetSection) => {
     if (!getAvailableShellSections(operatorWorkspace).includes(targetSection)) {
@@ -7976,6 +8455,27 @@ function bindSharedDashboardEvents(
     document.querySelectorAll("[data-shell-section]").forEach((section) => {
       section.hidden = section.dataset.shellSection !== targetSection;
     });
+  };
+
+  const getCopilotTargetSelector = (section, targetId) => {
+    if (!targetId) {
+      return "";
+    }
+
+    switch (section) {
+      case "customize":
+        return `#${targetId}`;
+      case "contacts":
+        return `[data-contact-card][data-contact-id="${targetId}"]`;
+      case "calendar":
+        return `[data-calendar-event-card][data-event-id="${targetId}"]`;
+      case "automations":
+        return `[data-follow-up-card][data-follow-up-id="${targetId}"]`;
+      case "analytics":
+        return `[data-action-queue-item][data-action-key="${targetId}"]`;
+      default:
+        return "";
+    }
   };
 
   const showSectionAndHighlight = (targetSection, selector) => {
@@ -8401,7 +8901,20 @@ function bindSharedDashboardEvents(
 
   settingsForms.forEach((form) => {
     form.addEventListener("submit", (event) => saveAssistant(event, agent));
+
+    if (form.dataset.formKind === "business-context") {
+      bindSimpleDirtyState(form);
+      return;
+    }
+
     bindStudioState(form, agent);
+  });
+
+  copilotTargetButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetSection = button.dataset.shellTarget || "overview";
+      showSectionAndHighlight(targetSection, getCopilotTargetSelector(targetSection, button.dataset.targetId || ""));
+    });
   });
 
   appearancePresetButtons.forEach((button) => {

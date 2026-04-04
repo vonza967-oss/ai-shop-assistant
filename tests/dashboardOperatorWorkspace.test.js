@@ -256,6 +256,15 @@ test("today copilot renders inside Today when the flag is on", () => {
       sparseData: false,
       headline: "1 thing needs attention today.",
       summary: "Copilot is summarizing stable-core data only.",
+      summaryCards: [
+        {
+          id: "what_matters",
+          label: "What matters today",
+          text: "One pricing gap needs follow-up.",
+          confidence: "high",
+          rationale: "Grounded in the action queue.",
+        },
+      ],
       answers: [
         {
           question: "What needs attention today?",
@@ -271,6 +280,9 @@ test("today copilot renders inside Today when the flag is on", () => {
           priority: "high",
           confidence: "medium",
           rationale: "Pricing intent is high-buying-intent.",
+          targetSection: "contacts",
+          targetId: "contact-1",
+          surfaceLabel: "Open Contacts",
         },
       ],
       drafts: [
@@ -280,6 +292,9 @@ test("today copilot renders inside Today when the flag is on", () => {
           body: "Hi Taylor,\n\nFollowing up on pricing.\n\nVonza Plumbing",
           channel: "email",
           confidence: "high",
+          targetSection: "automations",
+          targetId: "follow-up-1",
+          surfaceLabel: "Open Automations",
         },
       ],
       context: {
@@ -295,12 +310,83 @@ test("today copilot renders inside Today when the flag is on", () => {
         guidance: [],
       },
     },
+    businessProfile: {
+      readiness: {
+        summary: "All core business context areas are filled for Copilot.",
+        missingCount: 0,
+      },
+      prefill: {
+        available: true,
+        fieldCount: 6,
+        sourceSummary: "Suggestions are based on imported website knowledge plus current assistant contact settings.",
+      },
+    },
   });
 
   const overview = harness.buildOperatorOverviewSection({}, workspace);
   assert.match(overview, /Today Copilot/);
-  assert.match(overview, /Read-only summaries and approval-first drafts/);
+  assert.match(overview, /Operational summary/);
+  assert.match(overview, /Approval-first next moves/);
   assert.match(overview, /Draft follow-up for Taylor Reed/);
+  const customize = harness.buildCustomizePanel({}, {}, workspace);
+  assert.match(customize, /Business context setup/);
+  assert.match(customize, /Save business context/);
+});
+
+test("sparse-data copilot rendering stays honest and points back to business context setup", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+      VONZA_TODAY_COPILOT_V1_ENABLED: true,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: true,
+    featureEnabled: true,
+    copilot: {
+      enabled: true,
+      featureEnabled: true,
+      readOnly: true,
+      draftOnly: true,
+      sparseData: true,
+      headline: "Copilot sees the foundation, but not enough live operating data yet.",
+      summary: "Copilot is intentionally read-first and draft-first.",
+      summaryCards: [
+        {
+          id: "what_matters",
+          label: "What matters today",
+          text: "Stable-core activity is still sparse.",
+        },
+      ],
+      context: {
+        businessProfile: {
+          readiness: {
+            summary: "2 of 8 business context areas are filled. Missing: Pricing, Policies.",
+            missingCount: 2,
+          },
+        },
+      },
+      fallback: {
+        title: "Copilot needs a little more real operating context",
+        description: "There is not enough stable-core activity yet for strong recommendations.",
+        guidance: ["Fill the business context foundation next: Pricing, Policies."],
+      },
+    },
+    businessProfile: {
+      readiness: {
+        summary: "2 of 8 business context areas are filled. Missing: Pricing, Policies.",
+        missingCount: 2,
+      },
+      prefill: {
+        available: false,
+      },
+    },
+  });
+
+  const overview = harness.buildOperatorOverviewSection({}, workspace);
+  assert.match(overview, /Copilot needs a little more real operating context/);
+  assert.match(overview, /Open business context setup/);
 });
 
 test("launch profile keeps the stable core visible and labels Google workspace surfaces as beta", () => {

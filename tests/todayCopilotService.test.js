@@ -15,6 +15,7 @@ test("copilot feature flag off keeps the contract inert", () => {
   assert.equal(copilot.featureEnabled, false);
   assert.equal(copilot.readOnly, true);
   assert.equal(copilot.autonomousActionsEnabled, false);
+  assert.deepEqual(Array.from(copilot.summaryCards), []);
   assert.deepEqual(Array.from(copilot.answers), []);
 });
 
@@ -65,7 +66,24 @@ test("copilot produces read-only answers, recommendations, and drafts from stabl
     contacts: [
       {
         id: "contact-1",
+        displayName: "Taylor Reed",
+        lifecycleState: "active_lead",
+        hasMeaningfulOutcome: false,
         nextAction: { key: "draft_quote_follow_up" },
+      },
+      {
+        id: "contact-2",
+        displayName: "Jordan Lane",
+        lifecycleState: "complaint_risk",
+        flags: ["complaint"],
+        nextAction: {
+          key: "reply_to_complaint",
+          title: "Reply to complaint",
+          description: "A support complaint still needs review.",
+          targetSection: "contacts",
+          targetId: "contact-2",
+          actionType: "open_contact",
+        },
       },
     ],
     recentOutcomes: [
@@ -93,11 +111,17 @@ test("copilot produces read-only answers, recommendations, and drafts from stabl
   assert.equal(copilot.draftOnly, true);
   assert.equal(copilot.autonomousActionsEnabled, false);
   assert.equal(copilot.sparseData, false);
+  assert.ok(copilot.summaryCards.some((card) => card.id === "what_matters"));
   assert.ok(copilot.answers.some((answer) => answer.key === "attention_today"));
   assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "pricing_gap"));
+  assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "support_risk_review"));
+  assert.ok(copilot.recommendations.every((recommendation) => recommendation.writeBehavior === "recommendation_only"));
+  assert.ok(copilot.recommendations.some((recommendation) => recommendation.targetSection));
   assert.equal(copilot.drafts[0].approvalRequired, true);
   assert.equal(copilot.drafts[0].writeBehavior, "draft_only");
   assert.match(copilot.drafts[0].subject, /pricing/i);
+  assert.ok(copilot.drafts.some((draft) => draft.type === "task_proposal"));
+  assert.equal(copilot.recommendedNextActionId.length > 0, true);
 });
 
 test("copilot sparse-data fallback stays honest and guidance-first", () => {
@@ -133,6 +157,7 @@ test("copilot sparse-data fallback stays honest and guidance-first", () => {
   assert.match(copilot.fallback.description, /not enough stable-core activity/i);
   assert.ok(copilot.fallback.guidance.some((entry) => /Re-import website knowledge/i.test(entry)));
   assert.ok(copilot.fallback.guidance.some((entry) => /Fill the business context foundation next/i.test(entry)));
+  assert.ok(copilot.summaryCards.some((card) => card.id === "what_matters"));
 });
 
 test("empty copilot state defaults to no autonomous writes", () => {

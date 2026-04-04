@@ -4,6 +4,7 @@ const COPILOT_QUESTIONS = Object.freeze([
   "What needs attention today?",
   "Which leads need follow-up?",
   "Which contacts asked about pricing but have no outcome?",
+  "Are any complaints or support risks still open?",
   "What outcomes happened recently?",
   "What is the next best action?",
   "Summarize today's front-desk activity.",
@@ -18,6 +19,13 @@ function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function normalizeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function cleanSource(source = {}) {
+  return source && typeof source === "object" && !Array.isArray(source) ? source : {};
+}
 function createRecommendation({
   id,
   type,
@@ -27,6 +35,10 @@ function createRecommendation({
   confidence = "medium",
   rationale = "",
   source = {},
+  targetSection = "",
+  targetId = "",
+  actionType = "",
+  surfaceLabel = "",
 } = {}) {
   return {
     id: cleanText(id),
@@ -36,7 +48,11 @@ function createRecommendation({
     priority: cleanText(priority) || "medium",
     confidence: cleanText(confidence) || "medium",
     rationale: cleanText(rationale),
-    source: source && typeof source === "object" && !Array.isArray(source) ? source : {},
+    source: cleanSource(source),
+    targetSection: cleanText(targetSection),
+    targetId: cleanText(targetId),
+    actionType: cleanText(actionType),
+    surfaceLabel: cleanText(surfaceLabel),
     approvalRequired: true,
     writeBehavior: "recommendation_only",
   };
@@ -52,6 +68,11 @@ function createDraft({
   confidence = "medium",
   rationale = "",
   source = {},
+  targetSection = "",
+  targetId = "",
+  actionType = "",
+  surfaceLabel = "",
+  structuredPayload = {},
 } = {}) {
   return {
     id: cleanText(id),
@@ -62,7 +83,15 @@ function createDraft({
     body: cleanText(body),
     confidence: cleanText(confidence) || "medium",
     rationale: cleanText(rationale),
-    source: source && typeof source === "object" && !Array.isArray(source) ? source : {},
+    source: cleanSource(source),
+    targetSection: cleanText(targetSection),
+    targetId: cleanText(targetId),
+    actionType: cleanText(actionType),
+    surfaceLabel: cleanText(surfaceLabel),
+    structuredPayload:
+      structuredPayload && typeof structuredPayload === "object" && !Array.isArray(structuredPayload)
+        ? structuredPayload
+        : {},
     approvalRequired: true,
     writeBehavior: "draft_only",
   };
@@ -88,8 +117,27 @@ function createAnswer({
   };
 }
 
+function createSummaryCard({
+  id,
+  label,
+  text,
+  confidence = "medium",
+  rationale = "",
+  recommendationIds = [],
+  draftIds = [],
+} = {}) {
+  return {
+    id: cleanText(id),
+    label: cleanText(label),
+    text: cleanText(text),
+    confidence: cleanText(confidence) || "medium",
+    rationale: cleanText(rationale),
+    recommendationIds: recommendationIds.map((value) => cleanText(value)).filter(Boolean),
+    draftIds: draftIds.map((value) => cleanText(value)).filter(Boolean),
+  };
+}
+
 function buildFallbackGuidance({
-  agent = {},
   businessProfile = {},
   websiteReady = false,
   installLive = false,
@@ -118,7 +166,7 @@ function buildFallbackGuidance({
 function buildGeneratedDraft(contact = {}, options = {}) {
   const businessName = cleanText(options.businessName) || "the business";
   const assistantName = cleanText(options.assistantName) || businessName;
-  const topic = cleanText(contact.topic || contact.intentLabel || "your request");
+  const topic = cleanText(contact.topic || "your request");
   const contactName = cleanText(contact.contactName);
   const greeting = contactName ? `Hi ${contactName},` : "Hi there,";
 
@@ -139,6 +187,10 @@ function buildGeneratedDraft(contact = {}, options = {}) {
     ].join("\n"),
     confidence: "medium",
     rationale: cleanText(options.rationale) || "No stored follow-up draft existed, so Copilot prepared a deterministic approval-first draft from the latest stable-core context.",
+    targetSection: cleanText(options.targetSection) || "automations",
+    targetId: cleanText(options.targetId),
+    actionType: cleanText(options.actionType) || "draft_follow_up",
+    surfaceLabel: cleanText(options.surfaceLabel) || "Open Automations",
     source: {
       contactId: cleanText(contact.contactId),
       actionKey: cleanText(contact.actionKey),
@@ -149,6 +201,173 @@ function buildGeneratedDraft(contact = {}, options = {}) {
 function isPricingAction(item = {}) {
   const actionType = cleanText(item.actionType || item.type);
   return actionType === "pricing_interest" || actionType === "pricing";
+}
+
+function findComplaintRiskContact(contacts = []) {
+  return contacts.find((contact) =>
+    ["complaint_risk", "support_issue"].includes(cleanText(contact.lifecycleState))
+    || normalizeArray(contact.flags).includes("complaint")
+  ) || null;
+}
+
+function findLeadContact(contacts = []) {
+  return contacts.find((contact) =>
+    ["active_lead", "qualified", "new"].includes(cleanText(contact.lifecycleState))
+    && cleanText(contact.nextAction?.key) !== "no_action_needed"
+  ) || null;
+}
+
+function findOutcomeReviewContact(contacts = []) {
+  return contacts.find((contact) =>
+    ["active_lead", "qualified", "customer"].includes(cleanText(contact.lifecycleState))
+    && contact.hasMeaningfulOutcome !== true
+  ) || null;
+}
+
+function buildSupportRiskRecommendation(contact = {}) {
+  if (!contact?.id) {
+    return null;
+  }
+
+  return createRecommendation({
+    id: `contact-risk:${cleanText(contact.id)}`,
+    type: "support_risk_review",
+    title: cleanText(contact.nextAction?.title) || "Review complaint or support risk",
+    summary:
+      cleanText(contact.nextAction?.description)
+      || cleanText(contact.latestOutcome?.label)
+      || "A complaint-risk or support issue contact still needs owner review.",
+    priority: "high",
+    confidence: "high",
+    rationale: "Complaint and support risk should be surfaced before lower-signal follow-up work.",
+    source: {
+      contactId: cleanText(contact.id),
+      lifecycleState: cleanText(contact.lifecycleState),
+      taskIds: normalizeArray(contact.related?.taskIds),
+    },
+    targetSection: cleanText(contact.nextAction?.targetSection) || "contacts",
+    targetId: cleanText(contact.nextAction?.targetId || contact.id),
+    actionType: cleanText(contact.nextAction?.actionType) || "open_contact",
+    surfaceLabel: "Open Contacts",
+  });
+}
+
+function buildContactNextStepRecommendation(contact = {}) {
+  if (!contact?.id) {
+    return null;
+  }
+
+  return createRecommendation({
+    id: `contact-next-step:${cleanText(contact.id)}`,
+    type: "contact_next_step",
+    title: cleanText(contact.nextAction?.title) || "Review contact next step",
+    summary:
+      cleanText(contact.nextAction?.description)
+      || "A lead still needs a concrete next step routed through the current workflow surfaces.",
+    priority: "high",
+    confidence: "high",
+    rationale: "Contacts already carry deterministic next actions, so Copilot should point the owner back to that workflow instead of inventing a new one.",
+    source: {
+      contactId: cleanText(contact.id),
+      lifecycleState: cleanText(contact.lifecycleState),
+    },
+    targetSection: cleanText(contact.nextAction?.targetSection) || "contacts",
+    targetId: cleanText(contact.nextAction?.targetId || contact.id),
+    actionType: cleanText(contact.nextAction?.actionType) || "open_contact",
+    surfaceLabel: "Open Contacts",
+  });
+}
+
+function buildOutcomeReviewRecommendation(contact = {}) {
+  if (!contact?.id) {
+    return null;
+  }
+
+  return createRecommendation({
+    id: `outcome-review:${cleanText(contact.id)}`,
+    type: "outcome_review",
+    title: "Review whether this contact reached a real outcome",
+    summary:
+      cleanText(contact.displayName || contact.primaryEmail || contact.primaryPhone)
+      ? `${cleanText(contact.displayName || contact.primaryEmail || contact.primaryPhone)} still shows intent without a recorded result.`
+      : "A contact still shows intent without a recorded result.",
+    priority: "medium",
+    confidence: "medium",
+    rationale: "Outcome review keeps Contacts and Outcomes grounded when activity exists but no final result has been recorded yet.",
+    source: {
+      contactId: cleanText(contact.id),
+    },
+    targetSection: "contacts",
+    targetId: cleanText(contact.id),
+    actionType: "open_contact",
+    surfaceLabel: "Open Contacts",
+  });
+}
+
+function buildTaskProposal(topRecommendation = null) {
+  if (!topRecommendation) {
+    return null;
+  }
+
+  return createDraft({
+    id: `task-proposal:${cleanText(topRecommendation.id)}`,
+    type: "task_proposal",
+    title: "Task proposal for the owner queue",
+    channel: "internal",
+    subject: cleanText(topRecommendation.title) || "Review the next owner task",
+    body: [
+      `Suggested task: ${cleanText(topRecommendation.title || "Review the next owner task")}`,
+      cleanText(topRecommendation.summary) ? `Why now: ${cleanText(topRecommendation.summary)}` : "",
+      cleanText(topRecommendation.surfaceLabel) ? `Best surface: ${cleanText(topRecommendation.surfaceLabel)}` : "",
+      "This is a proposal only. Use the existing deterministic workflow to create or resolve the real task.",
+    ].filter(Boolean).join("\n"),
+    confidence: cleanText(topRecommendation.confidence) || "medium",
+    rationale: "Copilot is preparing a task recommendation only; it is not creating tasks directly.",
+    targetSection: cleanText(topRecommendation.targetSection),
+    targetId: cleanText(topRecommendation.targetId),
+    actionType: cleanText(topRecommendation.actionType),
+    surfaceLabel: cleanText(topRecommendation.surfaceLabel),
+    source: {
+      recommendationId: cleanText(topRecommendation.id),
+    },
+    structuredPayload: {
+      title: cleanText(topRecommendation.title),
+      summary: cleanText(topRecommendation.summary),
+    },
+  });
+}
+
+function buildOutcomeReviewProposal(contact = {}) {
+  if (!contact?.id) {
+    return null;
+  }
+
+  return createDraft({
+    id: `outcome-proposal:${cleanText(contact.id)}`,
+    type: "outcome_review_proposal",
+    title: "Outcome review suggestion",
+    channel: "internal",
+    subject: "Review contact outcome",
+    body: [
+      `Contact: ${cleanText(contact.displayName || contact.primaryEmail || contact.primaryPhone || "Unlabeled contact")}`,
+      `Current state: ${cleanText(contact.lifecycleState || "active")}`,
+      "Suggested review: Confirm whether a booking, quote, follow-up reply, or complaint resolution should be recorded.",
+      "This proposal does not mark the outcome. Use the current deterministic workflow if a real result is confirmed.",
+    ].join("\n"),
+    confidence: "medium",
+    rationale: "Copilot can prepare the review path, but owner confirmation still decides whether any deterministic outcome service should run.",
+    targetSection: "contacts",
+    targetId: cleanText(contact.id),
+    actionType: "open_contact",
+    surfaceLabel: "Open Contacts",
+    source: {
+      contactId: cleanText(contact.id),
+    },
+    structuredPayload: {
+      contactId: cleanText(contact.id),
+      requestedReview: "outcome_confirmation",
+    },
+  });
 }
 
 export function createEmptyTodayCopilotState({ featureEnabled = false } = {}) {
@@ -163,6 +382,8 @@ export function createEmptyTodayCopilotState({ featureEnabled = false } = {}) {
     headline: "Copilot is waiting for stable-core activity.",
     summary: "Today stays fully usable without Copilot. When stable-core data shows up, Copilot will summarize it here without taking external actions on its own.",
     questions: [...COPILOT_QUESTIONS],
+    summaryCards: [],
+    recommendedNextActionId: "",
     context: {
       agentId: "",
       businessId: "",
@@ -207,13 +428,13 @@ export function buildTodayCopilotSnapshot(options = {}) {
   const agent = options.agent || {};
   const actionQueue = options.actionQueue || {};
   const businessProfile = options.businessProfile || { readiness: { missingSections: [] } };
-  const messages = Array.isArray(options.messages) ? options.messages : [];
-  const contacts = Array.isArray(options.contacts) ? options.contacts : [];
-  const followUps = Array.isArray(options.followUps) ? options.followUps : [];
-  const knowledgeFixes = Array.isArray(options.knowledgeFixes) ? options.knowledgeFixes : [];
-  const routingEvents = Array.isArray(options.routingEvents) ? options.routingEvents : [];
-  const recentOutcomes = Array.isArray(options.recentOutcomes) ? options.recentOutcomes : [];
-  const queueItems = Array.isArray(actionQueue.items) ? actionQueue.items : [];
+  const messages = normalizeArray(options.messages);
+  const contacts = normalizeArray(options.contacts);
+  const followUps = normalizeArray(options.followUps);
+  const knowledgeFixes = normalizeArray(options.knowledgeFixes);
+  const routingEvents = normalizeArray(options.routingEvents);
+  const recentOutcomes = normalizeArray(options.recentOutcomes);
+  const queueItems = normalizeArray(actionQueue.items);
   const attentionQueueItems = queueItems.filter((item) => item.ownerWorkflow?.attention === true);
   const followUpCandidates = followUps.filter((workflow) =>
     ["ready", "draft", "missing_contact"].includes(cleanText(workflow.status))
@@ -225,6 +446,14 @@ export function buildTodayCopilotSnapshot(options = {}) {
     isPricingAction(item)
     && Number(item.outcomes?.count || 0) === 0
     && !["done", "dismissed"].includes(cleanText(item.status))
+  );
+  const complaintRiskContacts = contacts.filter((contact) =>
+    ["complaint_risk", "support_issue"].includes(cleanText(contact.lifecycleState))
+    || normalizeArray(contact.flags).includes("complaint")
+  );
+  const leadsNeedingFollowUp = contacts.filter((contact) =>
+    ["active_lead", "qualified", "new"].includes(cleanText(contact.lifecycleState))
+    && cleanText(contact.nextAction?.key) !== "no_action_needed"
   );
   const contactsNeedingAttention = contacts.filter((contact) =>
     cleanText(contact.nextAction?.key) && cleanText(contact.nextAction?.key) !== "no_action_needed"
@@ -243,11 +472,17 @@ export function buildTodayCopilotSnapshot(options = {}) {
     recentOutcomes.length,
     routingEvents.length,
   ].every((count) => count === 0);
-  const loadWarnings = Array.isArray(options.loadWarnings)
-    ? options.loadWarnings.map((value) => cleanText(value)).filter(Boolean)
-    : [];
+  const loadWarnings = normalizeArray(options.loadWarnings).map((value) => cleanText(value)).filter(Boolean);
+
+  const topComplaintRiskContact = findComplaintRiskContact(contacts);
+  const topLeadContact = findLeadContact(contacts);
+  const topOutcomeReviewContact = findOutcomeReviewContact(contacts);
 
   const recommendations = [];
+  const supportRiskRecommendation = buildSupportRiskRecommendation(topComplaintRiskContact);
+  if (supportRiskRecommendation) {
+    recommendations.push(supportRiskRecommendation);
+  }
 
   if (attentionQueueItems[0]) {
     const item = attentionQueueItems[0];
@@ -262,6 +497,10 @@ export function buildTodayCopilotSnapshot(options = {}) {
       source: {
         actionKey: cleanText(item.key),
       },
+      targetSection: "analytics",
+      targetId: cleanText(item.key),
+      actionType: "open_action_queue",
+      surfaceLabel: "Open Outcomes",
     }));
   }
 
@@ -278,7 +517,16 @@ export function buildTodayCopilotSnapshot(options = {}) {
       source: {
         actionKey: cleanText(item.key),
       },
+      targetSection: cleanText(topLeadContact?.nextAction?.targetSection) || "contacts",
+      targetId: cleanText(topLeadContact?.id || item.key),
+      actionType: cleanText(topLeadContact?.nextAction?.actionType) || "open_contact",
+      surfaceLabel: topLeadContact ? "Open Contacts" : "Open Outcomes",
     }));
+  }
+
+  const contactNextStepRecommendation = buildContactNextStepRecommendation(topLeadContact);
+  if (contactNextStepRecommendation) {
+    recommendations.push(contactNextStepRecommendation);
   }
 
   if (knowledgeFixCandidates[0]) {
@@ -295,7 +543,16 @@ export function buildTodayCopilotSnapshot(options = {}) {
         knowledgeFixId: cleanText(workflow.id),
         actionKey: cleanText(workflow.sourceActionKey),
       },
+      targetSection: "analytics",
+      targetId: cleanText(workflow.sourceActionKey || workflow.id),
+      actionType: "open_action_queue",
+      surfaceLabel: "Open Outcomes",
     }));
+  }
+
+  const outcomeReviewRecommendation = buildOutcomeReviewRecommendation(topOutcomeReviewContact);
+  if (outcomeReviewRecommendation) {
+    recommendations.push(outcomeReviewRecommendation);
   }
 
   if ((businessProfile.readiness?.missingSections || []).length) {
@@ -303,13 +560,17 @@ export function buildTodayCopilotSnapshot(options = {}) {
       id: "business-context:foundation",
       type: "business_context",
       title: "Fill the missing business context foundation",
-      summary: businessProfile.readiness.summary,
+      summary: cleanText(businessProfile.readiness.summary),
       priority: sparseData ? "medium" : "low",
       confidence: "high",
       rationale: "Copilot can stay useful with sparse data, but services, pricing, policies, and hours make follow-up drafts and recommendations more grounded.",
       source: {
         missingSections: businessProfile.readiness.missingSections || [],
       },
+      targetSection: "customize",
+      targetId: "business-context-setup",
+      actionType: "open_business_context",
+      surfaceLabel: "Open Customize",
     }));
   }
 
@@ -328,6 +589,10 @@ export function buildTodayCopilotSnapshot(options = {}) {
       body: cleanText(storedDraft.draftContent),
       confidence: "high",
       rationale: cleanText(storedDraft.whyPrepared) || "Vonza already prepared this deterministic follow-up from stable-core lead and queue data.",
+      targetSection: "automations",
+      targetId: cleanText(storedDraft.id),
+      actionType: "open_follow_up",
+      surfaceLabel: "Open Automations",
       source: {
         followUpId: cleanText(storedDraft.id),
         contactId: cleanText(storedDraft.contactId),
@@ -349,24 +614,100 @@ export function buildTodayCopilotSnapshot(options = {}) {
         ? `Draft follow-up for ${cleanText(attentionQueueItems[0].contactInfo?.name)}`
         : "Draft follow-up from the top queue item",
       rationale: "Copilot used the top stable-core queue item to draft a follow-up, but it still requires owner approval before any send.",
+      targetSection: "analytics",
+      targetId: cleanText(attentionQueueItems[0].key),
+      actionType: "open_action_queue",
+      surfaceLabel: "Open Outcomes",
     }));
   }
 
   const topRecommendation = recommendations[0] || null;
+  const taskProposal = buildTaskProposal(topRecommendation);
+  if (taskProposal) {
+    drafts.push(taskProposal);
+  }
+
+  const outcomeReviewProposal = buildOutcomeReviewProposal(topOutcomeReviewContact);
+  if (outcomeReviewProposal) {
+    drafts.push(outcomeReviewProposal);
+  }
+
   const topDraft = drafts[0] || null;
+  const summaryCards = [
+    createSummaryCard({
+      id: "what_matters",
+      label: "What matters today",
+      text: sparseData
+        ? "Stable-core activity is still sparse, so there is not enough live work to rank yet."
+        : cleanText(topRecommendation?.summary) || "Today looks steady across the current stable core.",
+      confidence: sparseData ? "low" : "high",
+      rationale: sparseData
+        ? "Copilot only has setup-level context so far."
+        : "This summary is grounded in the action queue, contacts, follow-up workflows, and outcomes.",
+      recommendationIds: topRecommendation ? [topRecommendation.id] : [],
+    }),
+    createSummaryCard({
+      id: "lead_follow_up",
+      label: "Leads needing follow-up",
+      text: followUpCandidates.length
+        ? `${pluralize(followUpCandidates.length, "follow-up workflow")} are already open for review.`
+        : leadsNeedingFollowUp.length
+          ? `${pluralize(leadsNeedingFollowUp.length, "lead")} still need a concrete next step.`
+          : "No lead currently stands out as needing a fresh follow-up.",
+      confidence: followUpCandidates.length ? "high" : "medium",
+      rationale: "This is based on stored follow-up workflows plus deterministic contact next actions.",
+      recommendationIds: recommendations
+        .filter((entry) => ["contact_next_step", "pricing_gap"].includes(entry.type))
+        .map((entry) => entry.id),
+    }),
+    createSummaryCard({
+      id: "pricing_or_booking_interest",
+      label: "Pricing or booking interest",
+      text: pricingWithoutOutcomeItems.length
+        ? `${pluralize(pricingWithoutOutcomeItems.length, "pricing conversation")} still has intent without a recorded outcome.`
+        : "Copilot does not currently see a pricing or booking intent gap that lacks a recorded result.",
+      confidence: "medium",
+      rationale: "This summary comes from pricing-interest queue items and contact progression state.",
+      recommendationIds: recommendations
+        .filter((entry) => ["pricing_gap", "outcome_review"].includes(entry.type))
+        .map((entry) => entry.id),
+    }),
+    createSummaryCard({
+      id: "support_or_complaint_risk",
+      label: "Support or complaint risk",
+      text: complaintRiskContacts.length
+        ? `${pluralize(complaintRiskContacts.length, "contact")} still shows complaint or support risk.`
+        : "No unresolved complaint or support risk is visible in the stable core right now.",
+      confidence: complaintRiskContacts.length ? "high" : "medium",
+      rationale: "Complaint and support risk is drawn from deterministic contact lifecycle and task signals.",
+      recommendationIds: recommendations
+        .filter((entry) => entry.type === "support_risk_review")
+        .map((entry) => entry.id),
+    }),
+    createSummaryCard({
+      id: "recent_outcomes",
+      label: "Recent outcomes",
+      text: recentOutcomes.length
+        ? `${pluralize(recentOutcomes.length, "recent outcome")} were recorded. Latest: ${cleanText(recentOutcomes[0].label || recentOutcomes[0].outcomeType)}.`
+        : "No recent outcome is recorded yet across the stable core.",
+      confidence: recentOutcomes.length ? "high" : "medium",
+      rationale: "This is pulled from recorded outcomes rather than inferred from conversation text.",
+    }),
+  ];
+
   const answers = [
     createAnswer({
       key: "attention_today",
       question: COPILOT_QUESTIONS[0],
       answer: sparseData
         ? "Stable-core activity is still sparse, so there is nothing urgent to rank yet."
-        : attentionQueueItems.length
-          ? `${pluralize(attentionQueueItems.length, "item")} need attention today. ${topRecommendation?.title || "Start with the top queue item."}`
+        : recommendations.length
+          ? `${pluralize(recommendations.length, "recommendation")} stand out. ${cleanText(topRecommendation?.title || "Start with the top recommendation.")}`
           : "Nothing in stable-core data is currently marked urgent. Today looks steady.",
       confidence: sparseData ? "low" : "high",
       rationale: sparseData
         ? "Copilot only has setup-level context so far."
-        : "This answer is grounded in the action queue, contact attention state, and open follow-up work.",
+        : "This answer is grounded in recommendations built from contacts, queue, follow-up work, and outcomes.",
       recommendationIds: topRecommendation ? [topRecommendation.id] : [],
     }),
     createAnswer({
@@ -380,7 +721,7 @@ export function buildTodayCopilotSnapshot(options = {}) {
       confidence: followUpCandidates.length ? "high" : "medium",
       rationale: "Copilot is checking stored follow-up workflows first, then falling back to contact next-action signals.",
       recommendationIds: recommendations
-        .filter((entry) => ["attention_item", "pricing_gap"].includes(entry.type))
+        .filter((entry) => ["contact_next_step", "pricing_gap"].includes(entry.type))
         .map((entry) => entry.id),
     }),
     createAnswer({
@@ -389,15 +730,27 @@ export function buildTodayCopilotSnapshot(options = {}) {
       answer: pricingWithoutOutcomeItems.length
         ? `${pluralize(pricingWithoutOutcomeItems.length, "pricing conversation")} still has interest but no recorded outcome.`
         : "Copilot does not currently see an open pricing-without-outcome gap in stable-core data.",
-      confidence: pricingWithoutOutcomeItems.length ? "medium" : "medium",
+      confidence: "medium",
       rationale: "This answer is based on pricing-interest queue items that still have no linked outcome.",
       recommendationIds: recommendations
         .filter((entry) => entry.type === "pricing_gap")
         .map((entry) => entry.id),
     }),
     createAnswer({
-      key: "recent_outcomes",
+      key: "support_risk",
       question: COPILOT_QUESTIONS[3],
+      answer: complaintRiskContacts.length
+        ? `${pluralize(complaintRiskContacts.length, "contact")} still shows complaint or support risk and should be reviewed before it goes stale.`
+        : "Copilot does not currently see an unresolved complaint or support risk in the stable core.",
+      confidence: complaintRiskContacts.length ? "high" : "medium",
+      rationale: "This answer uses deterministic complaint-risk and support-state signals from Contacts and operator tasks.",
+      recommendationIds: recommendations
+        .filter((entry) => entry.type === "support_risk_review")
+        .map((entry) => entry.id),
+    }),
+    createAnswer({
+      key: "recent_outcomes",
+      question: COPILOT_QUESTIONS[4],
       answer: recentOutcomes.length
         ? `${pluralize(recentOutcomes.length, "recent outcome")} were recorded. Latest: ${cleanText(recentOutcomes[0].label || recentOutcomes[0].outcomeType)}.`
         : "No recent outcome is recorded yet across the stable core.",
@@ -406,15 +759,15 @@ export function buildTodayCopilotSnapshot(options = {}) {
     }),
     createAnswer({
       key: "next_best_action",
-      question: COPILOT_QUESTIONS[4],
-      answer: topRecommendation?.title || "Copilot does not see a stronger next action than staying on top of Today right now.",
-      confidence: topRecommendation ? topRecommendation.confidence : "low",
-      rationale: topRecommendation?.rationale || "There is not enough stable-core urgency to rank a stronger recommendation.",
+      question: COPILOT_QUESTIONS[5],
+      answer: cleanText(topRecommendation?.title) || "Copilot does not see a stronger next action than staying on top of Today right now.",
+      confidence: cleanText(topRecommendation?.confidence) || "low",
+      rationale: cleanText(topRecommendation?.rationale) || "There is not enough stable-core urgency to rank a stronger recommendation.",
       recommendationIds: topRecommendation ? [topRecommendation.id] : [],
     }),
     createAnswer({
       key: "front_desk_activity",
-      question: COPILOT_QUESTIONS[5],
+      question: COPILOT_QUESTIONS[6],
       answer: sparseData
         ? "The front desk is still mostly in setup mode, so Copilot only sees sparse stable-core activity."
         : `${pluralize(todaysMessages.length, "message")} arrived today. Website knowledge is ${websiteReady ? "ready" : "still limited"}, the widget is ${installLive ? "live or recently detected" : "not yet confirmed live"}, and ${pluralize(routingEvents.length, "routing event")} have been recorded.`,
@@ -423,12 +776,12 @@ export function buildTodayCopilotSnapshot(options = {}) {
     }),
     createAnswer({
       key: "draft_follow_up",
-      question: COPILOT_QUESTIONS[6],
+      question: COPILOT_QUESTIONS[7],
       answer: topDraft
         ? `${topDraft.title} is ready in draft-only mode and still requires owner approval before any send.`
         : "There is not enough stable-core contact context yet to prepare a safe follow-up draft.",
-      confidence: topDraft ? topDraft.confidence : "low",
-      rationale: topDraft?.rationale || "Copilot only drafts when there is a stored follow-up or enough contact context to keep the draft grounded.",
+      confidence: cleanText(topDraft?.confidence) || "low",
+      rationale: cleanText(topDraft?.rationale) || "Copilot only drafts when there is a stored follow-up or enough contact context to keep the draft grounded.",
       draftIds: topDraft ? [topDraft.id] : [],
     }),
   ];
@@ -443,13 +796,15 @@ export function buildTodayCopilotSnapshot(options = {}) {
     generatedAt: nowIso,
     headline: sparseData
       ? "Copilot sees the foundation, but not enough live operating data yet."
-      : attentionQueueItems.length
-        ? `${pluralize(attentionQueueItems.length, "thing")} need attention today.`
+      : cleanText(topRecommendation?.title)
+        ? `${cleanText(topRecommendation.title)} is the clearest next move.`
         : "Today looks stable across the current core.",
     summary: sparseData
       ? "Copilot is intentionally read-first and draft-first. It will stay conservative until stable-core activity gives it something real to summarize."
-      : "Copilot is summarizing stable-core data only: front desk activity, website knowledge, install telemetry, contacts, outcomes, follow-up workflows, action queue, and knowledge-fix context.",
+      : `${cleanText(topRecommendation?.summary || "Copilot is summarizing stable-core data only.")} It is staying inside front desk activity, contacts, outcomes, follow-up workflows, action queue, and knowledge-fix context.`,
     questions: [...COPILOT_QUESTIONS],
+    summaryCards,
+    recommendedNextActionId: cleanText(topRecommendation?.id),
     context: {
       agentId: cleanText(agent.id),
       businessId: cleanText(agent.businessId),
@@ -477,7 +832,6 @@ export function buildTodayCopilotSnapshot(options = {}) {
         ? "There is not enough stable-core activity yet for strong recommendations."
         : "If one data source is sparse or missing, Copilot falls back to the remaining stable-core context instead of hallucinating certainty.",
       guidance: buildFallbackGuidance({
-        agent,
         businessProfile,
         websiteReady,
         installLive,

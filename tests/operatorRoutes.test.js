@@ -90,6 +90,50 @@ function buildRouteDeps(overrides = {}) {
       summary: { inboxNeedingAttention: 1 },
       briefing: { text: "Review today." },
       nextAction: { key: "review_inbox", title: "Review inbox" },
+      businessProfile: {
+        id: "profile-1",
+        businessSummary: "Emergency plumbing and installs.",
+        readiness: {
+          totalSections: 8,
+          completedSections: 6,
+          missingCount: 2,
+          missingSections: ["Policies", "Operating hours"],
+          summary: "6 of 8 business context areas are filled. Missing: Policies, Operating hours.",
+        },
+      },
+    }),
+    getOperatorBusinessProfile: async () => ({
+      id: "profile-1",
+      businessSummary: "Emergency plumbing and installs.",
+      services: [{ name: "Emergency plumbing" }],
+      pricing: [{ label: "Diagnostics", amount: "$149" }],
+      approvedContactChannels: ["website_chat", "email"],
+      approvalPreferences: {
+        followUpDrafts: "owner_required",
+        contactNextSteps: "owner_required",
+      },
+      readiness: {
+        totalSections: 8,
+        completedSections: 6,
+        missingCount: 2,
+        missingSections: ["Policies", "Operating hours"],
+        summary: "6 of 8 business context areas are filled. Missing: Policies, Operating hours.",
+      },
+    }),
+    upsertOperatorBusinessProfile: async (_supabase, { profile }) => ({
+      id: "profile-1",
+      ...profile,
+      readiness: {
+        totalSections: 8,
+        completedSections: 8,
+        missingCount: 0,
+        missingSections: [],
+        summary: "All core business context areas are filled for Copilot.",
+      },
+    }),
+    getStoredWebsiteContent: async () => ({
+      businessId: "business-1",
+      content: "Emergency plumbing\nPricing starts at $149\nMon-Fri | 9am-5pm",
     }),
     draftInboxReply: async () => ({
       draft: { id: "draft-1", subject: "Re: Hello" },
@@ -169,6 +213,41 @@ test("operator workspace route exposes inbox, calendar, and automations surfaces
     assert.equal(response.json.automations.tasks[0].id, "task-1");
     assert.equal(response.json.contacts.list[0].id, "contact-1");
     assert.equal(response.json.nextAction.key, "review_inbox");
+    assert.equal(response.json.businessProfile.id, "profile-1");
+  } finally {
+    await server.close();
+  }
+});
+
+test("business profile routes stay owner-scoped and return hydrated context", async () => {
+  const server = await startServer(createApp(buildRouteDeps()));
+
+  try {
+    const getResponse = await requestJson(server.baseUrl, "/agents/operator/business-profile?agent_id=agent-1");
+    assert.equal(getResponse.status, 200);
+    assert.equal(getResponse.json.profile.id, "profile-1");
+    assert.equal(getResponse.json.profile.prefill.available, true);
+
+    const postResponse = await requestJson(server.baseUrl, "/agents/operator/business-profile", {
+      method: "POST",
+      body: JSON.stringify({
+        agent_id: "agent-1",
+        profile: {
+          businessSummary: "Emergency plumbing and water heater installs.",
+          services: [{ name: "Water heater install" }],
+          approvedContactChannels: ["website_chat", "phone"],
+          approvalPreferences: {
+            followUpDrafts: "owner_required",
+            contactNextSteps: "recommend_only",
+          },
+        },
+      }),
+    });
+
+    assert.equal(postResponse.status, 200);
+    assert.equal(postResponse.json.ok, true);
+    assert.equal(postResponse.json.profile.businessSummary, "Emergency plumbing and water heater installs.");
+    assert.equal(postResponse.json.profile.prefill.available, true);
   } finally {
     await server.close();
   }

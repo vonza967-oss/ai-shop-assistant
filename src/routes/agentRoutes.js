@@ -88,6 +88,12 @@ import {
 } from "../services/operator/operatorWorkspaceService.js";
 import { updateOperatorOnboardingState } from "../services/operator/operatorActivationService.js";
 import { updateOperatorContactLifecycleState } from "../services/operator/contactWorkspaceService.js";
+import {
+  attachBusinessProfilePrefill,
+  getOperatorBusinessProfile,
+  upsertOperatorBusinessProfile,
+} from "../services/operator/operatorBusinessProfileService.js";
+import { cleanText } from "../utils/text.js";
 
 function expandGroupedFollowUpItems(queue = {}) {
   const items = Array.isArray(queue.items) ? queue.items : [];
@@ -216,6 +222,10 @@ export function createAgentRouter(deps = {}) {
     deps.updateOperatorContactLifecycleState || updateOperatorContactLifecycleState;
   const updateOperatorOnboardingStateImpl =
     deps.updateOperatorOnboardingState || updateOperatorOnboardingState;
+  const getOperatorBusinessProfileImpl =
+    deps.getOperatorBusinessProfile || getOperatorBusinessProfile;
+  const upsertOperatorBusinessProfileImpl =
+    deps.upsertOperatorBusinessProfile || upsertOperatorBusinessProfile;
   const getAdminToken = (req) => req.query.token || req.headers["x-admin-token"];
 
   function getCheckoutDraftBusinessName(user) {
@@ -650,6 +660,78 @@ export function createAgentRouter(deps = {}) {
       });
 
       res.json(result);
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.get("/agents/operator/business-profile", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req);
+      const agentId = req.query.agent_id || req.query.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        clientId: req.query.client_id || req.query.clientId,
+      });
+
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+      const profile = await getOperatorBusinessProfileImpl(supabase, {
+        agent,
+        ownerUserId: user.id,
+      });
+      const websiteContent = cleanText(agent.businessId)
+        ? await getStoredWebsiteContentImpl(supabase, agent.businessId)
+        : null;
+
+      res.json({
+        profile: attachBusinessProfilePrefill(profile, {
+          agent,
+          websiteContent,
+        }),
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({
+        error: err.message || "Something went wrong",
+      });
+    }
+  });
+
+  router.post("/agents/operator/business-profile", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      const user = await authenticateUser(supabase, req);
+      const agentId = req.body.agent_id || req.body.agentId;
+
+      await requireActiveAgentAccessImpl(supabase, {
+        agentId,
+        ownerUserId: user.id,
+        clientId: req.body.client_id || req.body.clientId,
+      });
+
+      const agent = await getAgentWorkspaceSnapshotImpl(supabase, agentId);
+      const profile = await upsertOperatorBusinessProfileImpl(supabase, {
+        agent,
+        ownerUserId: user.id,
+        profile: req.body.profile || req.body,
+      });
+      const websiteContent = cleanText(agent.businessId)
+        ? await getStoredWebsiteContentImpl(supabase, agent.businessId)
+        : null;
+
+      res.json({
+        ok: true,
+        profile: attachBusinessProfilePrefill(profile, {
+          agent,
+          websiteContent,
+        }),
+      });
     } catch (err) {
       console.error(err);
       res.status(err.statusCode || 500).json({

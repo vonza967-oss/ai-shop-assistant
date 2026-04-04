@@ -21,6 +21,7 @@ const BUSINESS_PROFILE_SELECT = [
 
 const DEFAULT_APPROVAL_PREFERENCES = Object.freeze({
   followUpDrafts: "owner_required",
+  contactNextSteps: "owner_required",
   outcomeRecommendations: "owner_required",
   taskRecommendations: "owner_required",
   profileChanges: "owner_required",
@@ -36,6 +37,41 @@ const READINESS_SECTIONS = Object.freeze([
   { key: "approved_contact_channels", label: "Approved contact channels" },
   { key: "approval_preferences", label: "Approval preferences" },
 ]);
+
+const LIMITED_CONTENT_MARKER = "Limited content available. This assistant may give general answers.";
+const SERVICE_HINT_PATTERN =
+  /\b(service|services|repair|install|installation|maintenance|consultation|support|cleaning|inspection|emergency|remodel|design|replacement|treatment|therapy|coaching|training)\b/i;
+const PRICING_HINT_PATTERN =
+  /(\$[\d,.]+|\bprice\b|\bpricing\b|\bcost\b|\bquote\b|\bestimate\b|\bstarting at\b|\bfrom\b|\bper (hour|visit|month|session)\b)/i;
+const POLICY_HINT_PATTERN =
+  /\b(policy|policies|cancel|cancellation|refund|deposit|warranty|guarantee|insured|license|licensed|payment|terms|reschedul|notice|minimum)\b/i;
+const AREA_HINT_PATTERN =
+  /\b(serving|service area|service areas|locations?|county|cities|city|town|neighborhood|region|metro|travel)\b/i;
+const HOURS_HINT_PATTERN =
+  /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday|hours|open|closed|24\/7)\b/i;
+const TIME_HINT_PATTERN = /\b(\d{1,2}(:\d{2})?\s?(am|pm)|24\/7|noon|midnight)\b/i;
+
+function createEmptyBusinessProfilePrefill() {
+  return {
+    available: false,
+    fieldCount: 0,
+    sourceSummary: "",
+    reviewRequired: true,
+    suggestions: {
+      businessSummary: {
+        value: "",
+        source: "",
+      },
+      services: [],
+      pricing: [],
+      policies: [],
+      serviceAreas: [],
+      operatingHours: [],
+      approvedContactChannels: [],
+      approvalPreferences: normalizeApprovalPreferences({}),
+    },
+  };
+}
 
 function isMissingRelationError(error, relationName = "") {
   const message = cleanText(error?.message || "").toLowerCase();
@@ -71,6 +107,299 @@ function normalizeApprovalPreferences(value) {
     ...Object.fromEntries(
       Object.entries(source).map(([key, entry]) => [key, cleanText(entry)])
     ),
+  };
+}
+
+function uniqueByKey(values = [], getKey = (value) => value) {
+  const seen = new Set();
+  const result = [];
+
+  values.forEach((value) => {
+    const key = cleanText(getKey(value)).toLowerCase();
+
+    if (!key || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    result.push(value);
+  });
+
+  return result;
+}
+
+function normalizeTextObject(value, keyNames = []) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(
+    keyNames
+      .map((key) => [key, cleanText(source[key])])
+      .filter(([, entry]) => entry)
+  );
+}
+
+function splitWebsiteContentEntries(websiteContent = {}) {
+  const lines = String(websiteContent.content || "")
+    .split(/\r?\n/)
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+  const entries = [];
+  let currentSection = "general";
+
+  if (cleanText(websiteContent.metaDescription)) {
+    entries.push({
+      section: "description",
+      text: cleanText(websiteContent.metaDescription),
+      source: "meta_description",
+    });
+  }
+
+  lines.forEach((line) => {
+    if (line === LIMITED_CONTENT_MARKER || /^https?:\/\//i.test(line)) {
+      return;
+    }
+
+    const labeledMatch = line.match(/^(URL|Title|Description|Headings|Highlights|Body|Content):\s*(.*)$/i);
+
+    if (labeledMatch) {
+      currentSection = cleanText(labeledMatch[1]).toLowerCase();
+      const inlineValue = cleanText(labeledMatch[2]);
+
+      if (currentSection !== "url" && inlineValue && inlineValue !== LIMITED_CONTENT_MARKER) {
+        entries.push({
+          section: currentSection,
+          text: inlineValue,
+          source: "website_import",
+        });
+      }
+      return;
+    }
+
+    if (currentSection === "url" || line === LIMITED_CONTENT_MARKER) {
+      return;
+    }
+
+    entries.push({
+      section: currentSection,
+      text: line,
+      source: "website_import",
+    });
+  });
+
+  return entries;
+}
+
+function looksLikeOperatingHours(text = "") {
+  return HOURS_HINT_PATTERN.test(text) && TIME_HINT_PATTERN.test(text);
+}
+
+function looksLikePricing(text = "") {
+  return PRICING_HINT_PATTERN.test(text);
+}
+
+function looksLikePolicy(text = "") {
+  return POLICY_HINT_PATTERN.test(text);
+}
+
+function looksLikeServiceArea(text = "") {
+  return AREA_HINT_PATTERN.test(text);
+}
+
+function looksLikeService(entry = {}) {
+  const text = cleanText(entry.text);
+
+  if (!text || looksLikePricing(text) || looksLikePolicy(text) || looksLikeServiceArea(text) || looksLikeOperatingHours(text)) {
+    return false;
+  }
+
+  if (entry.section === "headings" || entry.section === "highlights") {
+    return text.length <= 80;
+  }
+
+  return SERVICE_HINT_PATTERN.test(text);
+}
+
+function pickSuggestedBusinessSummary(entries = []) {
+  const summaryCandidate = entries.find((entry) =>
+    ["description", "body", "content"].includes(entry.section)
+    && cleanText(entry.text).length >= 40
+    && cleanText(entry.text) !== LIMITED_CONTENT_MARKER
+  );
+
+  if (!summaryCandidate) {
+    return {
+      value: "",
+      source: "",
+    };
+  }
+
+  return {
+    value: cleanText(summaryCandidate.text).slice(0, 320),
+    source: cleanText(summaryCandidate.source) || "website_import",
+  };
+}
+
+function splitStructuredLine(text = "") {
+  const parts = cleanText(text)
+    .split(/\s+[|:-]\s+/)
+    .map((entry) => cleanText(entry))
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      label: parts[0],
+      detail: parts.slice(1).join(" | "),
+    };
+  }
+
+  return {
+    label: cleanText(text),
+    detail: "",
+  };
+}
+
+function extractSuggestedServices(entries = []) {
+  return uniqueByKey(
+    entries
+      .filter((entry) => looksLikeService(entry))
+      .slice(0, 8)
+      .map((entry) => {
+        const parts = splitStructuredLine(entry.text);
+        return {
+          name: parts.label,
+          note: parts.detail,
+          source: cleanText(entry.source) || "website_import",
+        };
+      }),
+    (entry) => entry.name
+  );
+}
+
+function extractSuggestedPricing(entries = []) {
+  return uniqueByKey(
+    entries
+      .filter((entry) => looksLikePricing(entry.text))
+      .slice(0, 6)
+      .map((entry) => {
+        const amountMatch = cleanText(entry.text).match(/(\$[\d,.]+(?:\s*[-–]\s*\$?[\d,.]+)?(?:\s*(?:\/|per)\s*(?:hour|visit|month|session))?)/i);
+        const parts = splitStructuredLine(entry.text);
+        return {
+          label: parts.label || "Pricing note",
+          amount: cleanText(amountMatch?.[1]),
+          details: parts.detail || cleanText(entry.text),
+          source: cleanText(entry.source) || "website_import",
+        };
+      }),
+    (entry) => `${entry.label}|${entry.amount}|${entry.details}`
+  );
+}
+
+function extractSuggestedPolicies(entries = []) {
+  return uniqueByKey(
+    entries
+      .filter((entry) => looksLikePolicy(entry.text))
+      .slice(0, 6)
+      .map((entry) => {
+        const parts = splitStructuredLine(entry.text);
+        return {
+          label: parts.label || "Policy",
+          details: parts.detail || cleanText(entry.text),
+          source: cleanText(entry.source) || "website_import",
+        };
+      }),
+    (entry) => `${entry.label}|${entry.details}`
+  );
+}
+
+function extractSuggestedServiceAreas(entries = []) {
+  return uniqueByKey(
+    entries
+      .filter((entry) => looksLikeServiceArea(entry.text))
+      .slice(0, 6)
+      .map((entry) => {
+        const parts = splitStructuredLine(entry.text.replace(/^serving\s+/i, ""));
+        return {
+          name: parts.label || cleanText(entry.text),
+          note: parts.detail,
+          source: cleanText(entry.source) || "website_import",
+        };
+      }),
+    (entry) => `${entry.name}|${entry.note}`
+  );
+}
+
+function extractSuggestedOperatingHours(entries = [], agent = {}) {
+  const suggestions = entries
+    .filter((entry) => looksLikeOperatingHours(entry.text))
+    .slice(0, 7)
+    .map((entry) => {
+      const parts = splitStructuredLine(entry.text);
+      return {
+        label: parts.label || "Hours",
+        hours: parts.detail || cleanText(entry.text),
+        source: cleanText(entry.source) || "website_import",
+      };
+    });
+
+  if (!suggestions.length && cleanText(agent.businessHoursNote)) {
+    suggestions.push({
+      label: "Availability note",
+      hours: cleanText(agent.businessHoursNote),
+      source: "assistant_settings",
+    });
+  }
+
+  return uniqueByKey(suggestions, (entry) => `${entry.label}|${entry.hours}`);
+}
+
+export function buildOperatorBusinessProfilePrefill({
+  agent = {},
+  websiteContent = null,
+  profile = {},
+} = {}) {
+  const entries = splitWebsiteContentEntries(websiteContent || {});
+  const suggestions = {
+    businessSummary: pickSuggestedBusinessSummary(entries),
+    services: extractSuggestedServices(entries),
+    pricing: extractSuggestedPricing(entries),
+    policies: extractSuggestedPolicies(entries),
+    serviceAreas: extractSuggestedServiceAreas(entries),
+    operatingHours: extractSuggestedOperatingHours(entries, agent),
+    approvedContactChannels: buildDefaultApprovedContactChannels(agent),
+    approvalPreferences: normalizeApprovalPreferences(profile.approvalPreferences),
+  };
+
+  const fieldCount = [
+    suggestions.businessSummary.value ? 1 : 0,
+    suggestions.services.length ? 1 : 0,
+    suggestions.pricing.length ? 1 : 0,
+    suggestions.policies.length ? 1 : 0,
+    suggestions.serviceAreas.length ? 1 : 0,
+    suggestions.operatingHours.length ? 1 : 0,
+    suggestions.approvedContactChannels.length ? 1 : 0,
+    Object.keys(suggestions.approvalPreferences).length ? 1 : 0,
+  ].reduce((total, count) => total + count, 0);
+
+  if (!fieldCount) {
+    return createEmptyBusinessProfilePrefill();
+  }
+
+  return {
+    available: true,
+    fieldCount,
+    reviewRequired: true,
+    sourceSummary: "Suggestions are based on imported website knowledge plus current assistant contact settings. Nothing is saved until the owner reviews and submits.",
+    suggestions,
+  };
+}
+
+export function attachBusinessProfilePrefill(profile = {}, options = {}) {
+  return {
+    ...profile,
+    prefill: buildOperatorBusinessProfilePrefill({
+      agent: options.agent,
+      websiteContent: options.websiteContent,
+      profile,
+    }),
   };
 }
 
@@ -136,6 +465,7 @@ export function createDefaultOperatorBusinessProfile({
     approvedContactChannels: buildDefaultApprovedContactChannels(agent),
     approvalPreferences: normalizeApprovalPreferences({}),
     metadata: {},
+    prefill: createEmptyBusinessProfilePrefill(),
     createdAt: null,
     updatedAt: null,
     persistenceAvailable,
@@ -165,6 +495,7 @@ function mapBusinessProfileRow(row = {}, agent = {}) {
     metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
       ? row.metadata
       : {},
+    prefill: createEmptyBusinessProfilePrefill(),
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
     persistenceAvailable: true,
