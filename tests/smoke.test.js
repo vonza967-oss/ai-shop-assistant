@@ -1142,15 +1142,15 @@ test("marketing homepage and app routes load without broken handoff paths", { co
       try {
         const marketingHome = await getText(server.baseUrl, "/");
         assert.equal(marketingHome.status, 200);
-        assert.match(marketingHome.text, /The AI front desk for your website and the operator workspace behind it/i);
-        assert.match(marketingHome.text, /website front desk/i);
-        assert.match(marketingHome.text, /connect Google/i);
+        assert.match(marketingHome.text, /The AI front desk for your website, plus the daily workspace to prove it is working/i);
+        assert.match(marketingHome.text, /service businesses with inbound leads/i);
+        assert.match(marketingHome.text, /optional Google beta/i);
         assert.match(marketingHome.text, /href="\/dashboard\?from=site"/);
         assert.match(marketingHome.text, /id="site-auth-link"/);
         assert.match(marketingHome.text, /id="site-primary-cta"/);
         assert.match(marketingHome.text, /data-app-link/);
-        assert.match(marketingHome.text, /Vonza workspace/);
-        assert.match(marketingHome.text, /approval-first automations/i);
+        assert.match(marketingHome.text, /Public launch core/);
+        assert.match(marketingHome.text, /Today, Contacts, Outcomes/i);
         assert.match(marketingHome.text, /\/marketing\.js/);
 
         const dashboard = await getText(server.baseUrl, "/dashboard");
@@ -1214,7 +1214,7 @@ test("dashboard bundle exposes password auth entry, purchase-first handoff, and 
         assert.match(dashboardScript.text, /resetPasswordForEmail/);
         assert.match(dashboardScript.text, /updateUser/);
         assert.match(dashboardScript.text, /signInWithOtp/);
-        assert.match(dashboardScript.text, /Unlock Vonza to open your front desk and operator workspace/);
+        assert.match(dashboardScript.text, /Unlock Vonza to open your AI front desk workspace/);
         assert.match(dashboardScript.text, /Today/);
         assert.match(dashboardScript.text, /Contacts/);
         assert.match(dashboardScript.text, /Customize/);
@@ -1228,12 +1228,12 @@ test("dashboard bundle exposes password auth entry, purchase-first handoff, and 
         assert.match(dashboardScript.text, /Single best next action/);
         assert.match(dashboardScript.text, /Run first sync/);
         assert.match(dashboardScript.text, /Vonza loaded with partial data/);
-        assert.match(dashboardScript.text, /lighter front-desk workspace/i);
+        assert.match(dashboardScript.text, /front-desk launch core/i);
         assert.match(dashboardScript.text, /High-intent signals/);
         assert.match(dashboardScript.text, /Answers needing work/);
         assert.match(dashboardScript.text, /Top customer questions/);
         assert.match(dashboardScript.text, /Lead \/ contact/);
-        assert.match(dashboardScript.text, /Action queue/);
+        assert.match(dashboardScript.text, /Follow-up queue/);
         assert.match(dashboardScript.text, /No actionable items yet/);
         assert.match(dashboardScript.text, /Reviewed/);
         assert.match(dashboardScript.text, /Follow-up needed/);
@@ -1265,10 +1265,13 @@ test("dashboard bundle exposes password auth entry, purchase-first handoff, and 
         assert.equal(publicConfig.status, 200);
         assert.match(publicConfig.text, /VONZA_OPERATOR_WORKSPACE_V1_ENABLED/);
         assert.match(publicConfig.text, /VONZA_OPERATOR_WORKSPACE_V1/);
+        assert.match(publicConfig.text, /VONZA_LAUNCH_PROFILE/);
+        assert.match(publicConfig.text, /public_cohort_v1/);
 
         const health = await getJson(server.baseUrl, "/health");
         assert.equal(health.status, 200);
         assert.equal(health.json.operatorWorkspaceV1Enabled, true);
+        assert.equal(health.json.launchMode, "public_cohort_v1");
       } finally {
         await server.close();
       }

@@ -40,6 +40,51 @@ const LEGACY_SHELL_SECTIONS = ["overview", "customize", "analytics"];
 const OPERATOR_WORKSPACE_BROWSER_FLAG = "VONZA_OPERATOR_WORKSPACE_V1_ENABLED";
 const LEGACY_OPERATOR_WORKSPACE_BROWSER_FLAG = "VONZA_OPERATOR_WORKSPACE_V1";
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
+const FEATURE_STATE_STABLE = "stable";
+const FEATURE_STATE_BETA = "beta";
+const FEATURE_STATE_HIDDEN = "hidden";
+const DASHBOARD_CAPABILITY_MAP = {
+  overview: "today",
+  contacts: "contacts",
+  inbox: "inbox",
+  calendar: "calendar",
+  automations: "automations",
+  customize: "customize",
+  analytics: "outcomes",
+};
+const DEFAULT_LAUNCH_PROFILE = {
+  mode: "public_cohort_v1",
+  product: {
+    name: "Vonza Front Desk",
+    purchaseSummary:
+      "The first public offer is the AI front desk plus Today, Contacts, Outcomes, website import, and install. Google-connected Inbox, Calendar, and Automations stay optional beta surfaces when enabled.",
+  },
+  icp: {
+    key: "service_businesses_with_inbound_leads",
+    label: "Service businesses with inbound leads",
+    shortLabel: "Service businesses",
+  },
+  matrix: {
+    marketing_site: { state: FEATURE_STATE_STABLE, label: "Marketing site" },
+    signup_auth: { state: FEATURE_STATE_STABLE, label: "Signup and auth" },
+    checkout: { state: FEATURE_STATE_STABLE, label: "Checkout" },
+    front_desk: { state: FEATURE_STATE_STABLE, label: "AI front desk" },
+    website_import: { state: FEATURE_STATE_STABLE, label: "Website import" },
+    widget_install: { state: FEATURE_STATE_STABLE, label: "Widget install" },
+    today: { state: FEATURE_STATE_STABLE, label: "Today" },
+    contacts: { state: FEATURE_STATE_STABLE, label: "Contacts" },
+    outcomes: { state: FEATURE_STATE_STABLE, label: "Outcomes" },
+    customize: { state: FEATURE_STATE_STABLE, label: "Customize" },
+    lead_capture: { state: FEATURE_STATE_STABLE, label: "Lead capture" },
+    google_connect: { state: FEATURE_STATE_BETA, label: "Google connect" },
+    inbox: { state: FEATURE_STATE_BETA, label: "Inbox" },
+    calendar: { state: FEATURE_STATE_BETA, label: "Calendar" },
+    automations: { state: FEATURE_STATE_BETA, label: "Automations" },
+    advanced_guidance: { state: FEATURE_STATE_HIDDEN, label: "Advanced guidance" },
+    manual_outcome_marks: { state: FEATURE_STATE_HIDDEN, label: "Manual outcome marks" },
+    knowledge_fix_workflows: { state: FEATURE_STATE_HIDDEN, label: "Knowledge-fix workflows" },
+  },
+};
 const AUTH_VIEW_MODES = {
   SIGN_IN: "sign-in",
   SIGN_UP: "sign-up",
@@ -158,6 +203,123 @@ function isOperatorWorkspaceFlagEnabled() {
     OPERATOR_WORKSPACE_BROWSER_FLAG,
     LEGACY_OPERATOR_WORKSPACE_BROWSER_FLAG
   );
+}
+
+function getLaunchProfile() {
+  const source = window.VONZA_LAUNCH_PROFILE;
+
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return DEFAULT_LAUNCH_PROFILE;
+  }
+
+  return {
+    ...DEFAULT_LAUNCH_PROFILE,
+    ...source,
+    product: {
+      ...DEFAULT_LAUNCH_PROFILE.product,
+      ...(source.product || {}),
+    },
+    icp: {
+      ...DEFAULT_LAUNCH_PROFILE.icp,
+      ...(source.icp || {}),
+    },
+    matrix: {
+      ...DEFAULT_LAUNCH_PROFILE.matrix,
+      ...(source.matrix || {}),
+    },
+  };
+}
+
+function getCapabilityState(capabilityKey) {
+  const matrix = getLaunchProfile().matrix || {};
+  const capability = matrix[capabilityKey];
+
+  if (!capability || typeof capability !== "object") {
+    return FEATURE_STATE_HIDDEN;
+  }
+
+  return capability.state || FEATURE_STATE_HIDDEN;
+}
+
+function isCapabilityExplicitlyVisible(capabilityKey) {
+  return getCapabilityState(capabilityKey) !== FEATURE_STATE_HIDDEN;
+}
+
+function isCapabilityBeta(capabilityKey) {
+  return getCapabilityState(capabilityKey) === FEATURE_STATE_BETA;
+}
+
+function isCapabilityStable(capabilityKey) {
+  return getCapabilityState(capabilityKey) === FEATURE_STATE_STABLE;
+}
+
+function isGoogleWorkspaceConfigured(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  return operatorWorkspace?.status?.googleConfigReady !== false;
+}
+
+function isCapabilityVisibleForWorkspace(capabilityKey, operatorWorkspace = createEmptyOperatorWorkspace()) {
+  if (!isCapabilityExplicitlyVisible(capabilityKey)) {
+    return false;
+  }
+
+  if (["contacts", "inbox", "calendar", "automations", "google_connect"].includes(capabilityKey)) {
+    if (operatorWorkspace?.enabled === false) {
+      return false;
+    }
+
+    if (["inbox", "calendar", "automations", "google_connect"].includes(capabilityKey) && !isGoogleWorkspaceConfigured(operatorWorkspace)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getShellSectionsForWorkspace(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const candidateSections = operatorWorkspace?.enabled === false
+    ? LEGACY_SHELL_SECTIONS
+    : FULL_SHELL_SECTIONS;
+
+  return candidateSections.filter((section) => {
+    const capabilityKey = DASHBOARD_CAPABILITY_MAP[section];
+    return capabilityKey ? isCapabilityVisibleForWorkspace(capabilityKey, operatorWorkspace) : false;
+  });
+}
+
+function getWorkspaceMode(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  if (operatorWorkspace?.enabled === false) {
+    return {
+      key: "front_desk_only",
+      eyebrow: "Front-desk-only mode",
+      title: "The public launch core is active.",
+      copy: "This deployment is showing the stable launch core: the AI front desk, setup, install, and outcomes. Google-connected workspace beta surfaces are hidden here.",
+    };
+  }
+
+  if (!isGoogleWorkspaceConfigured(operatorWorkspace)) {
+    return {
+      key: "operator_without_google_beta",
+      eyebrow: "Operator workspace mode",
+      title: "The stable core is live. Google beta is not enabled here yet.",
+      copy: "Today, Contacts, Customize, and Outcomes stay available. Inbox, Calendar, and Automations only appear on deployments where the optional Google workspace beta is enabled.",
+    };
+  }
+
+  if (operatorWorkspace?.status?.googleConnected === true) {
+    return {
+      key: "operator_google_connected",
+      eyebrow: "Operator workspace mode",
+      title: "Stable core plus Google-connected beta.",
+      copy: "Your stable launch surfaces are active, and the optional Google-connected Inbox, Calendar, and Automations beta is available in the same workspace.",
+    };
+  }
+
+  return {
+    key: "operator_beta_available",
+    eyebrow: "Operator workspace mode",
+    title: "Stable core now, optional Google beta when you connect.",
+    copy: "Today, Contacts, Customize, and Outcomes are part of the public launch core. Connect Google when you want Inbox, Calendar, and Automations beta in the same workspace.",
+  };
 }
 
 function normalizeOperatorRecord(value, fallback = {}) {
@@ -683,9 +845,7 @@ function clearClaimBridgeDismissal() {
 }
 
 function getAvailableShellSections(operatorWorkspace = createEmptyOperatorWorkspace()) {
-  return operatorWorkspace?.enabled === false
-    ? LEGACY_SHELL_SECTIONS
-    : FULL_SHELL_SECTIONS;
+  return getShellSectionsForWorkspace(operatorWorkspace);
 }
 
 function getActiveShellSection(setup, operatorWorkspace = createEmptyOperatorWorkspace()) {
@@ -845,11 +1005,13 @@ function normalizeAccessStatus(value) {
 }
 
 function getAccessCopy(agent) {
+  const launchProfile = getLaunchProfile();
+
   if (!agent?.id) {
     return {
       eyebrow: "Purchase step",
-      headline: "Unlock Vonza to open your front desk and operator workspace.",
-      copy: "Start with secure checkout. Right after payment, Vonza takes you into the workspace where you tune the website front desk, connect Google, review Today, and launch the operator flow.",
+      headline: "Unlock Vonza to open your AI front desk workspace.",
+      copy: `Start with secure checkout. Right after payment, Vonza opens the stable launch core: your AI front desk, Today, Contacts, Outcomes, website import, and install. ${launchProfile.product.purchaseSummary}`,
     };
   }
 
@@ -859,7 +1021,7 @@ function getAccessCopy(agent) {
     return {
       eyebrow: "Workspace active",
       headline: "Your Vonza workspace is open.",
-      copy: "Everything is in place for the website front desk and the owner workflow around it: Today, Inbox, Calendar, Contacts, Automations, Customize, and Outcomes.",
+      copy: "Your public launch workspace is active. The stable core is the AI front desk, Today, Contacts, Customize, and Outcomes. Google-connected Inbox, Calendar, and Automations stay optional beta surfaces.",
     };
   }
 
@@ -873,8 +1035,8 @@ function getAccessCopy(agent) {
 
   return {
     eyebrow: "Access pending",
-    headline: "Your front desk is connected, and workspace access is not active yet.",
-    copy: "Your setup is tied to your account, but full workspace access still needs to be activated before you can manage Today, Contacts, Automations, and outcomes here.",
+    headline: "Your front desk setup is saved, and workspace access is not active yet.",
+    copy: "Your setup is tied to your account, but workspace access still needs to be activated before you can use the stable launch core in Today, Contacts, Customize, and Outcomes.",
   };
 }
 
@@ -890,8 +1052,8 @@ function renderAccessLocked(agent) {
     ? `
       <section class="handoff-card">
         <span class="handoff-step">${arrival.arrivedFromSite ? "Step 2 of 3" : "Welcome to your workspace"}</span>
-        <h2 class="handoff-title">Unlock Vonza, then finish the front desk and operator setup in one place.</h2>
-        <p class="handoff-copy">You do not need to finish everything before payment. Once checkout is complete, you land in the workspace with Today, Customize, Contacts, Automations, and Outcomes ready to guide the next step.</p>
+        <h2 class="handoff-title">Unlock Vonza, then finish the front desk setup in one place.</h2>
+        <p class="handoff-copy">You do not need to finish everything before payment. Once checkout is complete, you land in the stable launch workspace with Today, Customize, Contacts, and Outcomes guiding the next step.</p>
       </section>
     `
     : "";
@@ -920,7 +1082,7 @@ function renderAccessLocked(agent) {
         </div>
         <div class="overview-card">
           <p class="overview-label">2. Setup workspace</p>
-          <p class="overview-card-copy">Tune the front desk, connect Google, and review Today, Contacts, and approval-first workflows.</p>
+          <p class="overview-card-copy">Tune the front desk, review Today, Contacts, and Outcomes, and connect Google later if you want the optional beta.</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">3. Add to website</p>
@@ -939,13 +1101,13 @@ function renderAccessLocked(agent) {
       <div class="pricing-card">
         <div>
           <p class="overview-label">Vonza access</p>
-          <h2 class="pricing-title">One premium workspace</h2>
-          <p class="pricing-copy">Unlock the website front desk, Today, Contacts, Inbox, Calendar, Automations, install flow, and outcome visibility in one place.</p>
+          <h2 class="pricing-title">One front-desk workspace</h2>
+          <p class="pricing-copy">Unlock the stable launch core in one place: AI front desk, Today, Contacts, Customize, outcomes, website import, and install.</p>
           <div class="pricing-bullets">
-            <div class="pill">Website front desk and routing</div>
-            <div class="pill">Contacts, Inbox, and Calendar</div>
-            <div class="pill">Approval-first automations</div>
-            <div class="pill">Outcomes, proof, and install tools</div>
+            <div class="pill">AI front desk and routing</div>
+            <div class="pill">Today, Contacts, and Outcomes</div>
+            <div class="pill">Website import and install</div>
+            <div class="pill">Optional Google beta</div>
           </div>
         </div>
         <div class="pricing-actions">
@@ -956,7 +1118,7 @@ function renderAccessLocked(agent) {
         </div>
       </div>
       ${detailsMarkup}
-      <p class="auth-note">Once payment completes successfully, Vonza will unlock your account and bring you straight into the operator workspace.</p>
+      <p class="auth-note">Once payment completes successfully, Vonza unlocks your account and brings you straight into the public launch workspace.</p>
       ${showDevTools ? '<div id="setup-doctor-results" class="auth-note" style="margin-top:16px;"></div>' : ""}
     </section>
   `;
@@ -1356,8 +1518,8 @@ function renderOnboarding() {
     ? `
       <section class="handoff-card">
         <span class="handoff-step">${arrival.arrivedFromSite ? "Step 1 of 4" : "Welcome to Vonza"}</span>
-        <h2 class="handoff-title">${arrival.arrivedFromSite ? "You’re now in the place where the front desk and operator workspace come together." : "This is where you create the website front desk that feeds the operator workspace."}</h2>
-        <p class="handoff-copy">${arrival.arrivedFromSite ? "You’ve moved from the Vonza site into the app. Next you’ll connect your website, shape routing and voice, try the live front desk, and then unlock the full operator workspace around it." : "Connect your website, shape the front desk around your brand, and make the preview strong before you install it and start working from Today."}</p>
+        <h2 class="handoff-title">${arrival.arrivedFromSite ? "You’re now in the workspace where the front desk becomes a real paid product." : "This is where you create the website front desk that powers the public launch core."}</h2>
+        <p class="handoff-copy">${arrival.arrivedFromSite ? "You’ve moved from the Vonza site into the app. Next you’ll connect your website, shape routing and voice, try the live front desk, install it, and confirm the first lead path in Today, Contacts, and Outcomes." : "Connect your website, shape the front desk around your brand, and make the preview strong before you install it and start working from Today."}</p>
         <div class="handoff-actions">
           <button id="handoff-start-button" class="primary-button" type="button">Start creating</button>
           <span class="handoff-note">A few focused details are enough to get the front desk ready to try.</span>
@@ -1371,13 +1533,13 @@ function renderOnboarding() {
     <section class="hero-card">
       <span class="eyebrow">Create your website front desk</span>
       <h1 class="headline">Turn your website into an AI front desk for your business.</h1>
-      <p class="subtext">Vonza learns from your website, answers customer questions, routes high-intent visitors toward the right next step, and becomes the front door for the operator workspace behind it.</p>
+      <p class="subtext">Vonza learns from your website, answers customer questions, routes high-intent visitors toward the right next step, and feeds the stable public launch core around Today, Contacts, and Outcomes.</p>
     </section>
 
     <div class="state-grid">
       <section id="onboarding-create" class="section-card">
         <h2 class="section-heading">Create your front desk</h2>
-        <p class="section-copy">Start with the essentials. We’ll turn your website into a customer-facing front desk you can shape, preview, install, and later connect to Today, Inbox, Calendar, Contacts, and approval-first workflows.</p>
+        <p class="section-copy">Start with the essentials. We’ll turn your website into a customer-facing front desk you can shape, preview, install, and then confirm inside Today, Contacts, and Outcomes. Google-connected workflow beta can come later.</p>
         <form id="create-assistant-form" class="form-grid spacer">
           <div class="field">
             <label for="create-website-url">Website URL</label>
@@ -1412,12 +1574,12 @@ function renderOnboarding() {
 
       <section class="section-card">
         <h2 class="section-heading">What you get</h2>
-        <p class="section-copy">Your front desk becomes a polished front door for your business.</p>
+        <p class="section-copy">Your front desk becomes a polished front door for your business and the anchor for the stable public launch core.</p>
         <div class="pill-row">
           <div class="pill">Answers real customer questions</div>
-          <div class="pill">Matches your brand voice</div>
+          <div class="pill">Routes quotes, bookings, and callbacks</div>
           <div class="pill">Installs with one embed code</div>
-          <div class="pill">Uses your website as the source</div>
+          <div class="pill">Shows proof in Today, Contacts, Outcomes</div>
         </div>
       </section>
     </div>
@@ -1572,13 +1734,21 @@ function buildWorkspaceTabs(activeSection, setup, operatorWorkspace = createEmpt
       label: "Outcomes",
       note: "Proof, signals, install state, and where the front desk needs work",
     },
-  ].filter((tab) => availableSections.includes(tab.key));
+  ]
+    .filter((tab) => availableSections.includes(tab.key))
+    .map((tab) => {
+      const capabilityKey = DASHBOARD_CAPABILITY_MAP[tab.key];
+      return {
+        ...tab,
+        isBeta: capabilityKey ? isCapabilityBeta(capabilityKey) : false,
+      };
+    });
 
   return `
     <nav class="workspace-tabs" aria-label="Workspace sections">
       ${tabDefinitions.map((tab) => `
         <button class="workspace-tab ${activeSection === tab.key ? "active" : ""}" type="button" data-shell-target="${escapeHtml(tab.key)}">
-          <span class="nav-label">${escapeHtml(tab.label)}</span>
+          <span class="nav-label">${escapeHtml(tab.isBeta ? `${tab.label} beta` : tab.label)}</span>
           <span class="nav-note">${escapeHtml(tab.note)}</span>
         </button>
       `).join("")}
@@ -1857,14 +2027,14 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
       <div class="workspace-panel-header">
         <div>
           <h2 class="workspace-panel-title">Contacts</h2>
-          <p class="workspace-panel-copy">Vonza now centers the operator workspace around real people instead of disconnected channels. Each record rolls chat, inbox, calendar, follow-up, campaign, complaint, and outcome activity into one operator timeline.</p>
+          <p class="workspace-panel-copy">Contacts is part of the stable public launch core. Each record rolls chat, lead capture, follow-up, and outcome activity into one owner timeline, then gets richer when Google-connected beta data is available.</p>
         </div>
         <div class="workspace-badge-row">
-          <span class="${getBadgeClass(contactsHealth.migrationRequired ? "Needs attention" : "Ready")}">${contactsHealth.migrationRequired ? "Migration needed" : "Contacts live"}</span>
-          <span class="${getBadgeClass(contactsHealth.partialData ? "Limited" : "Ready")}">${contactsHealth.partialData ? "Partial data" : "Cross-channel view"}</span>
+          <span class="${getBadgeClass(contactsHealth.migrationRequired ? "Limited" : "Ready")}">${contactsHealth.migrationRequired ? "Workspace still syncing" : "Contacts live"}</span>
+          <span class="${getBadgeClass(contactsHealth.partialData ? "Limited" : "Ready")}">${contactsHealth.partialData ? "Timeline still growing" : "Cross-channel view"}</span>
         </div>
       </div>
-      ${contactsHealth.loadError ? `<div class="operator-inline-alert"><p>${escapeHtml(`Contacts note: ${contactsHealth.loadError}`)}</p></div>` : ""}
+      ${contactsHealth.loadError ? `<div class="operator-inline-alert"><p>${escapeHtml(`Contacts are still loading some history: ${contactsHealth.loadError}`)}</p></div>` : ""}
       ${(filters.quick || []).length || (filters.sources || []).length ? `
         <div class="workspace-card-soft contact-filter-shell">
           <div class="contact-filter-group">
@@ -1887,7 +2057,7 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
         title: "No contacts yet",
         copy: operatorWorkspace.status?.googleConnected
           ? "Vonza will create contact records as soon as leads, inbox threads, bookings, or approval-first follow-ups start appearing."
-          : "Contacts still work without Google, but the richest cross-channel timeline appears once chat, inbox, calendar, and follow-up activity start accumulating together.",
+          : "Contacts still work without Google. The timeline starts with live chat and lead capture, then gets richer if you later connect the optional Google beta.",
       }) : `
         ${onlyChatSources ? `<div class="shell-status-banner">Only chat-led contact history is visible right now. That is still useful: as soon as Google-connected inbox or calendar activity appears, Vonza will stitch it into these same records.</div>` : ""}
         <div class="contact-card-grid" data-contact-filter-results>
@@ -1965,29 +2135,31 @@ function buildContactsPanel(operatorWorkspace = createEmptyOperatorWorkspace()) 
               <div class="inline-actions">
                 ${buildContactQuickActions(contact, operatorWorkspace)}
               </div>
-              <form class="action-queue-follow-up-form" data-manual-outcome-form data-contact-id="${escapeHtml(contact.id || "")}" data-lead-id="${escapeHtml(contact.leadId || "")}" data-follow-up-id="${escapeHtml(contact.primaryFollowUpId || "")}" data-inbox-thread-id="${escapeHtml(contact.primaryThreadId || "")}" data-calendar-event-id="${escapeHtml(contact.primaryEventId || "")}" data-person-key="${escapeHtml(contact.personKey || "")}">
-                <div class="form-grid two-col">
-                  <div class="field">
-                    <label for="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}">Outcome mark</label>
-                    <select id="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}" name="outcome_type" ${agent.manualOutcomeMode === true ? "" : "disabled"}>
-                      <option value="booking_confirmed">booked</option>
-                      <option value="quote_requested">quote requested</option>
-                      <option value="quote_accepted">quote accepted</option>
-                      <option value="follow_up_replied">follow-up successful</option>
-                      <option value="complaint_resolved">complaint resolved</option>
-                      <option value="manual_outcome_marked">no outcome / manual note</option>
-                    </select>
+              ${isCapabilityExplicitlyVisible("manual_outcome_marks") ? `
+                <form class="action-queue-follow-up-form" data-manual-outcome-form data-contact-id="${escapeHtml(contact.id || "")}" data-lead-id="${escapeHtml(contact.leadId || "")}" data-follow-up-id="${escapeHtml(contact.primaryFollowUpId || "")}" data-inbox-thread-id="${escapeHtml(contact.primaryThreadId || "")}" data-calendar-event-id="${escapeHtml(contact.primaryEventId || "")}" data-person-key="${escapeHtml(contact.personKey || "")}">
+                  <div class="form-grid two-col">
+                    <div class="field">
+                      <label for="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}">Outcome mark</label>
+                      <select id="contact-outcome-${escapeHtml(contact.id || contact.name || "contact")}" name="outcome_type" ${agent.manualOutcomeMode === true ? "" : "disabled"}>
+                        <option value="booking_confirmed">booked</option>
+                        <option value="quote_requested">quote requested</option>
+                        <option value="quote_accepted">quote accepted</option>
+                        <option value="follow_up_replied">follow-up successful</option>
+                        <option value="complaint_resolved">complaint resolved</option>
+                        <option value="manual_outcome_marked">no outcome / manual note</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}">Context note</label>
+                      <input id="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}" name="note" type="text" placeholder="Owner confirmed this outside an automatic proof path." ${agent.manualOutcomeMode === true ? "" : "disabled"}>
+                    </div>
                   </div>
-                  <div class="field">
-                    <label for="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}">Context note</label>
-                    <input id="contact-outcome-note-${escapeHtml(contact.id || contact.name || "contact")}" name="note" type="text" placeholder="Owner confirmed this outside an automatic proof path." ${agent.manualOutcomeMode === true ? "" : "disabled"}>
+                  <div class="action-queue-form-actions">
+                    <button class="ghost-button" type="submit" ${agent.manualOutcomeMode === true ? "" : "disabled"}>Record outcome</button>
+                    <span class="action-queue-meta-inline">Manual marks stay attached to this contact’s lead, thread, follow-up, and calendar context when available.</span>
                   </div>
-                </div>
-                <div class="action-queue-form-actions">
-                  <button class="ghost-button" type="submit" ${agent.manualOutcomeMode === true ? "" : "disabled"}>Record outcome</button>
-                  <span class="action-queue-meta-inline">Manual marks stay attached to this contact’s lead, thread, follow-up, and calendar context when available.</span>
-                </div>
-              </form>
+                </form>
+              ` : ""}
               <div class="contact-timeline">
                 <div class="person-subsection">
                   <span class="action-queue-detail-label">Timeline</span>
@@ -2033,11 +2205,11 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
         <div>
           <p class="studio-kicker">Operator home</p>
           <h2 class="workspace-panel-title">Today</h2>
-          <p class="workspace-panel-copy">Today is the operator command center for inbox, calendar, contacts, approvals, follow-ups, and the next owner action.</p>
+          <p class="workspace-panel-copy">Today is part of the stable public launch core. It keeps the next owner action, front-desk health, contacts, proof, and optional Google-connected beta work in one place.</p>
         </div>
         <div class="workspace-badge-row">
-          <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected ? "Google connected" : "Google not connected"}</span>
-          <span class="${getBadgeClass(status.migrationRequired ? "Needs attention" : "Ready")}">${status.migrationRequired ? "Migration needed" : "Workspace ready"}</span>
+          <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected ? "Google beta connected" : "Google beta optional"}</span>
+          <span class="${getBadgeClass(status.migrationRequired ? "Limited" : "Ready")}">${status.migrationRequired ? "Workspace still syncing" : "Workspace ready"}</span>
         </div>
       </div>
       <div class="operator-home-grid">
@@ -2070,8 +2242,8 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
               <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
                 ? `Mailbox ${primaryAccount.selectedMailbox || "INBOX"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
                 : status.googleConfigReady
-                  ? "Connect Gmail and Calendar so Vonza can sync inbox, calendar, contacts, and approvals into one workspace."
-                  : "Google connection is not configured on this deployment yet.")}</p>
+                  ? "Connect Gmail and Calendar if you want the optional Inbox, Calendar, and Automations beta in the same workspace."
+                  : "This deployment is running the front-desk launch core without the optional Google beta.")}</p>
             </div>
         <div class="overview-card">
           <p class="overview-label">Inbox needing attention</p>
@@ -2187,12 +2359,14 @@ function buildOverviewPanel(agent, messages, setup, actionQueue, operatorWorkspa
 function buildCustomizePanel(agent, setup) {
   const knowledgeActionLabel = setup.knowledgeState === "limited" ? "Retry website import" : "Import website knowledge";
   const behaviorSummary = buildBehaviorSummary(agent.tone, agent.systemPrompt);
+  const manualOutcomeVisible = isCapabilityExplicitlyVisible("manual_outcome_marks");
+  const advancedGuidanceVisible = isCapabilityExplicitlyVisible("advanced_guidance");
 
   return `
     <section class="workspace-panel" data-shell-section="customize" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Customize</h2>
-        <p class="workspace-panel-copy">Shape how the website front desk looks, sounds, routes, and hands work into the operator workspace before you add it to the live site.</p>
+        <p class="workspace-panel-copy">Shape how the website front desk looks, sounds, routes, and hands work into Today, Contacts, and Outcomes before you add it to the live site.</p>
       </div>
       <form data-settings-form data-form-kind="customize">
         <div class="studio-layout">
@@ -2313,14 +2487,16 @@ function buildCustomizePanel(agent, setup) {
                   <label for="assistant-contact-phone">Contact phone</label>
                   <input id="assistant-contact-phone" name="contact_phone" type="tel" value="${escapeHtml(agent.contactPhone || "")}" placeholder="+1 555 555 5555">
                 </div>
-                <div class="field">
-                  <label for="assistant-manual-outcome-mode">Manual outcome mode</label>
-                  <select id="assistant-manual-outcome-mode" name="manual_outcome_mode">
-                    <option value="false" ${agent.manualOutcomeMode === true ? "" : "selected"}>automatic only</option>
-                    <option value="true" ${agent.manualOutcomeMode === true ? "selected" : ""}>allow manual mark fallback</option>
-                  </select>
-                  <p class="field-help">Turn this on when the real success page cannot be instrumented and the owner needs a manual fallback in the action queue.</p>
-                </div>
+                ${manualOutcomeVisible ? `
+                  <div class="field">
+                    <label for="assistant-manual-outcome-mode">Manual outcome mode</label>
+                    <select id="assistant-manual-outcome-mode" name="manual_outcome_mode">
+                      <option value="false" ${agent.manualOutcomeMode === true ? "" : "selected"}>automatic only</option>
+                      <option value="true" ${agent.manualOutcomeMode === true ? "selected" : ""}>allow manual mark fallback</option>
+                    </select>
+                    <p class="field-help">Turn this on when the real success page cannot be instrumented and the owner needs a manual fallback in the action queue.</p>
+                  </div>
+                ` : ""}
               </div>
               <div class="form-grid">
                 <div class="field">
@@ -2360,16 +2536,18 @@ function buildCustomizePanel(agent, setup) {
               <p class="section-note">${escapeHtml(setup.knowledgeDescription)}</p>
             </section>
 
-            <section class="studio-group secondary">
-              <h3 class="studio-group-title">Advanced guidance</h3>
-              <p class="studio-group-copy">Optional guidance for emphasis, tone, and edge cases. Keep it focused on how the front desk should represent the business.</p>
-              <div class="form-grid">
-                <div class="field">
-                  <label for="assistant-instructions">Advanced guidance</label>
-                  <textarea id="assistant-instructions" name="system_prompt">${escapeHtml(agent.systemPrompt || "")}</textarea>
+            ${advancedGuidanceVisible ? `
+              <section class="studio-group secondary">
+                <h3 class="studio-group-title">Advanced guidance</h3>
+                <p class="studio-group-copy">Optional guidance for emphasis, tone, and edge cases. Keep it focused on how the front desk should represent the business.</p>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="assistant-instructions">Advanced guidance</label>
+                    <textarea id="assistant-instructions" name="system_prompt">${escapeHtml(agent.systemPrompt || "")}</textarea>
+                  </div>
                 </div>
-              </div>
-            </section>
+              </section>
+            ` : ""}
 
             <div class="studio-save-row">
               <button class="primary-button" type="submit">Save changes</button>
@@ -3162,7 +3340,7 @@ function createEmptyOperatorWorkspace() {
     nextAction: {
       key: "connect_google",
       title: "Connect Google",
-      description: "Connect Gmail and Calendar so Vonza can start building Today, Inbox, Calendar, and Contacts.",
+      description: "Connect Gmail and Calendar if you want the optional Inbox, Calendar, and Automations beta alongside Today and Contacts.",
       buttonLabel: "Connect Google",
       actionType: "connect_google",
       targetSection: "overview",
@@ -3979,10 +4157,12 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
   const followUpWorkflowMigrationRequired = actionQueue.followUpWorkflowMigrationRequired === true;
   const knowledgeFixWorkflowAvailable = actionQueue.knowledgeFixWorkflowAvailable !== false;
   const knowledgeFixWorkflowMigrationRequired = actionQueue.knowledgeFixWorkflowMigrationRequired === true;
+  const manualOutcomeVisible = isCapabilityExplicitlyVisible("manual_outcome_marks");
+  const knowledgeFixVisible = isCapabilityExplicitlyVisible("knowledge_fix_workflows");
   const compact = Boolean(options.compact);
   const allowStatusUpdates = options.allowStatusUpdates !== false && persistenceAvailable;
   const visibleItems = compact ? items.slice(0, 3) : items;
-  const sectionTitle = compact ? "Action queue feed" : "Action queue";
+  const sectionTitle = compact ? "Follow-up feed" : "Follow-up queue";
   const sectionCopy = compact
     ? "Outcomes turns into action here. These are the individual conversations that deserve owner follow-up or a better answer path."
     : "These items are surfaced from real visitor conversations so the owner can work specific follow-up moments instead of broad signal buckets.";
@@ -4100,7 +4280,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
         </div>
       `
       : "";
-    const manualOutcomeSummary = allowStatusUpdates
+    const manualOutcomeSummary = allowStatusUpdates && manualOutcomeVisible
       ? `
         <form class="action-queue-follow-up-form" data-manual-outcome-form data-action-key="${escapeHtml(item.key || "")}" data-lead-id="${escapeHtml(leadCapture?.id || "")}" data-follow-up-id="${escapeHtml(followUp?.id || leadCapture?.relatedFollowUpId || "")}" data-session-id="${escapeHtml(item.sessionKey || "")}" data-person-key="${escapeHtml(item.person?.key || item.personKey || "")}" data-intent-type="${escapeHtml(item.intent || "")}" data-action-type="${escapeHtml(item.actionType || "")}">
           <div class="form-grid two-col">
@@ -4131,7 +4311,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
       : "";
     const followUpSummary = followUpSupported
       ? `
-        ${followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up is read-only until the workflow migration is applied. Run db/agent_follow_up_workflows.sql before using this live.</div>` : ""}
+        ${followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up is visible, but still read-only while this workspace finishes setup.</div>` : ""}
         ${followUp ? `
           <form class="action-queue-follow-up-form" data-follow-up-form data-follow-up-id="${escapeHtml(followUp.id || "")}" data-action-key="${escapeHtml(item.key || "")}">
             <div class="action-queue-handoff-summary">
@@ -4188,9 +4368,9 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
     const knowledgeFixSupported = item.knowledgeFixSupported === true;
     const knowledgeFixActionsDisabled = !allowStatusUpdates || !knowledgeFixWorkflowAvailable || !knowledgeFix?.id;
     const knowledgeFixReadOnly = knowledgeFixStatus === "applied" || knowledgeFixStatus === "dismissed";
-    const knowledgeFixSummary = knowledgeFixSupported
+    const knowledgeFixSummary = knowledgeFixVisible && knowledgeFixSupported
       ? `
-        ${knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge fixes are read-only until the workflow migration is applied. Run db/agent_knowledge_fix_workflows.sql before using this live.</div>` : ""}
+        ${knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge improvements are visible, but still read-only while this workspace finishes setup.</div>` : ""}
         ${knowledgeFix ? `
           <form class="action-queue-knowledge-fix-form" data-knowledge-fix-form data-knowledge-fix-id="${escapeHtml(knowledgeFix.id || "")}" data-action-key="${escapeHtml(item.key || "")}">
             <div class="action-queue-handoff-summary">
@@ -4285,7 +4465,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             <span class="${getActionQueueStatusBadgeClass(item.status)}">${escapeHtml(getActionQueueStatusLabel(item.status))}</span>
             <span class="${getActionQueueOwnerWorkflowBadgeClass(item)}">${escapeHtml(workflow.label)}</span>
             ${followUp ? `<span class="${getFollowUpStatusBadgeClass(followUp.status)}">${escapeHtml(getFollowUpStatusLabel(followUp.status))}</span>` : ""}
-            ${knowledgeFix ? `<span class="${getKnowledgeFixStatusBadgeClass(knowledgeFix.status)}">${escapeHtml(getKnowledgeFixStatusLabel(knowledgeFix.status))}</span>` : ""}
+            ${knowledgeFixVisible && knowledgeFix ? `<span class="${getKnowledgeFixStatusBadgeClass(knowledgeFix.status)}">${escapeHtml(getKnowledgeFixStatusLabel(knowledgeFix.status))}</span>` : ""}
             <span class="pill">${escapeHtml(`${item.count || 0} conversation${item.count === 1 ? "" : "s"}`)}</span>
             ${personThreadLabel ? `<span class="pill">${escapeHtml(personThreadLabel)}</span>` : ""}
           </div>
@@ -4434,7 +4614,7 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
             </div>
             <div class="action-queue-form-actions">
               <button class="primary-button" type="submit" ${allowStatusUpdates ? "" : "disabled"}>Save owner handoff</button>
-              <span class="action-queue-meta-inline">${escapeHtml(migrationRequired ? "Apply the action queue migration before follow-up can be saved." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
+              <span class="action-queue-meta-inline">${escapeHtml(migrationRequired ? "This queue is still finishing setup, so changes are temporarily read-only." : "Keep this lightweight: note what happened, record the outcome, and decide whether follow-up is still needed.")}</span>
             </div>
           </form>
         </div>
@@ -4457,9 +4637,9 @@ function buildActionQueueMarkup(agent, actionQueue = createEmptyActionQueue(), o
           `).join("")}
         </div>
       </div>
-      ${migrationRequired ? `<div class="placeholder-card">Action queue follow-up is currently read-only because the database migration for persistent queue fields is not applied yet. Apply db/action_queue_statuses.sql before using this operational handoff live.</div>` : ""}
-      ${!migrationRequired && followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up workflows are read-only because the workflow migration is not applied yet. Apply db/agent_follow_up_workflows.sql before using outbound follow-up from the queue.</div>` : ""}
-      ${!migrationRequired && knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge-fix workflows are read-only because the workflow migration is not applied yet. Apply db/agent_knowledge_fix_workflows.sql before using inline knowledge improvement from the queue.</div>` : ""}
+      ${migrationRequired ? `<div class="placeholder-card">The follow-up queue is still finishing setup on this workspace, so updates are temporarily read-only.</div>` : ""}
+      ${!migrationRequired && followUpWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared follow-up drafts are visible, but editing is temporarily read-only while this workspace finishes setup.</div>` : ""}
+      ${knowledgeFixVisible && !migrationRequired && knowledgeFixWorkflowMigrationRequired ? `<div class="placeholder-card">Prepared knowledge improvements are visible, but editing is temporarily read-only while this workspace finishes setup.</div>` : ""}
       ${visibleItems.length ? `
         ${compact ? `
           <div class="action-queue-secondary-action">
@@ -4550,7 +4730,7 @@ function buildOverviewState(agent, messages, setup, actionQueue = createEmptyAct
       title = `Your front desk is live and ${queueSummary.attentionNeeded} action item${queueSummary.attentionNeeded === 1 ? "" : "s"} need attention`;
       copy = `Vonza is live on ${installStatus.host || "your site"} and is surfacing visitor conversations, follow-up work, and operator tasks that deserve attention.`;
       primaryAction = {
-        label: "Review action queue",
+        label: "Review follow-up queue",
         type: "focus",
         value: "action-queue",
       };
@@ -4784,7 +4964,7 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
     : !isInstallSeen(overview.installStatus)
       ? "Finish live install"
       : overview.queueSummary.attentionNeeded > 0
-        ? "Review action queue"
+        ? "Review follow-up queue"
       : overview.queueSummary.total > 0
           ? "Close the loop on follow-up"
       : overview.analyticsSummary.weakAnswerCount > 0
@@ -4797,9 +4977,9 @@ function buildOverviewSection(agent, messages, setup, actionQueue = createEmptyA
     : !isInstallSeen(overview.installStatus)
       ? "Place Vonza on the live site so it can start detecting real visitor behavior and customer intent."
       : overview.queueSummary.attentionNeeded > 0
-        ? "Important high-intent or weak-answer items are in the Action Queue. Review them first so the owner knows which visitors or answer paths still need attention."
+        ? "Important high-intent or weak-answer items are in the follow-up queue. Review them first so the owner knows which visitors or answer paths still need attention."
         : overview.queueSummary.total > 0
-          ? "The Action Queue already holds important conversation follow-up. Keep moving items through review so the front desk becomes more operational, not just informative."
+          ? "The follow-up queue already holds important conversation follow-up. Keep moving items through review so the front desk becomes more operational, not just informative."
       : overview.analyticsSummary.weakAnswerCount > 0
         ? "Several live questions ended in weak or uncertain answers. Use Outcomes to review those conversations, then refine website knowledge or front-desk setup."
         : highIntentSignals > 0
@@ -5291,7 +5471,7 @@ function buildAnalyticsPanel(agent, messages, setup, actionQueue = createEmptyAc
                   ].filter(Boolean).join(" · "))}</p>
                   <div class="action-queue-secondary-action">
                     ${lead.latestMessageId ? `<button class="ghost-button" type="button" data-open-conversation data-message-id="${escapeHtml(lead.latestMessageId)}">Open related conversation</button>` : ""}
-                    <button class="ghost-button" type="button" data-overview-focus="action-queue">Open action queue</button>
+                    <button class="ghost-button" type="button" data-overview-focus="action-queue">Open follow-up queue</button>
                   </div>
                 </div>
               `).join("")}
@@ -5348,7 +5528,7 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
     <section class="workspace-panel" data-shell-section="inbox" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Inbox</h2>
-        <p class="workspace-panel-copy">Connected Gmail threads are classified into operator buckets so the owner can approve replies, spot ignored leads, and handle complaints from one queue.</p>
+        <p class="workspace-panel-copy">Inbox is an optional Google-connected beta. It brings recent Gmail threads into Vonza so the owner can review replies, spot missed leads, and handle complaints from one place.</p>
       </div>
       <div class="workspace-section-stack">
         <section class="workspace-card-soft">
@@ -5357,8 +5537,8 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
             <p class="workspace-panel-copy">${escapeHtml(primaryAccount?.status === "connected"
               ? `Connected as ${primaryAccount.accountEmail || primaryAccount.displayName || "Google account"}. Mailbox: ${primaryAccount.selectedMailbox || "INBOX"}.`
               : status.googleConfigReady
-                ? "Connect Google to unlock Inbox, sync recent threads, and keep Gmail permissions explicit and auditable."
-                : "Google connection is not configured on this deployment yet, so Inbox will stay in preview mode.")}</p>
+                ? "Connect Google to unlock the Inbox beta, sync recent threads, and keep permissions explicit and auditable."
+                : "This deployment is using the public launch core without the optional Google Inbox beta.")}</p>
           </div>
           <div class="inline-actions">
             <button class="${primaryAccount?.status === "connected" ? "ghost-button" : "primary-button"}" type="button" data-google-connect ${status.googleConfigReady ? "" : "disabled"}>${primaryAccount?.status === "connected" ? "Reconnect Google" : "Connect Google"}</button>
@@ -5366,7 +5546,7 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
           </div>
           ${primaryAccount?.status === "connected"
             ? `<p class="section-note">Scopes granted: ${(primaryAccount.scopes || []).length}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.</p>`
-            : `<p class="section-note">Vonza requests Gmail read, compose, and send plus Calendar read and event mutation scopes so all sends and event changes can stay approval-first.</p>`}
+            : `<p class="section-note">Vonza requests Gmail read, compose, and send plus Calendar read and event scopes so every reply and event change can stay approval-first.</p>`}
         </section>
 
         <section class="workspace-card-soft">
@@ -5375,12 +5555,12 @@ function buildInboxPanel(agent, operatorWorkspace = createEmptyOperatorWorkspace
           ${primaryAccount?.status !== "connected" ? buildOperatorEmptyState({
             title: "Connect Google to unlock Inbox",
             copy: status.googleConfigReady
-              ? "Vonza will sync recent Gmail threads, classify them into operator buckets, and prepare approval-first drafts here."
-              : "Add the Google env vars and redeploy before owners can connect Gmail and unlock Inbox.",
+              ? "Vonza will sync recent Gmail threads, classify them, and prepare approval-first drafts here."
+              : "This workspace is still useful without Inbox. Turn on the optional Google beta later if you want email threads here.",
             actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
           }) : !activation.inboxSynced ? buildOperatorEmptyState({
             title: "Run your first inbox sync",
-            copy: "The Google account is connected, but Vonza has not pulled the first inbox snapshot yet. Run the first sync to make Inbox useful.",
+            copy: "The Google account is connected, but Vonza has not pulled the first inbox snapshot yet. Run the first sync to make the Inbox beta useful.",
             actionMarkup: `<button class="primary-button" type="button" data-refresh-operator data-force-sync="true">Run first sync</button>`,
           }) : threads.length ? `
             <div class="operator-thread-grid">
@@ -5444,7 +5624,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
     <section class="workspace-panel" data-shell-section="calendar" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Calendar</h2>
-        <p class="workspace-panel-copy">Vonza surfaces the day view, suggested slots, booking signals, and approval-first calendar changes without silently mutating the owner calendar.</p>
+        <p class="workspace-panel-copy">Calendar is an optional Google-connected beta. It surfaces the day view, suggested slots, booking signals, and approval-first calendar changes without silently mutating the owner calendar.</p>
       </div>
       <div class="workspace-section-stack">
         <section class="workspace-card-soft">
@@ -5461,7 +5641,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
             title: "Connect Google to unlock Calendar",
             copy: status.googleConfigReady
               ? "Vonza will bring in today’s events, spot open gaps, and keep calendar changes approval-first."
-              : "Google connection is not configured on this deployment yet, so Calendar stays in explanation mode.",
+              : "This workspace is using the public launch core without the optional Google Calendar beta.",
             actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
           }) : !activation.calendarSynced ? buildOperatorEmptyState({
             title: "Run your first calendar sync",
@@ -5597,13 +5777,13 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
     <section class="workspace-panel" data-shell-section="automations" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Automations</h2>
-        <p class="workspace-panel-copy">Vonza keeps campaigns, complaint workflows, follow-up approvals, and operator tasks structured and approval-first instead of silently sending or mutating on its own.</p>
+        <p class="workspace-panel-copy">Automations is an optional Google-connected beta. It keeps campaigns, follow-up approvals, and operator tasks structured and approval-first instead of silently sending on its own.</p>
       </div>
       <div class="workspace-section-stack">
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Complaint and support queue</h3>
           ${!googleConnected ? buildOperatorEmptyState({
-            title: "Approval-first automations start after connection",
+            title: "Connect Google to unlock Automations beta",
             copy: "Once Google is connected, Vonza can draft complaint recovery, support follow-up, and campaign work without silently sending on its own.",
             actionMarkup: buildOperatorNextActionButton(operatorWorkspace.nextAction),
           }) : complaintTasks.length ? `
@@ -5645,8 +5825,9 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
               </div>
             </div>
             <div class="inline-actions">
-              <button class="primary-button" type="submit">Generate campaign draft</button>
+              <button class="primary-button" type="submit" ${googleConnected ? "" : "disabled"}>Generate campaign draft</button>
             </div>
+            ${googleConnected ? "" : `<p class="section-note">Connect Google first so campaign drafts have the right mailbox and calendar context.</p>`}
           </form>
         </section>
 
@@ -5682,7 +5863,7 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
             </div>
           ` : buildOperatorEmptyState({
             title: "No campaigns drafted yet",
-            copy: "Create the first automation draft once Google is connected to turn Vonza into an approval-first operator workspace, not just a monitor.",
+            copy: "Create the first automation draft once Google is connected if you want the optional approval-first beta to become part of your daily workflow.",
           })}
         </section>
 
@@ -5718,7 +5899,7 @@ function buildAutomationsPanel(agent, operatorWorkspace = createEmptyOperatorWor
                 </article>
               `).join("")}
             </div>
-          ` : `<div class="placeholder-card">Prepared follow-ups from existing Vonza workflows will show up here alongside campaigns and complaint tasks.</div>`}
+          ` : `<div class="placeholder-card">${escapeHtml(googleConnected ? "Prepared follow-ups will show up here alongside campaigns and complaint tasks." : "Connect Google if you want follow-up drafts and campaign work to appear in this beta workspace.")}</div>`}
         </section>
       </div>
     </section>
@@ -5736,6 +5917,8 @@ function renderAssistantShell(
   const activeSection = getActiveShellSection(setup, operatorWorkspace);
   const shellStatus = setup.isReady ? "Setup complete" : "Setup in progress";
   const operatorEnabled = operatorWorkspace.enabled !== false;
+  const workspaceMode = getWorkspaceMode(operatorWorkspace);
+  const googleBetaVisible = isCapabilityVisibleForWorkspace("google_connect", operatorWorkspace);
   const primaryAction = setup.isReady
     ? `<button class="primary-button" data-action="copy-install" ${trimText(agent.publicAgentKey) ? "" : "disabled"}>Add to website</button>`
     : `<button class="primary-button" type="button" data-shell-target="customize">Continue setup</button>`;
@@ -5748,12 +5931,12 @@ function renderAssistantShell(
       <section class="workspace-header">
         <div class="workspace-header-top">
           <div>
-            <span class="eyebrow">${operatorEnabled ? (setup.isReady ? "Operator workspace" : "Operator activation") : (setup.isReady ? "Workspace" : "Post-purchase setup")}</span>
+            <span class="eyebrow">${escapeHtml(workspaceMode.eyebrow)}</span>
             <h1 class="workspace-title">${escapeHtml(agent.assistantName || agent.name)}</h1>
             <p class="workspace-subtitle">${escapeHtml(agent.websiteUrl || "No website connected yet")}</p>
             <div class="workspace-badge-row">
               <span class="${getBadgeClass(shellStatus)}">${shellStatus}</span>
-              ${operatorEnabled ? `<span class="${getBadgeClass((operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Ready" : "Limited")}">${(operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Google connected" : "Google not connected"}</span>` : ""}
+              ${googleBetaVisible ? `<span class="${getBadgeClass((operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Ready" : "Limited")}">${(operatorWorkspace.connectedAccounts || []).some((account) => account.status === "connected") ? "Google beta connected" : "Google beta available"}</span>` : ""}
               <span class="${getBadgeClass(setup.knowledgeReady ? "Ready" : setup.knowledgeLimited ? "Limited" : "Not imported")}">${setup.knowledgeReady ? "Knowledge ready" : setup.knowledgeLimited ? "Knowledge limited" : "Knowledge not imported"}</span>
               <span class="${getBadgeClass(isInstallSeen(getDefaultInstallStatus(agent)) ? "Ready" : getDefaultInstallStatus(agent).state === "installed_unseen" ? "Limited" : getDefaultInstallStatus(agent).state === "domain_mismatch" || getDefaultInstallStatus(agent).state === "verify_failed" ? "Needs attention" : "Not imported")}">${escapeHtml(agent.installStatus?.label || "Not installed yet")}</span>
             </div>
@@ -5767,17 +5950,21 @@ function renderAssistantShell(
         ${buildWorkspaceTabs(activeSection, setup, operatorWorkspace)}
       </section>
 
+      <div class="shell-status-banner">
+        <strong>${escapeHtml(workspaceMode.title)}</strong> ${escapeHtml(workspaceMode.copy)}
+      </div>
+
       ${operatorEnabled && !setup.isReady ? `
         <div class="shell-status-banner">
-          Your website front desk is unlocked and this workspace now guides Today, Contacts, Inbox, Calendar, and approval-first automations. Finish the key details in Customize, connect Google, then run the first sync.
+          Finish the front-desk basics in Customize, make the preview strong, add the widget to the live site, and then use Today, Contacts, and Outcomes to confirm the first real lead path.
         </div>
       ` : ""}
 
       ${buildOverviewPanel(agent, messages, setup, actionQueue, operatorWorkspace)}
-      ${operatorEnabled ? buildContactsPanel(operatorWorkspace) : ""}
-      ${operatorEnabled ? buildInboxPanel(agent, operatorWorkspace) : ""}
-      ${operatorEnabled ? buildCalendarPanel(agent, operatorWorkspace) : ""}
-      ${operatorEnabled ? buildAutomationsPanel(agent, operatorWorkspace) : ""}
+      ${isCapabilityVisibleForWorkspace("contacts", operatorWorkspace) ? buildContactsPanel(operatorWorkspace) : ""}
+      ${isCapabilityVisibleForWorkspace("inbox", operatorWorkspace) ? buildInboxPanel(agent, operatorWorkspace) : ""}
+      ${isCapabilityVisibleForWorkspace("calendar", operatorWorkspace) ? buildCalendarPanel(agent, operatorWorkspace) : ""}
+      ${isCapabilityVisibleForWorkspace("automations", operatorWorkspace) ? buildAutomationsPanel(agent, operatorWorkspace) : ""}
       ${buildCustomizePanel(agent, setup)}
       ${buildAnalyticsPanel(agent, messages, setup, actionQueue)}
     </div>
@@ -5831,7 +6018,7 @@ function buildPreviewSection(agent, setup) {
   return `
     <div class="preview-header">
       <h2 class="section-heading">Try your website front desk</h2>
-      <p class="section-copy">See how Vonza answers questions, routes the next step, and captures follow-up before it feeds the operator workspace.</p>
+      <p class="section-copy">See how Vonza answers questions, routes the next step, and captures follow-up before it feeds Today, Contacts, and Outcomes.</p>
       <div class="preview-status-row">
         ${statusPills}
         <span class="preview-status-pill">${escapeHtml(agent.websiteUrl || "No website URL")}</span>
@@ -6253,7 +6440,7 @@ async function loadOperatorWorkspace(agentId, options = {}) {
       featureEnabled: false,
       briefing: {
         title: "Operator workspace is off",
-        text: "The full operator workspace is disabled on this deployment, so Vonza is keeping the lighter front-desk workspace active.",
+        text: "This deployment is running the front-desk launch core, so Vonza is keeping the lighter front-desk workspace active.",
       },
       status: {
         ...createEmptyOperatorWorkspace().status,
@@ -6284,6 +6471,29 @@ async function loadOperatorWorkspaceSafe(agentId, options = {}) {
       },
     });
   }
+}
+
+function coalesceWorkspaceLoadState({
+  messagesResult,
+  actionQueueResult,
+  operatorResult,
+} = {}) {
+  return {
+    messages: messagesResult?.status === "fulfilled" ? messagesResult.value : [],
+    actionQueue: actionQueueResult?.status === "fulfilled"
+      ? actionQueueResult.value
+      : createEmptyActionQueue(),
+    operatorWorkspace: operatorResult?.status === "fulfilled"
+      ? operatorResult.value
+      : {
+        ...createEmptyOperatorWorkspace(),
+        health: {
+          ...createEmptyOperatorWorkspace().health,
+          globalError: "We couldn't load the operator workspace.",
+        },
+      },
+    hasPartialFailure: [messagesResult, actionQueueResult, operatorResult].some((result) => result?.status === "rejected"),
+  };
 }
 
 function renderWorkspaceFromState() {
@@ -7751,7 +7961,7 @@ function bindSharedDashboardEvents(agent, messages, setup, actionQueue, operator
 
         setDashboardFocus("action-queue");
         if (result.migrationRequired) {
-          setStatus("Follow-up could not be persisted yet. Apply the action queue migration first.");
+          setStatus("Follow-up could not be saved yet because this workspace is still finishing setup.");
         } else {
           setStatus("Owner handoff saved.");
         }
@@ -8475,7 +8685,7 @@ async function boot() {
         clearLaunchState();
         setStatus("Setup was interrupted before your assistant was created. You can start again whenever you're ready.");
       }
-      setStatus("Sign in complete. Unlock Vonza to open your front desk and operator workspace.");
+      setStatus("Sign in complete. Unlock Vonza to open your public launch workspace.");
       renderAccessLocked(null);
       return;
     }
@@ -8487,7 +8697,7 @@ async function boot() {
       clearLaunchState();
       setStatus(accessStatus === "suspended"
         ? "Workspace access is currently paused."
-        : "Finish payment to open your Vonza front desk and operator workspace."
+        : "Finish payment to open your Vonza public launch workspace."
       );
       renderAccessLocked(agent);
       return;
@@ -8498,24 +8708,21 @@ async function boot() {
       loadActionQueue(agent.id),
       loadOperatorWorkspaceSafe(agent.id),
     ]);
-    const messages = messagesResult.status === "fulfilled" ? messagesResult.value : [];
-    const actionQueue = actionQueueResult.status === "fulfilled"
-      ? actionQueueResult.value
-      : createEmptyActionQueue();
-    const operatorWorkspace = operatorResult.status === "fulfilled"
-      ? operatorResult.value
-      : {
-        ...createEmptyOperatorWorkspace(),
-        health: {
-          ...createEmptyOperatorWorkspace().health,
-          globalError: "We couldn't load the operator workspace.",
-        },
-      };
+    const {
+      messages,
+      actionQueue,
+      operatorWorkspace,
+      hasPartialFailure,
+    } = coalesceWorkspaceLoadState({
+      messagesResult,
+      actionQueueResult,
+      operatorResult,
+    });
     const setup = inferSetup(agent);
 
     clearLaunchState();
 
-    if (messagesResult.status === "rejected" || actionQueueResult.status === "rejected" || operatorResult.status === "rejected") {
+    if (hasPartialFailure) {
       setStatus("Vonza loaded with partial data. One workspace request failed, but the dashboard stayed available.");
     }
 

@@ -210,7 +210,80 @@ test("dashboard normalizes sparse operator payloads without forcing the legacy s
 
   assert.match(harness.buildInboxPanel({}, workspace), /Connect Google to unlock Inbox/);
   assert.match(harness.buildCalendarPanel({}, workspace), /Connect Google to unlock Calendar/);
-  assert.match(harness.buildAutomationsPanel({}, workspace), /Approval-first automations start after connection/);
+  assert.match(harness.buildAutomationsPanel({}, workspace), /Connect Google to unlock Automations beta/);
+});
+
+test("launch profile keeps the stable core visible and labels Google workspace surfaces as beta", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+      VONZA_LAUNCH_PROFILE: {
+        mode: "public_cohort_v1",
+        matrix: {
+          today: { state: "stable" },
+          contacts: { state: "stable" },
+          inbox: { state: "beta" },
+          calendar: { state: "beta" },
+          automations: { state: "beta" },
+          customize: { state: "stable" },
+          outcomes: { state: "stable" },
+          advanced_guidance: { state: "hidden" },
+          manual_outcome_marks: { state: "hidden" },
+          knowledge_fix_workflows: { state: "hidden" },
+        },
+      },
+    },
+  });
+
+  assert.equal(harness.getCapabilityState("today"), "stable");
+  assert.equal(harness.getCapabilityState("inbox"), "beta");
+  assert.equal(harness.getCapabilityState("manual_outcome_marks"), "hidden");
+  assert.equal(harness.isCapabilityStable("contacts"), true);
+  assert.equal(harness.isCapabilityBeta("calendar"), true);
+});
+
+test("launch mode hides Google beta tabs when Google config is unavailable", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: true,
+    featureEnabled: true,
+    status: {
+      enabled: true,
+      featureEnabled: true,
+      googleConfigReady: false,
+      googleConnected: false,
+    },
+  });
+
+  assert.deepEqual(
+    Array.from(harness.getAvailableShellSections(workspace)),
+    ["overview", "contacts", "customize", "analytics"]
+  );
+  assert.equal(harness.getWorkspaceMode(workspace).key, "operator_without_google_beta");
+});
+
+test("front-desk-only mode keeps the stable non-operator shell available", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: false,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: false,
+    featureEnabled: false,
+  });
+
+  assert.deepEqual(
+    Array.from(harness.getAvailableShellSections(workspace)),
+    ["overview", "customize", "analytics"]
+  );
+  assert.equal(harness.getWorkspaceMode(workspace).key, "front_desk_only");
 });
 
 test("dashboard renders inbox threads safely when thread messages are missing", async () => {
@@ -284,4 +357,28 @@ test("dashboard keeps the legacy shell only when the operator flag is off", asyn
     Array.from(harness.getAvailableShellSections(workspace)),
     ["overview", "customize", "analytics"]
   );
+});
+
+test("dashboard coalesces partial workspace failures without blanking the shell", () => {
+  const harness = createDashboardHarness();
+
+  const state = harness.coalesceWorkspaceLoadState({
+    messagesResult: {
+      status: "fulfilled",
+      value: [{ id: "message-1", content: "Hello" }],
+    },
+    actionQueueResult: {
+      status: "rejected",
+      reason: new Error("queue failed"),
+    },
+    operatorResult: {
+      status: "fulfilled",
+      value: harness.createEmptyOperatorWorkspace(),
+    },
+  });
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(Array.isArray(state.actionQueue.items), true);
+  assert.equal(state.operatorWorkspace.health.globalError, "");
+  assert.equal(state.hasPartialFailure, true);
 });
