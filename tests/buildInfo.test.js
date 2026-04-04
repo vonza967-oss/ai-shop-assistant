@@ -52,6 +52,7 @@ async function withEnv(overrides, fn) {
 test("health and build endpoints expose version and build metadata", async () => {
   await withEnv({
     VONZA_OPERATOR_WORKSPACE_V1: "true",
+    VONZA_TODAY_COPILOT_V1: "true",
     RENDER_GIT_COMMIT: "abc123def456",
     npm_package_version: "1.0.0",
   }, async () => {
@@ -70,6 +71,26 @@ test("health and build endpoints expose version and build metadata", async () =>
       assert.equal(health.operatorWorkspaceV1Enabled, true);
       assert.equal(build.version, "1.0.0");
       assert.equal(build.buildSha, "abc123def456");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test("public config exposes the today copilot browser flag", async () => {
+  await withEnv({
+    VONZA_OPERATOR_WORKSPACE_V1: "true",
+    VONZA_TODAY_COPILOT_V1: "true",
+  }, async () => {
+    const app = express();
+    app.use(createPublicRouter({ rootDir: repoRoot }));
+    const server = await startServer(app);
+
+    try {
+      const response = await fetch(`${server.baseUrl}/public-config.js`);
+      const text = await response.text();
+
+      assert.match(text, /VONZA_TODAY_COPILOT_V1_ENABLED = true/);
     } finally {
       await server.close();
     }

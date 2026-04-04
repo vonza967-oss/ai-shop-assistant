@@ -449,6 +449,26 @@ export const PERSISTENCE_SCHEMA_HINTS = Object.freeze({
     ],
     migrationFiles: ["contacts_people_workspace.sql"],
   },
+  operator_business_profiles: {
+    requiredColumns: [
+      "id",
+      "agent_id",
+      "business_id",
+      "owner_user_id",
+      "business_summary",
+      "services",
+      "pricing",
+      "policies",
+      "service_areas",
+      "operating_hours",
+      "approved_contact_channels",
+      "approval_preferences",
+      "metadata",
+      "created_at",
+      "updated_at",
+    ],
+    migrationFiles: ["operator_business_profiles.sql"],
+  },
   operator_contact_identities: {
     requiredColumns: [
       "id",

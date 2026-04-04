@@ -213,6 +213,96 @@ test("dashboard normalizes sparse operator payloads without forcing the legacy s
   assert.match(harness.buildAutomationsPanel({}, workspace), /Connect Google to unlock Automations beta/);
 });
 
+test("today copilot stays hidden when the browser flag is off", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+      VONZA_TODAY_COPILOT_V1_ENABLED: false,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: true,
+    featureEnabled: true,
+    copilot: {
+      enabled: true,
+      featureEnabled: true,
+      readOnly: true,
+      draftOnly: true,
+      headline: "Copilot would be here",
+    },
+  });
+
+  const overview = harness.buildOperatorOverviewSection({}, workspace);
+  assert.doesNotMatch(overview, /Today Copilot/);
+});
+
+test("today copilot renders inside Today when the flag is on", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+      VONZA_TODAY_COPILOT_V1_ENABLED: true,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: true,
+    featureEnabled: true,
+    copilot: {
+      enabled: true,
+      featureEnabled: true,
+      readOnly: true,
+      draftOnly: true,
+      sparseData: false,
+      headline: "1 thing needs attention today.",
+      summary: "Copilot is summarizing stable-core data only.",
+      answers: [
+        {
+          question: "What needs attention today?",
+          answer: "One pricing gap needs follow-up.",
+          confidence: "high",
+          rationale: "Grounded in the action queue.",
+        },
+      ],
+      recommendations: [
+        {
+          title: "Close the pricing-follow-up gap",
+          summary: "A visitor asked about pricing and still has no recorded outcome.",
+          priority: "high",
+          confidence: "medium",
+          rationale: "Pricing intent is high-buying-intent.",
+        },
+      ],
+      drafts: [
+        {
+          title: "Draft follow-up for Taylor Reed",
+          subject: "Vonza Plumbing: following up on pricing",
+          body: "Hi Taylor,\n\nFollowing up on pricing.\n\nVonza Plumbing",
+          channel: "email",
+          confidence: "high",
+        },
+      ],
+      context: {
+        businessProfile: {
+          readiness: {
+            summary: "All core business context areas are filled for Copilot.",
+            missingCount: 0,
+          },
+        },
+        warnings: [],
+      },
+      fallback: {
+        guidance: [],
+      },
+    },
+  });
+
+  const overview = harness.buildOperatorOverviewSection({}, workspace);
+  assert.match(overview, /Today Copilot/);
+  assert.match(overview, /Read-only summaries and approval-first drafts/);
+  assert.match(overview, /Draft follow-up for Taylor Reed/);
+});
+
 test("launch profile keeps the stable core visible and labels Google workspace surfaces as beta", () => {
   const harness = createDashboardHarness({
     windowFlags: {

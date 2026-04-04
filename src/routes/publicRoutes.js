@@ -6,6 +6,7 @@ import {
   getPublicAppUrl,
   getSupabaseAnonKey,
   getSupabasePublicUrl,
+  isTodayCopilotEnabled,
   isOperatorWorkspaceV1Enabled,
   isLocalDevBillingRequestAllowed,
 } from "../config/env.js";
@@ -57,6 +58,7 @@ export function createPublicRouter({ rootDir }) {
 
   router.get("/public-config.js", (req, res) => {
     const operatorWorkspaceEnabled = isOperatorWorkspaceV1Enabled();
+    const todayCopilotEnabled = isTodayCopilotEnabled();
     const launchProfile = getPublicLaunchProfile({
       operatorWorkspaceEnabled,
     });
@@ -68,6 +70,7 @@ window.VONZA_SUPABASE_ANON_KEY = ${JSON.stringify(getSupabaseAnonKey())};
 window.VONZA_DEV_FAKE_BILLING = ${JSON.stringify(isLocalDevBillingRequestAllowed(req))};
 window.VONZA_OPERATOR_WORKSPACE_V1_ENABLED = ${JSON.stringify(operatorWorkspaceEnabled)};
 window.VONZA_OPERATOR_WORKSPACE_V1 = window.VONZA_OPERATOR_WORKSPACE_V1_ENABLED;
+window.VONZA_TODAY_COPILOT_V1_ENABLED = ${JSON.stringify(todayCopilotEnabled)};
 window.VONZA_APP_VERSION = ${JSON.stringify(getAppVersion())};
 window.VONZA_BUILD_SHA = ${JSON.stringify(getBuildSha())};
 window.VONZA_LAUNCH_PROFILE = ${JSON.stringify(launchProfile)};

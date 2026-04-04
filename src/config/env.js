@@ -79,6 +79,10 @@ export function isOperatorWorkspaceV1Enabled() {
   return normalizeBooleanEnv(process.env.VONZA_OPERATOR_WORKSPACE_V1, true);
 }
 
+export function isTodayCopilotEnabled() {
+  return normalizeBooleanEnv(process.env.VONZA_TODAY_COPILOT_V1, false);
+}
+
 export function getBuildSha() {
   return String(
     process.env.RENDER_GIT_COMMIT
