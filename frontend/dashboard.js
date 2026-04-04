@@ -37,6 +37,8 @@ const LAUNCH_STEPS = [
 const trackedEventKeys = new Set();
 const FULL_SHELL_SECTIONS = ["overview", "contacts", "inbox", "calendar", "automations", "customize", "analytics"];
 const LEGACY_SHELL_SECTIONS = ["overview", "customize", "analytics"];
+const OPERATOR_WORKSPACE_BROWSER_FLAG = "VONZA_OPERATOR_WORKSPACE_V1_ENABLED";
+const LEGACY_OPERATOR_WORKSPACE_BROWSER_FLAG = "VONZA_OPERATOR_WORKSPACE_V1";
 const ACTION_QUEUE_STATUSES = ["new", "reviewed", "done", "dismissed"];
 const AUTH_VIEW_MODES = {
   SIGN_IN: "sign-in",
@@ -127,8 +129,90 @@ function hasAuthConfig() {
   return Boolean(window.VONZA_SUPABASE_URL && window.VONZA_SUPABASE_ANON_KEY && window.supabase?.createClient);
 }
 
+function readWindowBooleanFlag(...keys) {
+  for (const key of keys) {
+    const value = window[key];
+
+    if (value === true || value === false) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+
+      if (normalized === "true") {
+        return true;
+      }
+
+      if (normalized === "false") {
+        return false;
+      }
+    }
+  }
+
+  return false;
+}
+
 function isOperatorWorkspaceFlagEnabled() {
-  return window.VONZA_OPERATOR_WORKSPACE_V1 === true;
+  return readWindowBooleanFlag(
+    OPERATOR_WORKSPACE_BROWSER_FLAG,
+    LEGACY_OPERATOR_WORKSPACE_BROWSER_FLAG
+  );
+}
+
+function normalizeOperatorRecord(value, fallback = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ...fallback };
+  }
+
+  return {
+    ...fallback,
+    ...value,
+  };
+}
+
+function normalizeOperatorArray(value, normalizeItem = null) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => (typeof normalizeItem === "function" ? normalizeItem(item) : item));
+}
+
+function normalizeOperatorWorkspaceThreadMessage(message = {}) {
+  return normalizeOperatorRecord(message);
+}
+
+function normalizeOperatorWorkspaceThread(thread = {}) {
+  const source = normalizeOperatorRecord(thread);
+  return {
+    ...source,
+    messages: normalizeOperatorArray(source.messages, normalizeOperatorWorkspaceThreadMessage),
+  };
+}
+
+function normalizeOperatorWorkspaceAccount(account = {}) {
+  const source = normalizeOperatorRecord(account);
+  return {
+    ...source,
+    scopes: Array.isArray(source.scopes) ? source.scopes.filter(Boolean) : [],
+    scopeAudit: normalizeOperatorRecord(source.scopeAudit),
+  };
+}
+
+function normalizeOperatorWorkspaceContact(contact = {}) {
+  const source = normalizeOperatorRecord(contact);
+  return {
+    ...source,
+    flags: Array.isArray(source.flags) ? source.flags.filter(Boolean) : [],
+    sources: Array.isArray(source.sources) ? source.sources.filter(Boolean) : [],
+    timeline: normalizeOperatorArray(source.timeline, normalizeOperatorRecord),
+    counts: normalizeOperatorRecord(source.counts),
+    nextAction: normalizeOperatorRecord(source.nextAction),
+    latestOutcome: normalizeOperatorRecord(source.latestOutcome),
+  };
 }
 
 function getAuthHeaders(additionalHeaders = {}) {
@@ -5386,7 +5470,7 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
           }) : (calendar.suggestedSlots || []).length ? `
             <div class="analytics-list">
               ${(calendar.suggestedSlots || []).map((slot) => `
-                <div class="analytics-item" data-calendar-event-card data-event-id="${escapeHtml(event.id)}">
+                <div class="analytics-item">
                   <p class="analytics-item-title">${escapeHtml(slot.label || "")}</p>
                   <p class="analytics-subtle">${escapeHtml(`${formatSeenAt(slot.startAt)} to ${formatSeenAt(slot.endAt)}`)}</p>
                 </div>
@@ -6058,9 +6142,112 @@ async function loadActionQueue(agentId) {
   };
 }
 
+function normalizeOperatorWorkspace(data = null) {
+  const emptyWorkspace = createEmptyOperatorWorkspace();
+  const source = normalizeOperatorRecord(data);
+  const status = normalizeOperatorRecord(source.status, emptyWorkspace.status);
+  const activation = normalizeOperatorRecord(source.activation, emptyWorkspace.activation);
+  const briefing = normalizeOperatorRecord(source.briefing, emptyWorkspace.briefing);
+  const nextAction = normalizeOperatorRecord(source.nextAction, emptyWorkspace.nextAction);
+  const today = normalizeOperatorRecord(source.today, emptyWorkspace.today);
+  const contextOptions = normalizeOperatorRecord(source.contextOptions, emptyWorkspace.contextOptions);
+  const health = normalizeOperatorRecord(source.health, emptyWorkspace.health);
+  const inbox = normalizeOperatorRecord(source.inbox, emptyWorkspace.inbox);
+  const calendar = normalizeOperatorRecord(source.calendar, emptyWorkspace.calendar);
+  const automations = normalizeOperatorRecord(source.automations, emptyWorkspace.automations);
+  const outcomes = normalizeOperatorRecord(source.outcomes, emptyWorkspace.outcomes);
+  const contacts = normalizeOperatorRecord(source.contacts, emptyWorkspace.contacts);
+  const contactsFilters = normalizeOperatorRecord(contacts.filters, emptyWorkspace.contacts.filters);
+  const contactsSummary = normalizeOperatorRecord(contacts.summary, emptyWorkspace.contacts.summary);
+  const contactsHealth = normalizeOperatorRecord(contacts.health, emptyWorkspace.contacts.health);
+
+  return {
+    ...emptyWorkspace,
+    ...source,
+    enabled: source.enabled === false ? false : emptyWorkspace.enabled,
+    featureEnabled: source.featureEnabled === false ? false : emptyWorkspace.featureEnabled,
+    status: {
+      ...emptyWorkspace.status,
+      ...status,
+      enabled: status.enabled === false || source.enabled === false ? false : emptyWorkspace.status.enabled,
+      featureEnabled:
+        status.featureEnabled === false || source.featureEnabled === false
+          ? false
+          : emptyWorkspace.status.featureEnabled,
+    },
+    activation: {
+      ...emptyWorkspace.activation,
+      ...activation,
+      checklist: normalizeOperatorArray(activation.checklist, normalizeOperatorRecord),
+      metadata: normalizeOperatorRecord(activation.metadata, emptyWorkspace.activation.metadata),
+    },
+    briefing,
+    nextAction,
+    today,
+    contextOptions: {
+      ...emptyWorkspace.contextOptions,
+      ...contextOptions,
+      mailboxes: normalizeOperatorArray(contextOptions.mailboxes, normalizeOperatorRecord),
+      calendars: normalizeOperatorArray(contextOptions.calendars, normalizeOperatorRecord),
+    },
+    health,
+    connectedAccounts: normalizeOperatorArray(source.connectedAccounts, normalizeOperatorWorkspaceAccount),
+    inbox: {
+      ...emptyWorkspace.inbox,
+      ...inbox,
+      threads: normalizeOperatorArray(inbox.threads, normalizeOperatorWorkspaceThread),
+    },
+    calendar: {
+      ...emptyWorkspace.calendar,
+      ...calendar,
+      events: normalizeOperatorArray(calendar.events, normalizeOperatorRecord),
+      suggestedSlots: normalizeOperatorArray(calendar.suggestedSlots, normalizeOperatorRecord),
+      missedBookingOpportunities: normalizeOperatorArray(
+        calendar.missedBookingOpportunities,
+        normalizeOperatorRecord
+      ),
+    },
+    automations: {
+      ...emptyWorkspace.automations,
+      ...automations,
+      tasks: normalizeOperatorArray(automations.tasks, normalizeOperatorRecord),
+      campaigns: normalizeOperatorArray(automations.campaigns, normalizeOperatorRecord),
+      followUps: normalizeOperatorArray(automations.followUps, normalizeOperatorRecord),
+    },
+    outcomes: {
+      ...emptyWorkspace.outcomes,
+      ...outcomes,
+      recentOutcomes: normalizeOperatorArray(outcomes.recentOutcomes, normalizeOperatorRecord),
+    },
+    contacts: {
+      ...emptyWorkspace.contacts,
+      ...contacts,
+      list: normalizeOperatorArray(contacts.list, normalizeOperatorWorkspaceContact),
+      filters: {
+        ...emptyWorkspace.contacts.filters,
+        ...contactsFilters,
+        quick: normalizeOperatorArray(contactsFilters.quick, normalizeOperatorRecord),
+        sources: normalizeOperatorArray(contactsFilters.sources, normalizeOperatorRecord),
+      },
+      summary: {
+        ...emptyWorkspace.contacts.summary,
+        ...contactsSummary,
+      },
+      health: {
+        ...emptyWorkspace.contacts.health,
+        ...contactsHealth,
+      },
+    },
+    summary: {
+      ...emptyWorkspace.summary,
+      ...normalizeOperatorRecord(source.summary, emptyWorkspace.summary),
+    },
+  };
+}
+
 async function loadOperatorWorkspace(agentId, options = {}) {
   if (!isOperatorWorkspaceFlagEnabled()) {
-    return {
+    return normalizeOperatorWorkspace({
       ...createEmptyOperatorWorkspace(),
       enabled: false,
       featureEnabled: false,
@@ -6074,7 +6261,7 @@ async function loadOperatorWorkspace(agentId, options = {}) {
         featureEnabled: false,
         googleConnectReady: false,
       },
-    };
+    });
   }
 
   const url = new URL("/agents/operator-workspace", window.location.origin);
@@ -6082,112 +6269,20 @@ async function loadOperatorWorkspace(agentId, options = {}) {
   url.searchParams.set("client_id", getClientId());
   url.searchParams.set("force_sync", options.forceSync === true ? "true" : "false");
   const data = await fetchJson(url.toString());
-  return {
-    ...createEmptyOperatorWorkspace(),
-    ...(data || {}),
-    status: {
-      ...createEmptyOperatorWorkspace().status,
-      ...(data?.status || {}),
-    },
-    activation: {
-      ...createEmptyOperatorWorkspace().activation,
-      ...(data?.activation || {}),
-      checklist: Array.isArray(data?.activation?.checklist) ? data.activation.checklist : [],
-      metadata: {
-        ...createEmptyOperatorWorkspace().activation.metadata,
-        ...(data?.activation?.metadata || {}),
-      },
-    },
-    briefing: {
-      ...createEmptyOperatorWorkspace().briefing,
-      ...(data?.briefing || {}),
-    },
-    nextAction: {
-      ...createEmptyOperatorWorkspace().nextAction,
-      ...(data?.nextAction || {}),
-    },
-    today: {
-      ...createEmptyOperatorWorkspace().today,
-      ...(data?.today || {}),
-    },
-    contextOptions: {
-      ...createEmptyOperatorWorkspace().contextOptions,
-      ...(data?.contextOptions || {}),
-      mailboxes: Array.isArray(data?.contextOptions?.mailboxes)
-        ? data.contextOptions.mailboxes
-        : createEmptyOperatorWorkspace().contextOptions.mailboxes,
-      calendars: Array.isArray(data?.contextOptions?.calendars)
-        ? data.contextOptions.calendars
-        : createEmptyOperatorWorkspace().contextOptions.calendars,
-    },
-    health: {
-      ...createEmptyOperatorWorkspace().health,
-      ...(data?.health || {}),
-    },
-    inbox: {
-      ...createEmptyOperatorWorkspace().inbox,
-      ...(data?.inbox || {}),
-      threads: Array.isArray(data?.inbox?.threads) ? data.inbox.threads : [],
-    },
-    calendar: {
-      ...createEmptyOperatorWorkspace().calendar,
-      ...(data?.calendar || {}),
-      events: Array.isArray(data?.calendar?.events) ? data.calendar.events : [],
-      suggestedSlots: Array.isArray(data?.calendar?.suggestedSlots) ? data.calendar.suggestedSlots : [],
-      missedBookingOpportunities: Array.isArray(data?.calendar?.missedBookingOpportunities)
-        ? data.calendar.missedBookingOpportunities
-        : [],
-    },
-    automations: {
-      ...createEmptyOperatorWorkspace().automations,
-      ...(data?.automations || {}),
-      tasks: Array.isArray(data?.automations?.tasks) ? data.automations.tasks : [],
-      campaigns: Array.isArray(data?.automations?.campaigns) ? data.automations.campaigns : [],
-      followUps: Array.isArray(data?.automations?.followUps) ? data.automations.followUps : [],
-    },
-    outcomes: {
-      ...createEmptyOperatorWorkspace().outcomes,
-      ...(data?.outcomes || {}),
-      recentOutcomes: Array.isArray(data?.outcomes?.recentOutcomes) ? data.outcomes.recentOutcomes : [],
-    },
-    contacts: {
-      ...createEmptyOperatorWorkspace().contacts,
-      ...(data?.contacts || {}),
-      list: Array.isArray(data?.contacts?.list) ? data.contacts.list : [],
-      filters: {
-        ...createEmptyOperatorWorkspace().contacts.filters,
-        ...(data?.contacts?.filters || {}),
-        quick: Array.isArray(data?.contacts?.filters?.quick) ? data.contacts.filters.quick : [],
-        sources: Array.isArray(data?.contacts?.filters?.sources) ? data.contacts.filters.sources : [],
-      },
-      summary: {
-        ...createEmptyOperatorWorkspace().contacts.summary,
-        ...(data?.contacts?.summary || {}),
-      },
-      health: {
-        ...createEmptyOperatorWorkspace().contacts.health,
-        ...(data?.contacts?.health || {}),
-      },
-    },
-    summary: {
-      ...createEmptyOperatorWorkspace().summary,
-      ...(data?.summary || {}),
-    },
-    connectedAccounts: Array.isArray(data?.connectedAccounts) ? data.connectedAccounts : [],
-  };
+  return normalizeOperatorWorkspace(data);
 }
 
 async function loadOperatorWorkspaceSafe(agentId, options = {}) {
   try {
     return await loadOperatorWorkspace(agentId, options);
   } catch (error) {
-    return {
+    return normalizeOperatorWorkspace({
       ...createEmptyOperatorWorkspace(),
       health: {
         ...createEmptyOperatorWorkspace().health,
         globalError: error.message || "We couldn't load the operator workspace.",
       },
-    };
+    });
   }
 }
 
