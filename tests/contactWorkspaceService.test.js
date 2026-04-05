@@ -142,6 +142,64 @@ test("calendar event links to an existing contact when attendee data is sufficie
   assert.ok(result.list[0].flags.includes("booked"));
 });
 
+test("calendar event can link to a uniquely matched contact by attendee display name", () => {
+  const result = buildContactWorkspaceFromRecords({
+    leads: [
+      {
+        id: "lead-1",
+        contactName: "Morgan Lee",
+        contactEmail: "morgan@example.com",
+        captureState: "captured",
+        latestActionType: "booking_intent",
+        lastSeenAt: "2026-04-02T09:00:00.000Z",
+      },
+    ],
+    events: [
+      {
+        id: "event-1",
+        title: "Estimate call",
+        attendeeNames: ["Morgan Lee"],
+        startAt: "2026-04-05T10:00:00.000Z",
+        endAt: "2026-04-05T10:30:00.000Z",
+        status: "confirmed",
+      },
+    ],
+  });
+
+  assert.equal(result.list.length, 1);
+  assert.ok(result.list[0].sources.includes("calendar"));
+  assert.equal(result.list[0].email, "morgan@example.com");
+});
+
+test("calendar event can link to an existing contact by extracted attendee phone", () => {
+  const result = buildContactWorkspaceFromRecords({
+    storedContacts: [
+      {
+        id: "contact-1",
+        displayName: "Morgan Lee",
+        primaryEmail: "morgan@example.com",
+        primaryPhone: "(555) 111-2222",
+        primaryPhoneNormalized: "5551112222",
+        lastActivityAt: "2026-04-02T09:00:00.000Z",
+      },
+    ],
+    events: [
+      {
+        id: "event-1",
+        title: "Estimate call",
+        extractedPhones: ["555-111-2222"],
+        startAt: "2026-04-05T10:00:00.000Z",
+        endAt: "2026-04-05T10:30:00.000Z",
+        status: "confirmed",
+      },
+    ],
+  });
+
+  assert.equal(result.list.length, 1);
+  assert.ok(result.list[0].sources.includes("calendar"));
+  assert.equal(result.list[0].phone, "(555) 111-2222");
+});
+
 test("unresolved partial identities stay separate instead of merging on name alone", () => {
   const result = buildContactWorkspaceFromRecords({
     leads: [
