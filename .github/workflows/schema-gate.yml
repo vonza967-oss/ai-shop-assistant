@@ -24,6 +24,8 @@ jobs:
 
     env:
       CLEAN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/vonza_ci
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Check out repository
@@ -44,10 +46,7 @@ jobs:
         run: npm run test:smoke
 
       - name: Run Supabase connectivity test when secrets are available
-        if: ${{ secrets.SUPABASE_URL != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        if: ${{ env.SUPABASE_URL != '' && env.SUPABASE_SERVICE_ROLE_KEY != '' }}
         run: npm run test:supabase
 
       - name: Check schema sync and repo enforcement
