@@ -201,17 +201,128 @@ test("dashboard normalizes sparse operator payloads without forcing the legacy s
   assert.deepEqual(Array.from(workspace.connectedAccounts), []);
   assert.deepEqual(Array.from(workspace.inbox.threads), []);
   assert.deepEqual(Array.from(workspace.calendar.events), []);
+  assert.deepEqual(Array.from(workspace.calendar.scheduleItems), []);
+  assert.deepEqual(Array.from(workspace.calendar.followUpItems), []);
+  assert.deepEqual(Array.from(workspace.calendar.unlinkedItems), []);
   assert.deepEqual(Array.from(workspace.automations.tasks), []);
   assert.deepEqual(Array.from(workspace.contacts.list), []);
   assert.deepEqual(
     Array.from(harness.getAvailableShellSections(workspace)),
-    ["overview", "contacts", "inbox", "calendar", "automations", "customize", "analytics"]
+    ["overview", "contacts", "calendar", "automations", "customize", "analytics"]
   );
 
+  assert.match(harness.buildOperatorOverviewSection({}, workspace), /Connect Google to unlock Today/);
   assert.match(harness.buildInboxPanel({}, workspace), /Connect Google to unlock Inbox/);
   assert.match(harness.buildCalendarPanel({}, workspace), /Connect Google to unlock Calendar/);
   assert.match(harness.buildAutomationsPanel({}, workspace), /Owner task queue/);
   assert.match(harness.buildAutomationsPanel({}, workspace), /No owner tasks are open/);
+});
+
+test("dashboard renders calendar-first Today cards and read-only calendar mode", () => {
+  const harness = createDashboardHarness({
+    windowFlags: {
+      VONZA_OPERATOR_WORKSPACE_V1_ENABLED: true,
+      VONZA_TODAY_COPILOT_V1_ENABLED: true,
+    },
+  });
+
+  const workspace = harness.normalizeOperatorWorkspace({
+    enabled: true,
+    featureEnabled: true,
+    status: {
+      googleConnected: true,
+      googleConfigReady: true,
+      googleCapabilities: {
+        identity: true,
+        calendarRead: true,
+        calendarWrite: false,
+        gmailRead: false,
+      },
+    },
+    connectedAccounts: [
+      {
+        id: "account-1",
+        status: "connected",
+        accountEmail: "owner@example.com",
+        capabilities: {
+          identity: true,
+          calendarRead: true,
+          calendarWrite: false,
+          gmailRead: false,
+        },
+      },
+    ],
+    calendar: {
+      dailySummary: "1 upcoming event, 1 recent appointment needs follow-up, and 1 attendee still needs contact linking.",
+      events: [
+        {
+          id: "event-1",
+          title: "Morning estimate",
+          startAt: "2026-04-05T09:00:00.000Z",
+          endAt: "2026-04-05T09:30:00.000Z",
+          status: "confirmed",
+          scheduleReason: "This appointment is coming up today and is linked to Taylor Reed.",
+        },
+      ],
+      scheduleItems: [
+        {
+          id: "event-1",
+          title: "Morning estimate",
+          startAt: "2026-04-05T09:00:00.000Z",
+          endAt: "2026-04-05T09:30:00.000Z",
+          status: "confirmed",
+          scheduleReason: "This appointment is coming up today and is linked to Taylor Reed.",
+          linkedContactId: "contact-1",
+          linkedContactName: "Taylor Reed",
+          actionTargetSection: "contacts",
+          actionTargetId: "contact-1",
+          actionLabel: "Open Contact",
+        },
+      ],
+      followUpItems: [
+        {
+          id: "event-2",
+          title: "Quote review",
+          followUpReason: "The appointment ended recently and no follow-up, task, or non-booking outcome is visible yet.",
+          actionTargetSection: "calendar",
+          actionTargetId: "event-2",
+          actionLabel: "Open Calendar",
+        },
+      ],
+      unlinkedItems: [
+        {
+          id: "event-3",
+          title: "Site visit",
+          unlinkedReason: "Jordan Lane is not linked to a contact yet, so follow-up and outcome tracking can fragment.",
+          actionTargetSection: "calendar",
+          actionTargetId: "event-3",
+          actionLabel: "Open Calendar",
+        },
+      ],
+    },
+    today: {
+      upcomingBookings: 1,
+      appointmentsNeedingFollowUp: 1,
+      unlinkedAppointments: 1,
+      openAvailabilityCount: 2,
+      nextEventTitle: "Morning estimate",
+    },
+  });
+
+  assert.deepEqual(
+    Array.from(harness.getAvailableShellSections(workspace)),
+    ["overview", "contacts", "calendar", "automations", "customize", "analytics"]
+  );
+
+  const overview = harness.buildOperatorOverviewSection({}, workspace);
+  assert.match(overview, /Today(?:&#39;|')s Schedule/);
+  assert.match(overview, /Appointments Needing Follow-up/);
+  assert.match(overview, /Appointments Not Linked to a Contact/);
+  assert.match(overview, /Calendar read-only mode/);
+
+  const calendarPanel = harness.buildCalendarPanel({}, workspace);
+  assert.match(calendarPanel, /Read-only calendar mode/);
+  assert.doesNotMatch(calendarPanel, /Create event draft/);
 });
 
 test("today copilot stays hidden when the browser flag is off", () => {

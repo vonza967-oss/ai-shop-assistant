@@ -115,6 +115,13 @@ function normalizePhoneDigits(value) {
   return digits.length >= 7 ? digits : "";
 }
 
+function normalizeDisplayName(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -383,6 +390,62 @@ function getThreadContactEmails(thread = {}) {
   return uniqueText(inboundSenders.concat(outboundRecipients, directParticipants)).filter(Boolean);
 }
 
+function getEventAttendeeDisplayNames(event = {}) {
+  const attendeeNames = [
+    ...normalizeArray(event.attendeeNames),
+    ...normalizeArray(event.attendees)
+      .map((attendee) => cleanText(attendee?.displayName || attendee?.name)),
+    ...normalizeArray(event.metadata?.attendeeNames),
+  ];
+
+  return uniqueText(attendeeNames);
+}
+
+function getEventPhoneCandidates(event = {}) {
+  const phoneCandidates = [
+    ...normalizeArray(event.extractedPhones),
+    ...normalizeArray(event.metadata?.extractedPhones),
+    ...normalizeArray(event.attendees)
+      .flatMap((attendee) => [
+        cleanText(attendee?.phone),
+        cleanText(attendee?.phoneNumber),
+      ]),
+  ]
+    .map(normalizePhoneDigits)
+    .filter(Boolean);
+
+  return [...new Set(phoneCandidates)];
+}
+
+function groupHasStrongIdentity(group = {}) {
+  return Boolean(
+    cleanText(group.id)
+    || group.persistedContact
+    || normalizeArray(group.emails).length
+    || normalizeArray(group.phoneDigits).length
+    || normalizeArray(group.personKeys).length
+  );
+}
+
+function findUniqueNamedGroup(groups = [], attendeeNames = []) {
+  const normalizedAttendeeNames = attendeeNames
+    .map(normalizeDisplayName)
+    .filter(Boolean);
+
+  if (!normalizedAttendeeNames.length) {
+    return null;
+  }
+
+  const matches = groups.filter((group) =>
+    groupHasStrongIdentity(group)
+    && normalizeArray(group.displayNames).some((displayName) =>
+      normalizedAttendeeNames.includes(normalizeDisplayName(displayName))
+    )
+  );
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function getLeadFlags(lead = {}) {
   const flags = [];
   const captureState = cleanText(lead.captureState);
@@ -421,7 +484,7 @@ function getThreadFlags(thread = {}) {
 function getEventFlags(event = {}) {
   const flags = [];
 
-  if (parseTimestamp(event.startAt) > Date.now() && cleanText(event.status) !== "cancelled") {
+  if (parseTimestamp(event.startAt) > 0 && cleanText(event.status) !== "cancelled") {
     flags.push("booked");
   }
 
@@ -1097,25 +1160,34 @@ export function buildContactWorkspaceFromRecords(options = {}) {
   });
 
   normalizeArray(options.events).forEach((event) => {
+    const attendeeEmails = normalizeArray(event.attendeeEmails).map(normalizeEmail).filter(Boolean);
+    const attendeeNames = getEventAttendeeDisplayNames(event);
+    const attendeePhones = getEventPhoneCandidates(event);
+    const uniqueNamedGroup = findUniqueNamedGroup(groups, attendeeNames);
     const explicitGroups = [
       identityMaps.contact_id.get(cleanText(event.contactId)),
       identityMaps.event_id.get(cleanText(event.id)),
       identityMaps.lead_id.get(cleanText(event.leadId)),
+      uniqueNamedGroup,
     ].filter(Boolean);
     const strongIdentities = [
-      ...normalizeArray(event.attendeeEmails).map((email) => ({ type: "email", value: email })),
+      ...attendeeEmails.map((email) => ({ type: "email", value: email })),
+      ...attendeePhones.map((phone) => ({ type: "phone", value: phone })),
       { type: "event_id", value: event.id },
     ].filter((entry) => cleanText(entry.value));
     const group = findOrCreateGroup({ explicitGroups, strongIdentities });
 
     addToGroupCollection(group, "events", event);
     addIdentityValues(group, {
-      email: normalizeArray(event.attendeeEmails)[0],
+      displayName: attendeeNames[0],
+      email: attendeeEmails[0],
+      phoneDigits: attendeePhones[0],
       sourceKinds: ["calendar"],
       flags: getEventFlags(event),
       lastActivityAt: event.startAt || event.updatedAt || event.createdAt,
     });
-    normalizeArray(event.attendeeEmails).forEach((email) => registerIdentity(identityMaps, group, "email", email));
+    attendeeEmails.forEach((email) => registerIdentity(identityMaps, group, "email", email));
+    attendeePhones.forEach((phone) => registerIdentity(identityMaps, group, "phone", phone));
     registerIdentity(identityMaps, group, "event_id", event.id);
   });
 

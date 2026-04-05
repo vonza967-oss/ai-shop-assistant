@@ -9,6 +9,11 @@
    - `supabase migration list` with matching local and remote versions
 3. Confirm Render deploy hook fires only after migrations succeed.
 4. Verify `GET /build`, `GET /health`, and `GET /dashboard` on the deployed service.
-5. If CI or production needs manual recovery, use:
+5. If Google Calendar-first Today/Copilot is part of the release, confirm:
+   - Google OAuth env vars are present
+   - the deployed callback URL matches `GOOGLE_OAUTH_REDIRECT_URI`
+   - the Google Calendar API is enabled
+   - the operator flags are on
+6. If CI or production needs manual recovery, use:
    - `docs/sql/prod_recovery_startup.sql` for startup-only repair on an existing database
    - `docs/sql/prod_recovery_full_current_main.sql` for full current-main parity

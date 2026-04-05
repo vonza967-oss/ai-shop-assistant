@@ -62,15 +62,27 @@ import { buildTodayCopilotSnapshot } from "./todayCopilotService.js";
 import { cleanText } from "../../utils/text.js";
 import { decryptSecret, encryptSecret, hashToken } from "../../utils/crypto.js";
 
+const GOOGLE_SCOPE_GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly";
+const GOOGLE_SCOPE_GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose";
+const GOOGLE_SCOPE_GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send";
+const GOOGLE_SCOPE_CALENDAR_READ = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_SCOPE_CALENDAR_WRITE = "https://www.googleapis.com/auth/calendar.events";
+const GOOGLE_SCOPE_OPENID = "openid";
+const GOOGLE_SCOPE_EMAIL = "email";
+const GOOGLE_SCOPE_PROFILE = "profile";
+
 export const GOOGLE_OPERATOR_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.compose",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar.events",
-  "openid",
-  "email",
-  "profile",
+  GOOGLE_SCOPE_CALENDAR_READ,
+  GOOGLE_SCOPE_OPENID,
+  GOOGLE_SCOPE_EMAIL,
+  GOOGLE_SCOPE_PROFILE,
+];
+
+export const GOOGLE_OPERATOR_OPTIONAL_SCOPES = [
+  GOOGLE_SCOPE_CALENDAR_WRITE,
+  GOOGLE_SCOPE_GMAIL_READ,
+  GOOGLE_SCOPE_GMAIL_COMPOSE,
+  GOOGLE_SCOPE_GMAIL_SEND,
 ];
 
 export const INBOX_CLASSIFICATIONS = [
@@ -98,6 +110,13 @@ const MAILBOX_FALLBACK = "INBOX";
 const DEFAULT_SYNC_WINDOW_DAYS = 14;
 const DEFAULT_SYNC_RESULTS = 12;
 const STALE_REPLY_WINDOW_HOURS = 24;
+const CALENDAR_SYNC_LOOKBACK_HOURS = 30;
+const CALENDAR_SYNC_LOOKAHEAD_DAYS = 2;
+const CALENDAR_AUTO_SYNC_STALE_MINUTES = 20;
+const RECENT_APPOINTMENT_WINDOW_HOURS = 18;
+const TODAY_SCHEDULE_LIMIT = 5;
+const FOLLOW_UP_APPOINTMENT_LIMIT = 4;
+const UNLINKED_APPOINTMENT_LIMIT = 4;
 const CALENDAR_SLOT_MINUTES = 60;
 const SLOT_SEARCH_DAYS = 5;
 const BUSINESS_START_HOUR = 9;
@@ -311,6 +330,62 @@ function uniqueText(values = []) {
   return [...new Set(normalizeArray(values))];
 }
 
+function normalizeTextArray(value) {
+  return Array.isArray(value)
+    ? value.map((entry) => cleanText(entry)).filter(Boolean)
+    : [];
+}
+
+function normalizeEmail(value) {
+  const match = cleanText(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? cleanText(match[0]).toLowerCase() : "";
+}
+
+function normalizePhoneDigits(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length >= 7 ? digits : "";
+}
+
+function normalizeDisplayName(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function extractPhoneCandidates(value = "") {
+  const matches = String(value || "").match(/\+?\d[\d\s().-]{6,}\d/g) || [];
+  return [...new Set(matches.map(normalizePhoneDigits).filter(Boolean))];
+}
+
+function isSameDay(left, right) {
+  return String(left || "").slice(0, 10) === String(right || "").slice(0, 10);
+}
+
+function hasGoogleScope(scopes = [], scope = "") {
+  return normalizeTextArray(scopes).includes(cleanText(scope));
+}
+
+function buildGoogleScopeCapabilities(scopes = []) {
+  return {
+    identity:
+      hasGoogleScope(scopes, GOOGLE_SCOPE_OPENID)
+      || hasGoogleScope(scopes, GOOGLE_SCOPE_EMAIL)
+      || hasGoogleScope(scopes, GOOGLE_SCOPE_PROFILE),
+    calendarRead:
+      hasGoogleScope(scopes, GOOGLE_SCOPE_CALENDAR_READ)
+      || hasGoogleScope(scopes, GOOGLE_SCOPE_CALENDAR_WRITE),
+    calendarWrite: hasGoogleScope(scopes, GOOGLE_SCOPE_CALENDAR_WRITE),
+    gmailRead: hasGoogleScope(scopes, GOOGLE_SCOPE_GMAIL_READ),
+    gmailCompose: hasGoogleScope(scopes, GOOGLE_SCOPE_GMAIL_COMPOSE),
+    gmailSend: hasGoogleScope(scopes, GOOGLE_SCOPE_GMAIL_SEND),
+  };
+}
+
+function getAccountCapabilities(account = {}) {
+  return buildGoogleScopeCapabilities(account.scopes || []);
+}
+
 function isMissingRelationError(error, relationName) {
   const message = cleanText(error?.message || "").toLowerCase();
 
@@ -330,6 +405,24 @@ function parseTimestamp(value) {
 function isWithinHours(value, hours) {
   const timestamp = parseTimestamp(value);
   return Boolean(timestamp) && (Date.now() - timestamp) <= hours * 60 * 60 * 1000;
+}
+
+function shouldAutoSyncCalendar(account = {}, now = Date.now()) {
+  if (!account?.id || account.status !== "connected") {
+    return false;
+  }
+
+  const capabilities = getAccountCapabilities(account);
+  if (!capabilities.calendarRead) {
+    return false;
+  }
+
+  const lastSyncAt = parseTimestamp(account.lastSyncAt);
+  if (!lastSyncAt) {
+    return true;
+  }
+
+  return (now - lastSyncAt) >= CALENDAR_AUTO_SYNC_STALE_MINUTES * 60 * 1000;
 }
 
 function buildGoogleApi(deps = {}) {
@@ -541,6 +634,9 @@ function mapConnectedAccountRow(row) {
     return null;
   }
 
+  const scopes = normalizeArray(row.scopes);
+  const capabilities = buildGoogleScopeCapabilities(scopes);
+
   return {
     id: cleanText(row.id),
     agentId: cleanText(row.agent_id),
@@ -551,8 +647,9 @@ function mapConnectedAccountRow(row) {
     accountEmail: cleanText(row.account_email).toLowerCase(),
     displayName: cleanText(row.display_name),
     selectedMailbox: cleanText(row.selected_mailbox) || MAILBOX_FALLBACK,
-    scopes: normalizeArray(row.scopes),
+    scopes,
     scopeAudit: Array.isArray(row.scope_audit) ? row.scope_audit : [],
+    capabilities,
     status: cleanText(row.status) || "pending",
     accessTokenEncrypted: cleanText(row.access_token_encrypted),
     refreshTokenEncrypted: cleanText(row.refresh_token_encrypted),
@@ -636,6 +733,21 @@ function mapCalendarEventRow(row) {
     return null;
   }
 
+  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata : {};
+  const attendees = Array.isArray(metadata.attendees)
+    ? metadata.attendees
+      .map((attendee) => ({
+        email: normalizeEmail(attendee?.email),
+        displayName: cleanText(attendee?.displayName),
+        responseStatus: cleanText(attendee?.responseStatus),
+        self: attendee?.self === true,
+        organizer: attendee?.organizer === true,
+      }))
+      .filter((attendee) => attendee.email || attendee.displayName)
+    : [];
+  const attendeeNames = uniqueText(attendees.map((attendee) => attendee.displayName));
+  const extractedPhones = uniqueText(normalizeTextArray(metadata.extractedPhones).map(normalizePhoneDigits));
+
   return {
     id: cleanText(row.id),
     connectedAccountId: cleanText(row.connected_account_id),
@@ -658,7 +770,11 @@ function mapCalendarEventRow(row) {
     leadId: cleanText(row.lead_id),
     relatedActionKey: cleanText(row.related_action_key),
     conflictState: cleanText(row.conflict_state) || "clear",
-    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
+    metadata,
+    attendees,
+    attendeeNames,
+    extractedPhones,
+    htmlLink: cleanText(metadata.htmlLink),
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
   };
@@ -860,11 +976,6 @@ function toMimeRaw({ from, to, subject, body, threadId }) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
-}
-
-function normalizeEmail(value) {
-  const match = cleanText(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match ? cleanText(match[0]).toLowerCase() : "";
 }
 
 function extractHeader(headers = [], name) {
@@ -1415,10 +1526,13 @@ export async function completeGoogleConnection(supabase, options = {}, deps = {}
     changes: {
       operatorWorkspaceEnabled: true,
       googleConnected: true,
+      calendarContextSelected: true,
       metadata: {
         googleConnectedAt: new Date().toISOString(),
         selectedMailbox: connectedAccount.selectedMailbox || MAILBOX_FALLBACK,
         grantedScopes: connectedAccount.scopes || [],
+        grantedCapabilities: connectedAccount.capabilities || {},
+        googleConnectionMode: connectedAccount.capabilities?.calendarWrite ? "read_write" : "calendar_read_only",
       },
     },
   });
@@ -1843,6 +1957,8 @@ export function buildCalendarDailySummary(options = {}) {
   const events = Array.isArray(options.events) ? options.events : [];
   const tasks = Array.isArray(options.tasks) ? options.tasks : [];
   const slots = Array.isArray(options.slots) ? options.slots : [];
+  const followUpItems = Array.isArray(options.followUpItems) ? options.followUpItems : [];
+  const unlinkedItems = Array.isArray(options.unlinkedItems) ? options.unlinkedItems : [];
   const openComplaints = tasks.filter((task) => task.taskType === "complaint_queue" && task.status === "open").length;
   const openConflicts = tasks.filter((task) => task.taskType === "calendar_conflict" && task.status === "open").length;
   const nextEvent = events
@@ -1867,6 +1983,14 @@ export function buildCalendarDailySummary(options = {}) {
 
   if (openComplaints > 0) {
     parts.push(`${openComplaints} complaint${openComplaints === 1 ? "" : "s"} still need coordinated follow-up.`);
+  }
+
+  if (followUpItems.length > 0) {
+    parts.push(`${followUpItems.length} recent appointment${followUpItems.length === 1 ? "" : "s"} likely need follow-up.`);
+  }
+
+  if (unlinkedItems.length > 0) {
+    parts.push(`${unlinkedItems.length} appointment${unlinkedItems.length === 1 ? "" : "s"} are not linked to a contact yet.`);
   }
 
   if (slots.length) {
@@ -1911,6 +2035,301 @@ function detectCalendarConflicts(events = []) {
   }
 
   return conflicts;
+}
+
+function summarizeGoogleCapabilities(accounts = []) {
+  return (accounts || []).reduce((summary, account) => {
+    const capabilities = getAccountCapabilities(account);
+    return {
+      identity: summary.identity || capabilities.identity,
+      calendarRead: summary.calendarRead || capabilities.calendarRead,
+      calendarWrite: summary.calendarWrite || capabilities.calendarWrite,
+      gmailRead: summary.gmailRead || capabilities.gmailRead,
+      gmailCompose: summary.gmailCompose || capabilities.gmailCompose,
+      gmailSend: summary.gmailSend || capabilities.gmailSend,
+    };
+  }, {
+    identity: false,
+    calendarRead: false,
+    calendarWrite: false,
+    gmailRead: false,
+    gmailCompose: false,
+    gmailSend: false,
+  });
+}
+
+function getContactDisplayLabel(contact = {}) {
+  return cleanText(
+    contact.displayName
+    || contact.name
+    || contact.email
+    || contact.primaryEmail
+    || contact.phone
+    || contact.primaryPhone
+  );
+}
+
+function findLinkedContactForEvent(contacts = [], event = {}) {
+  const eventId = cleanText(event.id);
+  const contactId = cleanText(event.contactId);
+  const attendeeEmails = uniqueText((event.attendeeEmails || []).map(normalizeEmail));
+  const attendeeNames = uniqueText(event.attendeeNames || []);
+  const extractedPhones = uniqueText((event.extractedPhones || []).map(normalizePhoneDigits));
+
+  if (contactId) {
+    const directContact = contacts.find((contact) => cleanText(contact.id) === contactId);
+    if (directContact) {
+      return {
+        contact: directContact,
+        matchReason: "matched_by_contact_id",
+      };
+    }
+  }
+
+  if (eventId) {
+    const relatedContact = contacts.find((contact) =>
+      normalizeTextArray(contact.related?.eventIds).includes(eventId)
+    );
+    if (relatedContact) {
+      return {
+        contact: relatedContact,
+        matchReason: "matched_by_related_event",
+      };
+    }
+  }
+
+  const emailMatches = contacts.filter((contact) =>
+    attendeeEmails.includes(normalizeEmail(contact.email || contact.primaryEmail))
+  );
+  if (emailMatches.length === 1) {
+    return {
+      contact: emailMatches[0],
+      matchReason: "matched_by_attendee_email",
+    };
+  }
+
+  const phoneMatches = contacts.filter((contact) =>
+    extractedPhones.includes(normalizePhoneDigits(contact.phone || contact.primaryPhone))
+  );
+  if (phoneMatches.length === 1) {
+    return {
+      contact: phoneMatches[0],
+      matchReason: "matched_by_extracted_phone",
+    };
+  }
+
+  const nameMatches = contacts.filter((contact) => {
+    const contactName = normalizeDisplayName(getContactDisplayLabel(contact));
+    if (!contactName || !attendeeNames.some((name) => normalizeDisplayName(name) === contactName)) {
+      return false;
+    }
+
+    return Boolean(
+      normalizeEmail(contact.email || contact.primaryEmail)
+      || normalizePhoneDigits(contact.phone || contact.primaryPhone)
+      || cleanText(contact.id)
+    );
+  });
+  if (nameMatches.length === 1) {
+    return {
+      contact: nameMatches[0],
+      matchReason: "matched_by_attendee_name",
+    };
+  }
+
+  return {
+    contact: null,
+    matchReason: "unlinked",
+  };
+}
+
+function findOpenFollowUpForEvent(followUps = [], event = {}, contact = null) {
+  const attendeeEmails = uniqueText((event.attendeeEmails || []).map(normalizeEmail));
+  const contactId = cleanText(contact?.id || event.contactId);
+
+  return followUps.find((followUp) => {
+    const status = cleanText(followUp.status);
+    if (!["draft", "ready", "missing_contact", "failed"].includes(status)) {
+      return false;
+    }
+
+    if (contactId && cleanText(followUp.contactId) === contactId) {
+      return true;
+    }
+
+    return attendeeEmails.includes(normalizeEmail(followUp.contactEmail));
+  }) || null;
+}
+
+function findOpenTaskForEvent(tasks = [], event = {}, contact = null) {
+  const eventId = cleanText(event.id);
+  const contactId = cleanText(contact?.id || event.contactId);
+
+  return tasks.find((task) => {
+    if (cleanText(task.status) !== "open") {
+      return false;
+    }
+
+    if (cleanText(task.taskType) === "calendar_conflict") {
+      return false;
+    }
+
+    return cleanText(task.relatedEventId) === eventId
+      || (contactId && cleanText(task.contactId) === contactId);
+  }) || null;
+}
+
+function listMeaningfulOutcomesForEvent(recentOutcomes = [], event = {}, contact = null) {
+  const eventId = cleanText(event.id);
+  const contactId = cleanText(contact?.id || event.contactId);
+  const eventEndAt = parseTimestamp(event.endAt || event.startAt);
+
+  return recentOutcomes.filter((outcome) => {
+    const outcomeType = cleanText(outcome.outcomeType);
+    const occurredAt = parseTimestamp(outcome.occurredAt || outcome.createdAt);
+
+    if (!occurredAt || !eventEndAt || occurredAt < eventEndAt) {
+      return false;
+    }
+
+    if (["booking_started", "booking_confirmed"].includes(outcomeType)) {
+      return false;
+    }
+
+    return cleanText(outcome.calendarEventId) === eventId
+      || (contactId && cleanText(outcome.contactId) === contactId);
+  });
+}
+
+function buildCalendarInsightTarget(event = {}, contact = null) {
+  if (cleanText(contact?.id)) {
+    return {
+      label: "Open Contact",
+      targetSection: "contacts",
+      targetId: cleanText(contact.id),
+    };
+  }
+
+  return {
+    label: "Open Calendar",
+    targetSection: "calendar",
+    targetId: cleanText(event.id),
+  };
+}
+
+function buildCalendarInsights({
+  events = [],
+  contacts = [],
+  followUps = [],
+  recentOutcomes = [],
+  tasks = [],
+  now = new Date().toISOString(),
+} = {}) {
+  const nowTimestamp = parseTimestamp(now) || Date.now();
+  const enrichedEvents = events
+    .map((event) => {
+      const contactMatch = findLinkedContactForEvent(contacts, event);
+      const linkedContact = contactMatch.contact || null;
+      const openFollowUp = findOpenFollowUpForEvent(followUps, event, linkedContact);
+      const openTask = findOpenTaskForEvent(tasks, event, linkedContact);
+      const postAppointmentOutcomes = listMeaningfulOutcomesForEvent(recentOutcomes, event, linkedContact);
+      const startAt = parseTimestamp(event.startAt);
+      const endAt = parseTimestamp(event.endAt || event.startAt);
+      const attendeeProfiles = Array.isArray(event.attendees) ? event.attendees : [];
+      const primaryAttendee = attendeeProfiles.find((attendee) => attendee.self !== true) || attendeeProfiles[0] || null;
+      const attendeeEmails = uniqueText((event.attendeeEmails || []).map(normalizeEmail));
+      const attendeeNames = uniqueText(event.attendeeNames || []);
+      const contactLabel = getContactDisplayLabel(linkedContact);
+      const contactEmail = normalizeEmail(linkedContact?.email || linkedContact?.primaryEmail || primaryAttendee?.email || attendeeEmails[0]);
+      const contactPhone = normalizePhoneDigits(linkedContact?.phone || linkedContact?.primaryPhone);
+      const isCancelled = cleanText(event.status) === "cancelled";
+      const isUpcomingToday = !isCancelled
+        && startAt > 0
+        && startAt >= nowTimestamp
+        && isSameDay(event.startAt, now);
+      const isInProgress = !isCancelled
+        && startAt > 0
+        && endAt > 0
+        && startAt <= nowTimestamp
+        && endAt >= nowTimestamp
+        && isSameDay(event.startAt, now);
+      const isRecentPast = !isCancelled
+        && endAt > 0
+        && endAt <= nowTimestamp
+        && (nowTimestamp - endAt) <= RECENT_APPOINTMENT_WINDOW_HOURS * 60 * 60 * 1000;
+      const isUnlinked = !cleanText(linkedContact?.id);
+      const target = buildCalendarInsightTarget(event, linkedContact);
+
+      let followUpReason = "";
+      if (isRecentPast && !isUnlinked) {
+        if (openFollowUp) {
+          followUpReason = "A follow-up draft already exists for this appointment, but it still needs review or completion.";
+        } else if (openTask) {
+          followUpReason = cleanText(openTask.description || openTask.title) || "There is already an open task tied to this appointment.";
+        } else if (cleanText(linkedContact?.nextAction?.key) && cleanText(linkedContact?.nextAction?.key) !== "no_action_needed") {
+          followUpReason = cleanText(linkedContact?.nextAction?.description || linkedContact?.nextAction?.title)
+            || "The linked contact still needs a concrete next step after this appointment.";
+        } else if (!postAppointmentOutcomes.length) {
+          followUpReason = "The appointment ended recently and no follow-up, task, or non-booking outcome is visible yet.";
+        }
+      }
+
+      let unlinkedReason = "";
+      if (isUnlinked && (isUpcomingToday || isInProgress || isRecentPast)) {
+        const attendeeLabel = cleanText(primaryAttendee?.displayName || attendeeNames[0] || attendeeEmails[0] || "This attendee");
+        unlinkedReason = attendeeLabel
+          ? `${attendeeLabel} is not linked to a contact yet, so follow-up and outcome tracking can fragment.`
+          : "This appointment is not linked to a contact yet, so follow-up and outcome tracking can fragment.";
+      }
+
+      let scheduleReason = "";
+      if (isInProgress) {
+        scheduleReason = "This appointment is happening now.";
+      } else if (isUpcomingToday) {
+        scheduleReason = isUnlinked
+          ? "This appointment is coming up today, but the attendee is not linked to a contact yet."
+          : contactLabel
+            ? `This appointment is coming up today and is linked to ${contactLabel}.`
+            : "This appointment is coming up today.";
+      }
+
+      return {
+        ...event,
+        linkedContactId: cleanText(linkedContact?.id || event.contactId),
+        linkedContactName: contactLabel,
+        linkedContactEmail: contactEmail,
+        linkedContactPhone: contactPhone,
+        contactMatchReason: contactMatch.matchReason,
+        openFollowUpId: cleanText(openFollowUp?.id),
+        openTaskId: cleanText(openTask?.id),
+        postAppointmentOutcomeCount: postAppointmentOutcomes.length,
+        isUpcomingToday,
+        isInProgress,
+        isRecentPast,
+        isUnlinked,
+        needsFollowUp: Boolean(followUpReason),
+        scheduleReason,
+        followUpReason,
+        unlinkedReason,
+        actionLabel: target.label,
+        actionTargetSection: target.targetSection,
+        actionTargetId: target.targetId,
+      };
+    })
+    .sort((left, right) => parseTimestamp(left.startAt) - parseTimestamp(right.startAt));
+
+  return {
+    events: enrichedEvents,
+    scheduleItems: enrichedEvents
+      .filter((event) => event.isInProgress || event.isUpcomingToday)
+      .slice(0, TODAY_SCHEDULE_LIMIT),
+    followUpItems: enrichedEvents
+      .filter((event) => event.needsFollowUp)
+      .slice(0, FOLLOW_UP_APPOINTMENT_LIMIT),
+    unlinkedItems: enrichedEvents
+      .filter((event) => event.isUnlinked && (event.isInProgress || event.isUpcomingToday || event.isRecentPast))
+      .slice(0, UNLINKED_APPOINTMENT_LIMIT),
+  };
 }
 
 function buildCampaignTitle(goal) {
@@ -2166,6 +2585,16 @@ export async function syncInboxWorkspace(supabase, options = {}, deps = {}) {
     };
   }
 
+  const capabilities = getAccountCapabilities(account);
+  if (!capabilities.gmailRead) {
+    return {
+      connected: false,
+      scopeUnavailable: true,
+      threads: [],
+      reason: "Google is connected in calendar-first mode, so inbox read access is not available on this account.",
+    };
+  }
+
   const accessToken = await ensureFreshGoogleAccessToken(supabase, account, deps);
   const googleApi = buildGoogleApi(deps);
   const leadCaptureResult = await listLeadCaptures(supabase, {
@@ -2418,6 +2847,18 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
     };
   }
 
+  const capabilities = getAccountCapabilities(account);
+  if (!capabilities.calendarRead) {
+    return {
+      connected: false,
+      scopeUnavailable: true,
+      events: [],
+      suggestedSlots: [],
+      missedBookingOpportunities: [],
+      reason: "Google is connected, but calendar read access has not been granted on this account.",
+    };
+  }
+
   const accessToken = await ensureFreshGoogleAccessToken(supabase, account, deps);
   const googleApi = buildGoogleApi(deps);
   const leadCaptureResult = await listLeadCaptures(supabase, {
@@ -2425,18 +2866,35 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
     ownerUserId,
   });
   const leads = leadCaptureResult.records || [];
-  const timeMin = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const timeMax = new Date(Date.now() + DEFAULT_SYNC_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const timeMin = new Date(Date.now() - CALENDAR_SYNC_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
+  const timeMax = new Date(Date.now() + CALENDAR_SYNC_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const googleEvents = await googleApi.listCalendarEvents({
     accessToken,
     timeMin,
     timeMax,
-    maxResults: 24,
+    maxResults: 40,
   });
   const syncedEvents = [];
 
   for (const googleEvent of googleEvents) {
-    const attendeeEmails = uniqueText((googleEvent.attendees || []).map((attendee) => attendee.email).filter(Boolean));
+    const attendeeProfiles = Array.isArray(googleEvent.attendees)
+      ? googleEvent.attendees
+        .map((attendee) => ({
+          email: normalizeEmail(attendee?.email),
+          displayName: cleanText(attendee?.displayName),
+          responseStatus: cleanText(attendee?.responseStatus),
+          self: attendee?.self === true,
+          organizer: attendee?.organizer === true,
+        }))
+        .filter((attendee) => attendee.email || attendee.displayName)
+      : [];
+    const attendeeEmails = uniqueText(attendeeProfiles.map((attendee) => attendee.email).filter(Boolean));
+    const attendeeNames = uniqueText(attendeeProfiles.map((attendee) => attendee.displayName));
+    const extractedPhones = extractPhoneCandidates([
+      cleanText(googleEvent.summary),
+      cleanText(googleEvent.description),
+      cleanText(googleEvent.location),
+    ].join(" "));
     const relatedLead = leads.find((lead) => attendeeEmails.includes(normalizeEmail(lead.contactEmail))) || null;
     const event = await upsertCalendarEvent(supabase, {
       connected_account_id: account.id,
@@ -2461,6 +2919,11 @@ export async function syncCalendarWorkspace(supabase, options = {}, deps = {}) {
       conflict_state: "clear",
       metadata: {
         htmlLink: cleanText(googleEvent.htmlLink),
+        hangoutLink: cleanText(googleEvent.hangoutLink),
+        attendees: attendeeProfiles,
+        attendeeNames,
+        extractedPhones,
+        organizerEmail: normalizeEmail(googleEvent.organizer?.email),
       },
     });
 
@@ -2646,6 +3109,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
         googleConfigReady,
         googleConnectReady: false,
         googleConnected: false,
+        googleCapabilities: summarizeGoogleCapabilities([]),
         persistenceAvailable: persistence.persistenceAvailable,
         migrationRequired: persistence.migrationRequired,
       },
@@ -2699,6 +3163,10 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
         suggestedSlots: [],
         dailySummary: "Operator Workspace v1 is currently turned off for this deployment.",
         missedBookingOpportunities: [],
+        scheduleItems: [],
+        followUpItems: [],
+        unlinkedItems: [],
+        syncMode: "disabled",
       },
       automations: {
         tasks: [],
@@ -2740,6 +3208,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     agentId: agent.id,
     ownerUserId,
   });
+  const connectedAccountCapabilities = getAccountCapabilities(connectedAccount || {});
   const syncErrors = {
     inboxSyncError: "",
     calendarSyncError: "",
@@ -2747,34 +3216,71 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     globalError: "",
   };
 
-  if (
+  const shouldAttemptCalendarSync =
     connectedAccount?.status === "connected"
-    && options.forceSync === true
     && googleConfigReady
     && persistence.persistenceAvailable !== false
-  ) {
-    const [inboxSyncResult, calendarSyncResult] = await Promise.allSettled([
-      syncInboxWorkspace(supabase, {
-        agent,
-        ownerUserId,
-        connectedAccount,
-      }, deps),
-      syncCalendarWorkspace(supabase, {
-        agent,
-        ownerUserId,
-        connectedAccount,
-      }, deps),
-    ]);
+    && (options.forceSync === true || shouldAutoSyncCalendar(connectedAccount))
+    && connectedAccountCapabilities.calendarRead;
+  const shouldAttemptInboxSync =
+    connectedAccount?.status === "connected"
+    && googleConfigReady
+    && persistence.persistenceAvailable !== false
+    && options.forceSync === true
+    && connectedAccountCapabilities.gmailRead;
 
-    if (inboxSyncResult.status === "rejected") {
-      syncErrors.inboxSyncError = cleanText(inboxSyncResult.reason?.message) || "Inbox sync failed.";
-      console.warn("[operator] Inbox sync failed:", syncErrors.inboxSyncError);
+  if (shouldAttemptCalendarSync || shouldAttemptInboxSync) {
+    const syncJobs = [];
+
+    if (shouldAttemptInboxSync) {
+      syncJobs.push(
+        syncInboxWorkspace(supabase, {
+          agent,
+          ownerUserId,
+          connectedAccount,
+        }, deps).then(
+          (value) => ({ kind: "inbox", value }),
+          (error) => Promise.reject({
+            kind: "inbox",
+            message: cleanText(error?.message) || "Inbox sync failed.",
+          })
+        )
+      );
     }
 
-    if (calendarSyncResult.status === "rejected") {
-      syncErrors.calendarSyncError = cleanText(calendarSyncResult.reason?.message) || "Calendar sync failed.";
-      console.warn("[operator] Calendar sync failed:", syncErrors.calendarSyncError);
+    if (shouldAttemptCalendarSync) {
+      syncJobs.push(
+        syncCalendarWorkspace(supabase, {
+          agent,
+          ownerUserId,
+          connectedAccount,
+        }, deps).then(
+          (value) => ({ kind: "calendar", value }),
+          (error) => Promise.reject({
+            kind: "calendar",
+            message: cleanText(error?.message) || "Calendar sync failed.",
+          })
+        )
+      );
     }
+
+    const syncResults = await Promise.allSettled(syncJobs);
+    syncResults.forEach((result) => {
+      if (result.status === "fulfilled") {
+        return;
+      }
+
+      const kind = cleanText(result.reason?.kind);
+      const message = cleanText(result.reason?.message) || "Sync failed.";
+      if (kind === "inbox") {
+        syncErrors.inboxSyncError = message;
+        console.warn("[operator] Inbox sync failed:", message);
+        return;
+      }
+
+      syncErrors.calendarSyncError = message;
+      console.warn("[operator] Calendar sync failed:", message);
+    });
   }
 
   const [
@@ -2912,34 +3418,30 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     getSettledErrorMessage(proposalStatesResult),
     getSettledErrorMessage(threadMessagesResult[0]),
   ].filter(Boolean);
-  const suggestedSlots = suggestCalendarSlots(events);
-  const summary = buildOperatorSummary({
-    threads: enrichedThreads,
-    events,
-    tasks,
-    campaigns,
-    followUps: followUpResult.records || [],
-    suggestedSlots,
-  });
-  const missedBookingOpportunities = buildMissedBookingOpportunities(
-    leadCaptureResult.records || [],
-    events
-  );
   const googleConnected = accounts.some((account) => account.status === "connected");
+  const googleCapabilities = summarizeGoogleCapabilities(accounts);
   const normalizedActivation = createDefaultOperatorActivationState({
     ...activationState,
     operatorWorkspaceEnabled: true,
     googleConnected: googleConnected || activationState.googleConnected,
     inboxSynced:
-      activationState.inboxSynced
-      || Boolean((activationState.metadata || {}).inboxLastSyncedAt)
-      || Boolean(threads.length)
-      || Boolean(accounts.find((account) => account.status === "connected" && account.lastSyncAt)),
+      googleCapabilities.gmailRead
+        ? (
+          activationState.inboxSynced
+          || Boolean((activationState.metadata || {}).inboxLastSyncedAt)
+          || Boolean(threads.length)
+          || Boolean(accounts.find((account) => account.status === "connected" && account.capabilities?.gmailRead && account.lastSyncAt))
+        )
+        : false,
     calendarSynced:
-      activationState.calendarSynced
-      || Boolean((activationState.metadata || {}).calendarLastSyncedAt)
-      || Boolean(events.length)
-      || Boolean(accounts.find((account) => account.status === "connected" && account.lastSyncAt)),
+      googleCapabilities.calendarRead
+        ? (
+          activationState.calendarSynced
+          || Boolean((activationState.metadata || {}).calendarLastSyncedAt)
+          || Boolean(events.length)
+          || Boolean(accounts.find((account) => account.status === "connected" && account.capabilities?.calendarRead && account.lastSyncAt))
+        )
+        : false,
     persistenceAvailable:
       activationState.persistenceAvailable !== false
       && persistence.persistenceAvailable !== false,
@@ -2959,6 +3461,28 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     outcomes: conversionOutcomeResult.records || [],
     loadError: partialLoadErrors[0] || "",
   });
+  const calendarInsights = buildCalendarInsights({
+    events,
+    contacts: contactsWorkspace.list || [],
+    followUps: followUpResult.records || [],
+    recentOutcomes: conversionOutcomeResult.recentOutcomes || [],
+    tasks,
+    now: options.now || new Date().toISOString(),
+  });
+  const enrichedEvents = calendarInsights.events;
+  const suggestedSlots = suggestCalendarSlots(enrichedEvents);
+  const summary = buildOperatorSummary({
+    threads: enrichedThreads,
+    events: enrichedEvents,
+    tasks,
+    campaigns,
+    followUps: followUpResult.records || [],
+    suggestedSlots,
+  });
+  const missedBookingOpportunities = buildMissedBookingOpportunities(
+    leadCaptureResult.records || [],
+    enrichedEvents
+  );
   syncErrors.contactsError = cleanText(contactsWorkspace.health?.loadError);
   syncErrors.globalError = partialLoadErrors.length > 1
     ? `${partialLoadErrors.length} workspace data source${partialLoadErrors.length === 1 ? "" : "s"} returned partial data.`
@@ -2969,6 +3493,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     googleConfigReady,
     googleConnectReady: googleConfigReady && normalizedActivation.migrationRequired !== true,
     googleConnected,
+    googleCapabilities,
     persistenceAvailable: normalizedActivation.persistenceAvailable !== false,
     migrationRequired: normalizedActivation.migrationRequired === true,
     syncRequested: options.forceSync === true,
@@ -2981,14 +3506,14 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     threads: enrichedThreads,
     followUps: followUpResult.records || [],
     campaigns,
-    events,
+    events: enrichedEvents,
     suggestedSlots,
   });
   const checklist = buildOperatorActivationChecklist({
     activation: normalizedActivation,
     status,
     threads: enrichedThreads,
-    events,
+    events: enrichedEvents,
     suggestedSlots,
   });
   const completedCount = checklist.filter((step) => step.complete).length;
@@ -3005,14 +3530,14 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     summary,
     tasks,
     nextAction,
-    events,
+    events: enrichedEvents,
     suggestedSlots,
     followUps: followUpResult.records || [],
   });
   const today = buildOperatorTodaySummary({
     summary,
     tasks,
-    events,
+    events: enrichedEvents,
     suggestedSlots,
     campaigns,
     followUps: followUpResult.records || [],
@@ -3020,6 +3545,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     recentOutcomes: conversionOutcomeResult.recentOutcomes || [],
     contacts: contactsWorkspace.list || [],
     contactsSummary: contactsWorkspace.summary,
+    calendarInsights,
   });
   const messages = getSettledValue(messagesResult, []);
   const actionQueueStatuses = getSettledValue(actionQueueStatusesResult, {
@@ -3087,6 +3613,19 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
     contacts: contactsWorkspace.list || [],
     recentOutcomes: conversionOutcomeResult.recentOutcomes || [],
     routingEvents,
+    calendar: {
+      events: enrichedEvents,
+      dailySummary: buildCalendarDailySummary({
+        events: enrichedEvents,
+        tasks,
+        slots: suggestedSlots,
+        followUpItems: calendarInsights.followUpItems,
+        unlinkedItems: calendarInsights.unlinkedItems,
+      }),
+      scheduleItems: calendarInsights.scheduleItems,
+      followUpItems: calendarInsights.followUpItems,
+      unlinkedItems: calendarInsights.unlinkedItems,
+    },
     websiteContent,
     businessProfile: businessProfile || {
       readiness: {
@@ -3131,6 +3670,7 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
       selectedMailbox: account.selectedMailbox,
       scopes: account.scopes,
       scopeAudit: account.scopeAudit,
+      capabilities: account.capabilities,
       lastRefreshedAt: account.lastRefreshedAt,
       lastSyncAt: account.lastSyncAt,
       lastError: account.lastError,
@@ -3140,14 +3680,22 @@ export async function getOperatorWorkspaceSnapshot(supabase, options = {}, deps 
       attentionCount: summary.inboxNeedingAttention,
     },
     calendar: {
-      events,
+      events: enrichedEvents,
       suggestedSlots,
       dailySummary: buildCalendarDailySummary({
-        events,
+        events: enrichedEvents,
         tasks,
         slots: suggestedSlots,
+        followUpItems: calendarInsights.followUpItems,
+        unlinkedItems: calendarInsights.unlinkedItems,
       }),
       missedBookingOpportunities,
+      scheduleItems: calendarInsights.scheduleItems,
+      followUpItems: calendarInsights.followUpItems,
+      unlinkedItems: calendarInsights.unlinkedItems,
+      syncMode: googleCapabilities.calendarRead
+        ? (googleCapabilities.calendarWrite ? "read_write" : "read_only")
+        : "disconnected",
     },
     automations: {
       tasks,
@@ -3271,6 +3819,14 @@ export async function sendInboxReply(supabase, options = {}, deps = {}) {
 
   if (!account || account.status !== "connected") {
     const error = new Error("Connect Google before sending replies.");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (!getAccountCapabilities(account).gmailSend) {
+    const error = new Error(
+      "This Google connection was created in calendar-first mode. Reconnect with Gmail send access before sending inbox replies."
+    );
     error.statusCode = 409;
     throw error;
   }
@@ -3512,6 +4068,14 @@ export async function approveCalendarAction(supabase, options = {}, deps = {}) {
 
   if (!account || account.status !== "connected") {
     const syncError = new Error("Connect Google Calendar before approving calendar changes.");
+    syncError.statusCode = 409;
+    throw syncError;
+  }
+
+  if (!getAccountCapabilities(account).calendarWrite) {
+    const syncError = new Error(
+      "This Google connection is read-only for calendar access. Reconnect with calendar write access before approving calendar changes."
+    );
     syncError.statusCode = 409;
     throw syncError;
   }
