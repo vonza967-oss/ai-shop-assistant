@@ -262,6 +262,41 @@ function isGoogleWorkspaceConfigured(operatorWorkspace = createEmptyOperatorWork
   return operatorWorkspace?.status?.googleConfigReady !== false;
 }
 
+function normalizeGoogleCapabilities(value = {}) {
+  const source = normalizeOperatorRecord(value);
+  return {
+    identity: source.identity === true,
+    calendarRead: source.calendarRead === true,
+    calendarWrite: source.calendarWrite === true,
+    gmailRead: source.gmailRead === true,
+    gmailCompose: source.gmailCompose === true,
+    gmailSend: source.gmailSend === true,
+  };
+}
+
+function getGoogleWorkspaceCapabilities(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const statusCapabilities = normalizeGoogleCapabilities(operatorWorkspace?.status?.googleCapabilities);
+  const accounts = Array.isArray(operatorWorkspace?.connectedAccounts)
+    ? operatorWorkspace.connectedAccounts
+    : [];
+
+  if (Object.values(statusCapabilities).some(Boolean)) {
+    return statusCapabilities;
+  }
+
+  return accounts.reduce((summary, account) => {
+    const capabilities = normalizeGoogleCapabilities(account?.capabilities);
+    return {
+      identity: summary.identity || capabilities.identity,
+      calendarRead: summary.calendarRead || capabilities.calendarRead,
+      calendarWrite: summary.calendarWrite || capabilities.calendarWrite,
+      gmailRead: summary.gmailRead || capabilities.gmailRead,
+      gmailCompose: summary.gmailCompose || capabilities.gmailCompose,
+      gmailSend: summary.gmailSend || capabilities.gmailSend,
+    };
+  }, normalizeGoogleCapabilities());
+}
+
 function isCapabilityVisibleForWorkspace(capabilityKey, operatorWorkspace = createEmptyOperatorWorkspace()) {
   if (!isCapabilityExplicitlyVisible(capabilityKey)) {
     return false;
@@ -275,6 +310,12 @@ function isCapabilityVisibleForWorkspace(capabilityKey, operatorWorkspace = crea
     if (["inbox", "calendar", "automations", "google_connect"].includes(capabilityKey) && !isGoogleWorkspaceConfigured(operatorWorkspace)) {
       return false;
     }
+  }
+
+  const googleCapabilities = getGoogleWorkspaceCapabilities(operatorWorkspace);
+
+  if (capabilityKey === "inbox") {
+    return googleCapabilities.gmailRead === true;
   }
 
   return true;
@@ -292,6 +333,8 @@ function getShellSectionsForWorkspace(operatorWorkspace = createEmptyOperatorWor
 }
 
 function getWorkspaceMode(operatorWorkspace = createEmptyOperatorWorkspace()) {
+  const googleCapabilities = getGoogleWorkspaceCapabilities(operatorWorkspace);
+
   if (operatorWorkspace?.enabled === false) {
     return {
       key: "front_desk_only",
@@ -311,6 +354,15 @@ function getWorkspaceMode(operatorWorkspace = createEmptyOperatorWorkspace()) {
   }
 
   if (operatorWorkspace?.status?.googleConnected === true) {
+    if (googleCapabilities.calendarRead && !googleCapabilities.gmailRead && !googleCapabilities.calendarWrite) {
+      return {
+        key: "operator_calendar_connected",
+        eyebrow: "Operator workspace mode",
+        title: "Stable core plus Google Calendar-first beta.",
+        copy: "Today and Calendar are connected with basic identity plus read-only Google Calendar access. Gmail and write scopes are intentionally left out in this pass.",
+      };
+    }
+
     return {
       key: "operator_google_connected",
       eyebrow: "Operator workspace mode",
@@ -366,6 +418,7 @@ function normalizeOperatorWorkspaceAccount(account = {}) {
     ...source,
     scopes: Array.isArray(source.scopes) ? source.scopes.filter(Boolean) : [],
     scopeAudit: normalizeOperatorRecord(source.scopeAudit),
+    capabilities: normalizeGoogleCapabilities(source.capabilities),
   };
 }
 
@@ -1961,7 +2014,7 @@ function buildOperatorNextActionButton(nextAction = {}) {
 function buildOperatorChecklistMarkup(operatorWorkspace = createEmptyOperatorWorkspace()) {
   const activation = operatorWorkspace.activation || createEmptyOperatorWorkspace().activation;
   const checklist = activation.checklist || [];
-  const mailboxOptions = operatorWorkspace.contextOptions?.mailboxes || createEmptyOperatorWorkspace().contextOptions.mailboxes;
+  const googleCapabilities = getGoogleWorkspaceCapabilities(operatorWorkspace);
   const selectedMailbox = trimText(
     operatorWorkspace.connectedAccounts?.[0]?.selectedMailbox
     || activation.metadata?.selectedMailbox
@@ -1995,25 +2048,18 @@ function buildOperatorChecklistMarkup(operatorWorkspace = createEmptyOperatorWor
       </div>
       ${operatorWorkspace.status?.googleConnected ? `
         <form class="operator-context-form" data-operator-context-form>
-          <div class="form-grid two-col">
-            <div class="field">
-              <label for="operator-mailbox-context">Inbox context</label>
-              <select id="operator-mailbox-context" name="selected_mailbox">
-                ${mailboxOptions.map((option) => `
-                  <option value="${escapeHtml(option.value)}" ${option.value === selectedMailbox ? "selected" : ""}>${escapeHtml(option.label)}</option>
-                `).join("")}
-              </select>
-              <p class="field-help">Choose the first mailbox Vonza should watch for owner-facing work inside Today and Inbox.</p>
-            </div>
+          <input type="hidden" name="selected_mailbox" value="${escapeHtml(selectedMailbox)}">
+          <div class="form-grid">
             <div class="field">
               <label for="operator-calendar-context">Calendar context</label>
               <input id="operator-calendar-context" type="text" value="Primary calendar" disabled>
-              <p class="field-help">Vonza uses the primary Google calendar for Today, booking context, and approval drafts.</p>
+              <p class="field-help">${escapeHtml(googleCapabilities.calendarRead
+                ? "Vonza uses the primary Google calendar as the source of truth for Today, recent appointments, and approval-first suggestions."
+                : "Connect Google Calendar first, then Vonza will use the primary calendar as the source of truth for Today.")}</p>
             </div>
           </div>
           <div class="inline-actions">
-            <button class="ghost-button" type="submit">Save context</button>
-            <button class="ghost-button" type="button" data-complete-operator-step="inbox_review">Mark inbox review complete</button>
+            <button class="ghost-button" type="submit">Save calendar context</button>
             <button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar review complete</button>
           </div>
         </form>
@@ -2534,6 +2580,93 @@ function buildTodayCopilotSection(operatorWorkspace = createEmptyOperatorWorkspa
   `;
 }
 
+function formatCalendarInsightContext(item = {}) {
+  const attendeeLabel = trimText(
+    item.linkedContactName
+    || (Array.isArray(item.attendeeNames) ? item.attendeeNames[0] : "")
+    || (Array.isArray(item.attendeeEmails) ? item.attendeeEmails[0] : "")
+  );
+  const timeLabel = item.startAt
+    ? [
+      formatSeenAt(item.startAt),
+      item.endAt ? `to ${formatSeenAt(item.endAt)}` : "",
+    ].filter(Boolean).join(" ")
+    : "";
+
+  return [
+    timeLabel,
+    attendeeLabel ? `Context: ${attendeeLabel}` : "",
+    trimText(item.status).replaceAll("_", " "),
+  ].filter(Boolean).join(" · ");
+}
+
+function buildTodayInsightActionButton(item = {}, fallbackLabel = "Review context") {
+  const targetSection = trimText(item.actionTargetSection || item.targetSection);
+  const targetId = trimText(item.actionTargetId || item.targetId);
+  const actionLabel = trimText(item.actionLabel || item.surfaceLabel || fallbackLabel);
+
+  if (!targetSection) {
+    return "";
+  }
+
+  return `
+    <button
+      class="ghost-button"
+      type="button"
+      data-copilot-open-target
+      data-shell-target="${escapeHtml(targetSection)}"
+      data-target-id="${escapeHtml(targetId)}"
+    >
+      ${escapeHtml(actionLabel)}
+    </button>
+  `;
+}
+
+function buildTodayInsightCard({
+  kicker = "",
+  title = "",
+  description = "",
+  items = [],
+  emptyTitle = "",
+  emptyCopy = "",
+  reasonKey = "",
+  defaultActionLabel = "Review context",
+} = {}) {
+  return `
+    <section class="workspace-card-soft">
+      <div class="workspace-panel-header">
+        <div>
+          <p class="studio-kicker">${escapeHtml(kicker || "Today")}</p>
+          <h3 class="studio-group-title">${escapeHtml(title || "Today card")}</h3>
+          <p class="workspace-panel-copy">${escapeHtml(description || "Vonza will show the next useful context here.")}</p>
+        </div>
+      </div>
+      ${items.length ? `
+        <div class="analytics-list">
+          ${items.map((item) => `
+            <div class="analytics-item">
+              <div class="operator-thread-head">
+                <div>
+                  <p class="analytics-item-title">${escapeHtml(item.title || item.linkedContactName || "Calendar appointment")}</p>
+                  <p class="analytics-subtle">${escapeHtml(formatCalendarInsightContext(item))}</p>
+                </div>
+                <span class="${getBadgeClass(item.linkedContactId ? "Ready" : "Limited")}">${escapeHtml(item.linkedContactId ? "Linked" : "Needs review")}</span>
+              </div>
+              <p class="analytics-item-copy">${escapeHtml(trimText(item[reasonKey]) || "Vonza highlighted this calendar item for review.")}</p>
+              <div class="inline-actions" style="margin-top:12px;">
+                ${buildTodayInsightActionButton(item, defaultActionLabel)}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : buildOperatorEmptyState({
+        title: emptyTitle,
+        copy: emptyCopy,
+      })}
+    </section>
+  `;
+}
+
 function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOperatorWorkspace()) {
   if (operatorWorkspace.enabled === false) {
     return "";
@@ -2547,6 +2680,11 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
   const briefing = operatorWorkspace.briefing || createEmptyOperatorWorkspace().briefing;
   const health = operatorWorkspace.health || createEmptyOperatorWorkspace().health;
   const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
+  const googleCapabilities = getGoogleWorkspaceCapabilities(operatorWorkspace);
+  const calendar = operatorWorkspace.calendar || createEmptyOperatorWorkspace().calendar;
+  const scheduleItems = Array.isArray(calendar.scheduleItems) ? calendar.scheduleItems.slice(0, 4) : [];
+  const followUpItems = Array.isArray(calendar.followUpItems) ? calendar.followUpItems.slice(0, 4) : [];
+  const unlinkedItems = Array.isArray(calendar.unlinkedItems) ? calendar.unlinkedItems.slice(0, 4) : [];
   const dailySummary = operatorWorkspace.calendar?.dailySummary
     || "Connect Google Workspace to see daily operator context here.";
 
@@ -2556,10 +2694,12 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
         <div>
           <p class="studio-kicker">Operator home</p>
           <h2 class="workspace-panel-title">Today</h2>
-          <p class="workspace-panel-copy">Today is part of the stable public launch core. It keeps the next owner action, front-desk health, contacts, proof, and optional Google-connected beta work in one place.</p>
+          <p class="workspace-panel-copy">Today is part of the stable public launch core. It keeps the next owner action, calendar-first schedule context, contacts, proof, and approval-first suggestions in one place.</p>
         </div>
         <div class="workspace-badge-row">
-          <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected ? "Google beta connected" : "Google beta optional"}</span>
+          <span class="${getBadgeClass(status.googleConnected ? "Ready" : "Limited")}">${status.googleConnected
+            ? (googleCapabilities.calendarRead && !googleCapabilities.gmailRead ? "Google Calendar connected" : "Google connected")
+            : "Google Calendar optional"}</span>
           <span class="${getBadgeClass(status.migrationRequired ? "Limited" : "Ready")}">${status.migrationRequired ? "Workspace still syncing" : "Workspace ready"}</span>
         </div>
       </div>
@@ -2587,42 +2727,97 @@ function buildOperatorOverviewSection(agent, operatorWorkspace = createEmptyOper
       </div>
       ${buildTodayCopilotSection(operatorWorkspace)}
       ${buildOperatorChecklistMarkup(operatorWorkspace)}
-      <div class="overview-grid operator-metric-grid">
-            <div class="overview-card">
-              <p class="overview-label">Google connection</p>
-              <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Awaiting connection")}</p>
-              <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
-                ? `Mailbox ${primaryAccount.selectedMailbox || "INBOX"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
-                : status.googleConfigReady
-                  ? "Connect Gmail and Calendar if you want the optional Inbox, Calendar, and Automations beta in the same workspace."
-                  : "This deployment is running the front-desk launch core without the optional Google beta.")}</p>
+      ${!status.googleConnected ? `
+        <section class="workspace-card-soft" style="margin-top:20px;">
+          <div class="workspace-panel-header">
+            <div>
+              <p class="studio-kicker">Google Calendar</p>
+              <h3 class="workspace-panel-title">Connect Google to unlock Today</h3>
+              <p class="workspace-panel-copy">Today becomes immediately more useful once it can read your primary Google Calendar. Vonza will summarize today’s schedule, recent appointments that may need follow-up, and attendees who are not linked to contacts yet.</p>
             </div>
+          </div>
+          <div class="inline-actions">
+            <button class="primary-button" type="button" data-google-connect ${status.googleConfigReady ? "" : "disabled"}>Connect Google</button>
+          </div>
+          <p class="section-note">${escapeHtml(status.googleConfigReady
+            ? "This pass requests basic identity plus read-only Calendar access only. Nothing is auto-sent, auto-created, or auto-run."
+            : "Google OAuth still needs the deployment env vars before owners can connect from this workspace.")}</p>
+        </section>
+      ` : ""}
+      <div class="overview-grid operator-metric-grid" style="margin-top:20px;">
+        ${buildTodayInsightCard({
+          kicker: "Today",
+          title: "Today's Schedule",
+          description: "See what is still on deck today and why each appointment matters now.",
+          items: scheduleItems,
+          emptyTitle: status.googleConnected
+            ? "No more appointments are on today’s schedule"
+            : "Connect Google to see today’s schedule",
+          emptyCopy: status.googleConnected
+            ? "Vonza will keep today’s remaining schedule here, including in-progress appointments and linked contact context."
+            : "Connect Google Calendar to bring today’s appointments into Today.",
+          reasonKey: "scheduleReason",
+          defaultActionLabel: "Open context",
+        })}
+        ${buildTodayInsightCard({
+          kicker: "Follow-up",
+          title: "Appointments Needing Follow-up",
+          description: "Recent completed appointments with no clear next step or outcome stay visible until you review them.",
+          items: followUpItems,
+          emptyTitle: "No recent appointment follow-up is standing out",
+          emptyCopy: "When an appointment ends without a clear next step, Vonza will surface it here with approval-first suggestions.",
+          reasonKey: "followUpReason",
+          defaultActionLabel: "Review follow-up",
+        })}
+        ${buildTodayInsightCard({
+          kicker: "Linking",
+          title: "Appointments Not Linked to a Contact",
+          description: "Unlinked attendees are surfaced explicitly so follow-up and outcome tracking do not fragment.",
+          items: unlinkedItems,
+          emptyTitle: "No appointment currently needs attendee linking",
+          emptyCopy: "Vonza will show upcoming or recent appointments here when attendee data is still not safely linked to a contact.",
+          reasonKey: "unlinkedReason",
+          defaultActionLabel: "Review attendee",
+        })}
+      </div>
+      <div class="overview-grid operator-metric-grid">
         <div class="overview-card">
-          <p class="overview-label">Inbox needing attention</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(today.inboxNeedingAttention, "thread"))}</p>
-          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.overdueThreads, "overdue thread")} and ${formatOperatorCount(today.complaintsNeedingReview, "complaint")} still need review.`)}</p>
+          <p class="overview-label">Google connection</p>
+          <p class="overview-value">${escapeHtml(primaryAccount?.status === "connected" ? (primaryAccount.accountEmail || "Connected") : "Awaiting connection")}</p>
+          <p class="overview-card-copy">${escapeHtml(primaryAccount?.status === "connected"
+            ? googleCapabilities.calendarRead && !googleCapabilities.gmailRead && !googleCapabilities.calendarWrite
+              ? `Calendar read-only mode. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}. Gmail and write scopes are intentionally off in this pass.`
+              : `Connected scopes stay approval-first. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
+            : status.googleConfigReady
+              ? "Connect Google Calendar to unlock Today’s schedule, follow-up review, and unlinked attendee visibility."
+              : "This deployment is running the front-desk launch core without the Google Calendar beta wiring yet.")}</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">Calendar today</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(today.upcomingBookings, "event"))}</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.upcomingBookings, "appointment"))}</p>
           <p class="overview-card-copy">${escapeHtml(today.nextEventTitle
             ? `Next up: ${today.nextEventTitle}. ${formatOperatorCount(today.openAvailabilityCount, "open slot")} still available.`
             : `${formatOperatorCount(today.openAvailabilityCount, "open slot")} available for follow-up or booking work.`)}</p>
         </div>
         <div class="overview-card">
-          <p class="overview-label">Leads and follow-ups</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(today.leadsNeedingAction, "lead"))}</p>
-          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.followUpsNeedingApproval, "follow-up")} still need approval.`)}</p>
+          <p class="overview-label">Appointments needing follow-up</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.appointmentsNeedingFollowUp, "appointment"))}</p>
+          <p class="overview-card-copy">${escapeHtml(followUpItems[0]?.followUpReason || "Recent completed appointments with no clear next step stay visible here.")}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Appointments not linked</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(today.unlinkedAppointments, "appointment"))}</p>
+          <p class="overview-card-copy">${escapeHtml(unlinkedItems[0]?.unlinkedReason || "Upcoming and recent appointments without a safe contact link stay explicit instead of being hidden.")}</p>
+        </div>
+        <div class="overview-card">
+          <p class="overview-label">Approval-first work</p>
+          <p class="overview-value">${escapeHtml(formatOperatorCount(summary.followUpsNeedingApproval + today.campaignsAwaitingApproval, "item"))}</p>
+          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(summary.followUpsNeedingApproval, "follow-up")} and ${formatOperatorCount(today.campaignsAwaitingApproval, "campaign approval", "campaign approvals")} are waiting for review.`)}</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">Recent proven outcomes</p>
           <p class="overview-value">${escapeHtml(formatOperatorCount(today.assistedOutcomes, "outcome"))}</p>
           <p class="overview-card-copy">${escapeHtml(`${today.bookingsConfirmed || 0} bookings confirmed · ${today.quoteRequests || 0} quote requests · ${today.followUpReplies || 0} follow-up replies`)}</p>
-        </div>
-        <div class="overview-card">
-          <p class="overview-label">Automations and campaigns</p>
-          <p class="overview-value">${escapeHtml(formatOperatorCount(today.activeCampaigns, "active automation"))}</p>
-          <p class="overview-card-copy">${escapeHtml(`${formatOperatorCount(today.campaignsAwaitingApproval, "campaign awaiting approval", "campaigns awaiting approval")} across draft and live work.`)}</p>
         </div>
         <div class="overview-card">
           <p class="overview-label">Top operator priority</p>
@@ -3801,6 +3996,7 @@ function createEmptyOperatorWorkspace() {
       googleConfigReady: true,
       googleConnectReady: true,
       googleConnected: false,
+      googleCapabilities: normalizeGoogleCapabilities(),
       persistenceAvailable: true,
       migrationRequired: false,
       syncRequested: false,
@@ -3825,12 +4021,12 @@ function createEmptyOperatorWorkspace() {
     },
     briefing: {
       title: "Operator briefing",
-      text: "Connect Google and run the first sync to turn Today into your operator command center.",
+      text: "Connect Google Calendar and run the first sync to turn Today into your operator command center.",
     },
     nextAction: {
       key: "connect_google",
       title: "Connect Google",
-      description: "Connect Gmail and Calendar if you want the optional Inbox, Calendar, and Automations beta alongside Today and Contacts.",
+      description: "Connect Google Calendar so Today can show your schedule, recent appointments, and approval-first follow-up suggestions.",
       buttonLabel: "Connect Google",
       actionType: "connect_google",
       targetSection: "overview",
@@ -3845,6 +4041,8 @@ function createEmptyOperatorWorkspace() {
       followUpsAwaitingApproval: 0,
       activeCampaigns: 0,
       upcomingBookings: 0,
+      appointmentsNeedingFollowUp: 0,
+      unlinkedAppointments: 0,
       nextEventTitle: "",
       nextEventAt: null,
       openAvailabilityCount: 0,
@@ -3913,6 +4111,7 @@ function createEmptyOperatorWorkspace() {
           knowledgeFixes: 0,
           recentOutcomes: 0,
           widgetEvents: 0,
+          calendarEvents: 0,
         },
         businessProfile: {
           readiness: {
@@ -3964,6 +4163,10 @@ function createEmptyOperatorWorkspace() {
       suggestedSlots: [],
       dailySummary: "Connect Google Calendar to see your day, open slots, and booking opportunities here.",
       missedBookingOpportunities: [],
+      scheduleItems: [],
+      followUpItems: [],
+      unlinkedItems: [],
+      syncMode: "disconnected",
     },
     automations: {
       tasks: [],
@@ -6158,19 +6361,27 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
   const pendingApprovals = events.filter((event) => event.approvalStatus === "pending_owner");
   const status = operatorWorkspace.status || createEmptyOperatorWorkspace().status;
   const activation = operatorWorkspace.activation || createEmptyOperatorWorkspace().activation;
+  const googleCapabilities = getGoogleWorkspaceCapabilities(operatorWorkspace);
+  const canWrite = googleCapabilities.calendarWrite === true;
+  const followUpItems = Array.isArray(calendar.followUpItems) ? calendar.followUpItems : [];
+  const unlinkedItems = Array.isArray(calendar.unlinkedItems) ? calendar.unlinkedItems : [];
 
   return `
     <section class="workspace-panel" data-shell-section="calendar" hidden>
       <div class="workspace-panel-header">
         <h2 class="workspace-panel-title">Calendar</h2>
-        <p class="workspace-panel-copy">Calendar is an optional Google-connected beta. It surfaces the day view, suggested slots, booking signals, and approval-first calendar changes without silently mutating the owner calendar.</p>
+        <p class="workspace-panel-copy">${escapeHtml(canWrite
+          ? "Calendar is an optional Google-connected beta. It surfaces the day view, suggested slots, booking signals, and approval-first calendar changes without silently mutating the owner calendar."
+          : "Calendar is connected in a Google Calendar-first read-only mode. It surfaces today’s schedule, recent appointments that may need follow-up, and unlinked attendees without silently mutating the owner calendar.")}</p>
       </div>
       <div class="workspace-section-stack">
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Daily summary</h3>
           <p class="workspace-panel-copy">${escapeHtml(calendar.dailySummary || "Connect Google Calendar to see today’s schedule and open booking slots.")}</p>
           ${primaryAccount?.status === "connected"
-            ? `<div class="inline-actions"><button class="ghost-button" type="button" data-refresh-operator data-force-sync="true">Run calendar sync</button><button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar reviewed</button></div><p class="section-note">Connected as ${escapeHtml(primaryAccount.accountEmail || "Google Workspace")}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.</p>`
+            ? `<div class="inline-actions"><button class="ghost-button" type="button" data-refresh-operator data-force-sync="true">Run calendar sync</button><button class="ghost-button" type="button" data-complete-operator-step="calendar_review">Mark calendar reviewed</button></div><p class="section-note">${escapeHtml(canWrite
+              ? `Connected as ${primaryAccount.accountEmail || "Google Workspace"}. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`
+              : `Connected as ${primaryAccount.accountEmail || "Google Workspace"} in read-only mode. Last sync ${primaryAccount.lastSyncAt ? formatSeenAt(primaryAccount.lastSyncAt) : "not run yet"}.`)}</p>`
             : `<div class="inline-actions"><button class="primary-button" type="button" data-google-connect ${status.googleConfigReady ? "" : "disabled"}>Connect Google</button></div>`}
         </section>
 
@@ -6202,56 +6413,64 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
           })}
         </section>
 
-        <section class="workspace-card-soft">
-          <h3 class="studio-group-title">Create event draft</h3>
-          <form class="workspace-section-stack" data-calendar-draft-form>
-            <input type="hidden" name="action_type" value="create">
-            <div class="form-grid two-col">
-              <div class="field">
-                <label>Title</label>
-                <input name="title" type="text" placeholder="Quote review with lead">
-              </div>
-              <div class="field">
-                <label>Attendee email</label>
-                <input name="attendee_email" type="email" placeholder="lead@example.com">
-              </div>
-              <div class="field">
-                <label>Start</label>
-                <input name="start_at" type="datetime-local">
-              </div>
-              <div class="field">
-                <label>End</label>
-                <input name="end_at" type="datetime-local">
-              </div>
-            </div>
-            <div class="field">
-              <label>Description</label>
-              <textarea name="description" placeholder="Prepared from booking intent, quote follow-up, or owner scheduling request."></textarea>
-            </div>
-            <div class="inline-actions">
-              <button class="primary-button" type="submit">Create approval draft</button>
-            </div>
-          </form>
-        </section>
-
-        ${pendingApprovals.length ? `
+        ${canWrite ? `
           <section class="workspace-card-soft">
-            <h3 class="studio-group-title">Pending calendar approvals</h3>
-            <div class="analytics-list">
-              ${pendingApprovals.map((event) => `
-                <div class="analytics-item">
-                  <p class="analytics-item-title">${escapeHtml(event.title || "Pending calendar draft")}</p>
-                  <p class="analytics-item-copy">${escapeHtml([
-                    event.actionType,
-                    event.startAt ? formatSeenAt(event.startAt) : "",
-                    event.endAt ? formatSeenAt(event.endAt) : "",
-                  ].filter(Boolean).join(" · "))}</p>
-                  <button class="primary-button" type="button" data-approve-calendar-event data-event-id="${escapeHtml(event.id)}">Approve calendar change</button>
+            <h3 class="studio-group-title">Create event draft</h3>
+            <form class="workspace-section-stack" data-calendar-draft-form>
+              <input type="hidden" name="action_type" value="create">
+              <div class="form-grid two-col">
+                <div class="field">
+                  <label>Title</label>
+                  <input name="title" type="text" placeholder="Quote review with lead">
                 </div>
-              `).join("")}
-            </div>
+                <div class="field">
+                  <label>Attendee email</label>
+                  <input name="attendee_email" type="email" placeholder="lead@example.com">
+                </div>
+                <div class="field">
+                  <label>Start</label>
+                  <input name="start_at" type="datetime-local">
+                </div>
+                <div class="field">
+                  <label>End</label>
+                  <input name="end_at" type="datetime-local">
+                </div>
+              </div>
+              <div class="field">
+                <label>Description</label>
+                <textarea name="description" placeholder="Prepared from booking intent, quote follow-up, or owner scheduling request."></textarea>
+              </div>
+              <div class="inline-actions">
+                <button class="primary-button" type="submit">Create approval draft</button>
+              </div>
+            </form>
           </section>
-        ` : ""}
+
+          ${pendingApprovals.length ? `
+            <section class="workspace-card-soft">
+              <h3 class="studio-group-title">Pending calendar approvals</h3>
+              <div class="analytics-list">
+                ${pendingApprovals.map((event) => `
+                  <div class="analytics-item">
+                    <p class="analytics-item-title">${escapeHtml(event.title || "Pending calendar draft")}</p>
+                    <p class="analytics-item-copy">${escapeHtml([
+                      event.actionType,
+                      event.startAt ? formatSeenAt(event.startAt) : "",
+                      event.endAt ? formatSeenAt(event.endAt) : "",
+                    ].filter(Boolean).join(" · "))}</p>
+                    <button class="primary-button" type="button" data-approve-calendar-event data-event-id="${escapeHtml(event.id)}">Approve calendar change</button>
+                  </div>
+                `).join("")}
+              </div>
+            </section>
+          ` : ""}
+        ` : `
+          <section class="workspace-card-soft">
+            <h3 class="studio-group-title">Read-only calendar mode</h3>
+            <p class="workspace-panel-copy">Vonza is intentionally using read-only Calendar access in this pass. It can sync today’s schedule, spot follow-up gaps, and surface unlinked attendees, but it does not draft or approve calendar mutations here.</p>
+            <p class="analytics-subtle">${escapeHtml(`${formatOperatorCount(followUpItems.length, "recent appointment")} need follow-up review and ${formatOperatorCount(unlinkedItems.length, "appointment")} are still unlinked to contacts.`)}</p>
+          </section>
+        `}
 
         <section class="workspace-card-soft">
           <h3 class="studio-group-title">Upcoming events and booking opportunities</h3>
@@ -6265,23 +6484,30 @@ function buildCalendarPanel(agent, operatorWorkspace = createEmptyOperatorWorksp
                     event.endAt ? `to ${formatSeenAt(event.endAt)}` : "",
                     event.status,
                   ].filter(Boolean).join(" "))}</p>
-                  <form class="workspace-section-stack" data-calendar-mutation-form data-event-id="${escapeHtml(event.id)}">
-                    <input type="hidden" name="action_type" value="update">
-                    <div class="form-grid two-col">
-                      <div class="field">
-                        <label>Reschedule start</label>
-                        <input name="start_at" type="datetime-local" value="${escapeHtml(formatDateTimeLocalValue(event.startAt))}">
+                  ${canWrite ? `
+                    <form class="workspace-section-stack" data-calendar-mutation-form data-event-id="${escapeHtml(event.id)}">
+                      <input type="hidden" name="action_type" value="update">
+                      <div class="form-grid two-col">
+                        <div class="field">
+                          <label>Reschedule start</label>
+                          <input name="start_at" type="datetime-local" value="${escapeHtml(formatDateTimeLocalValue(event.startAt))}">
+                        </div>
+                        <div class="field">
+                          <label>Reschedule end</label>
+                          <input name="end_at" type="datetime-local" value="${escapeHtml(formatDateTimeLocalValue(event.endAt))}">
+                        </div>
                       </div>
-                      <div class="field">
-                        <label>Reschedule end</label>
-                        <input name="end_at" type="datetime-local" value="${escapeHtml(formatDateTimeLocalValue(event.endAt))}">
+                      <div class="inline-actions">
+                        <button class="ghost-button" type="submit">Draft update</button>
+                        <button class="ghost-button" type="button" data-cancel-calendar-event data-event-id="${escapeHtml(event.id)}">Draft cancel</button>
                       </div>
-                    </div>
+                    </form>
+                  ` : `
+                    <p class="analytics-item-copy">${escapeHtml(event.followUpReason || event.unlinkedReason || event.scheduleReason || "This appointment is synced in read-only mode for review.")}</p>
                     <div class="inline-actions">
-                      <button class="ghost-button" type="submit">Draft update</button>
-                      <button class="ghost-button" type="button" data-cancel-calendar-event data-event-id="${escapeHtml(event.id)}">Draft cancel</button>
+                      <button class="ghost-button" type="button" data-open-calendar-event data-event-id="${escapeHtml(event.id)}">Review appointment context</button>
                     </div>
-                  </form>
+                  `}
                 </article>
               `).join("")}
             </div>
@@ -6921,6 +7147,7 @@ function normalizeOperatorWorkspace(data = null) {
     status: {
       ...emptyWorkspace.status,
       ...status,
+      googleCapabilities: normalizeGoogleCapabilities(status.googleCapabilities),
       enabled: status.enabled === false || source.enabled === false ? false : emptyWorkspace.status.enabled,
       featureEnabled:
         status.featureEnabled === false || source.featureEnabled === false
@@ -6954,6 +7181,9 @@ function normalizeOperatorWorkspace(data = null) {
       ...calendar,
       events: normalizeOperatorArray(calendar.events, normalizeOperatorRecord),
       suggestedSlots: normalizeOperatorArray(calendar.suggestedSlots, normalizeOperatorRecord),
+      scheduleItems: normalizeOperatorArray(calendar.scheduleItems, normalizeOperatorRecord),
+      followUpItems: normalizeOperatorArray(calendar.followUpItems, normalizeOperatorRecord),
+      unlinkedItems: normalizeOperatorArray(calendar.unlinkedItems, normalizeOperatorRecord),
       missedBookingOpportunities: normalizeOperatorArray(
         calendar.missedBookingOpportunities,
         normalizeOperatorRecord

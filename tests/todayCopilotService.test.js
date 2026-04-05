@@ -96,6 +96,53 @@ test("copilot produces read-only answers, recommendations, and drafts from stabl
     routingEvents: [
       { eventName: "cta_shown" },
     ],
+    calendar: {
+      events: [
+        {
+          id: "event-1",
+          title: "Morning estimate",
+          startAt: "2026-04-04T13:00:00.000Z",
+          endAt: "2026-04-04T13:30:00.000Z",
+        },
+      ],
+      scheduleItems: [
+        {
+          id: "event-1",
+          title: "Morning estimate",
+          startAt: "2026-04-04T13:00:00.000Z",
+          endAt: "2026-04-04T13:30:00.000Z",
+          scheduleReason: "This appointment is coming up today and is linked to Taylor Reed.",
+          linkedContactId: "contact-1",
+          linkedContactName: "Taylor Reed",
+          actionTargetSection: "contacts",
+          actionTargetId: "contact-1",
+          actionLabel: "Open Contact",
+        },
+      ],
+      followUpItems: [
+        {
+          id: "event-2",
+          title: "Quote review",
+          followUpReason: "The appointment ended recently and no follow-up, task, or non-booking outcome is visible yet.",
+          linkedContactId: "contact-1",
+          linkedContactName: "Taylor Reed",
+          linkedContactEmail: "taylor@example.com",
+          actionTargetSection: "contacts",
+          actionTargetId: "contact-1",
+          actionLabel: "Open Contact",
+        },
+      ],
+      unlinkedItems: [
+        {
+          id: "event-3",
+          title: "Site visit",
+          unlinkedReason: "Jordan Lane is not linked to a contact yet, so follow-up and outcome tracking can fragment.",
+          actionTargetSection: "calendar",
+          actionTargetId: "event-3",
+          actionLabel: "Open Calendar",
+        },
+      ],
+    },
     businessProfile: {
       readiness: {
         totalSections: 8,
@@ -113,16 +160,23 @@ test("copilot produces read-only answers, recommendations, and drafts from stabl
   assert.equal(copilot.autonomousActionsEnabled, false);
   assert.equal(copilot.sparseData, false);
   assert.ok(copilot.summaryCards.some((card) => card.id === "what_matters"));
+  assert.ok(copilot.summaryCards.some((card) => card.id === "calendar_day"));
+  assert.ok(copilot.summaryCards.some((card) => card.id === "appointment_follow_up"));
+  assert.ok(copilot.summaryCards.some((card) => card.id === "unlinked_appointments"));
   assert.ok(copilot.answers.some((answer) => answer.key === "attention_today"));
+  assert.ok(copilot.answers.some((answer) => answer.key === "front_desk_activity" && /schedule/i.test(answer.answer)));
+  assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "appointment_follow_up"));
+  assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "unlinked_appointment"));
   assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "pricing_gap"));
   assert.ok(copilot.recommendations.some((recommendation) => recommendation.type === "support_risk_review"));
   assert.ok(copilot.recommendations.every((recommendation) => recommendation.writeBehavior === "recommendation_only"));
   assert.ok(copilot.recommendations.some((recommendation) => recommendation.targetSection));
   assert.equal(copilot.drafts[0].approvalRequired, true);
   assert.equal(copilot.drafts[0].writeBehavior, "draft_only");
-  assert.match(copilot.drafts[0].subject, /pricing/i);
+  assert.match(copilot.drafts[0].subject, /following up after quote review/i);
   assert.ok(copilot.drafts.some((draft) => draft.type === "task_proposal"));
   assert.ok(copilot.proposals.some((proposal) => proposal.type === "create_follow_up_draft"));
+  assert.ok(copilot.proposals.some((proposal) => proposal.type === "create_outcome_review"));
   assert.ok(copilot.proposals.some((proposal) => proposal.type === "create_operator_task"));
   assert.ok(copilot.proposals.every((proposal) => ["new", "blocked", "stale"].includes(proposal.state)));
   assert.equal(copilot.recommendedNextActionId.length > 0, true);

@@ -8,9 +8,7 @@ export const OPERATOR_CHECKLIST_KEYS = [
   "connect_google",
   "choose_context",
   "run_first_sync",
-  "review_inbox",
   "review_calendar",
-  "create_first_automation",
 ];
 
 const OPERATOR_ACTIVATION_SELECT = [
@@ -65,6 +63,11 @@ function isMissingRelationError(error, relationName) {
 
 function normalizeBoolean(value) {
   return value === true;
+}
+
+function parseTimestamp(value) {
+  const timestamp = new Date(value || "").getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function nowIso() {
@@ -126,13 +129,9 @@ function mapActivationRow(row) {
 function buildActivationCompletion(state) {
   const shouldComplete = Boolean(
     state.googleConnected
-    && state.inboxContextSelected
     && state.calendarContextSelected
-    && state.inboxSynced
     && state.calendarSynced
-    && state.firstInboxReviewCompleted
     && state.firstCalendarActionReviewed
-    && state.firstCampaignDraftCreated
   );
 
   return shouldComplete
@@ -454,7 +453,6 @@ export function buildOperatorSingleNextAction({
   activation = createDefaultOperatorActivationState(),
   summary = {},
   tasks = [],
-  threads = [],
   followUps = [],
   campaigns = [],
   events = [],
@@ -462,8 +460,7 @@ export function buildOperatorSingleNextAction({
 } = {}) {
   const googleConnected = status.googleConnected === true;
   const googleConnectReady = status.googleConnectReady !== false;
-  const needsFirstSync = googleConnected && (!activation.inboxSynced || !activation.calendarSynced);
-  const inboxThreads = Array.isArray(threads) ? threads : [];
+  const needsFirstSync = googleConnected && !activation.calendarSynced;
   const openTasks = (tasks || []).filter(isOpenTask);
   const urgentComplaintTask = openTasks
     .filter((task) => cleanText(task.taskType) === "complaint_queue")
@@ -471,15 +468,16 @@ export function buildOperatorSingleNextAction({
   const urgentSupportTask = openTasks
     .filter((task) => cleanText(task.taskType) === "support_follow_up")
     .sort((left, right) => getTaskOrderScore(left).localeCompare(getTaskOrderScore(right)))[0];
-  const overdueThread = inboxThreads.find((thread) => thread.needsReply && cleanText(thread.riskLevel) === "high");
   const leadTask = openTasks.find((task) => cleanText(task.taskType) === "missed_booking_opportunity");
+  const followUpAppointment = (events || []).find((event) => event.needsFollowUp);
+  const unlinkedAppointment = (events || []).find((event) => event.isUnlinked && (event.isUpcomingToday || event.isRecentPast || event.isInProgress));
 
   if (!googleConnected) {
     return {
       key: "connect_google",
       title: googleConnectReady ? "Connect Google" : "Finish Google setup",
       description: googleConnectReady
-        ? "Connect Gmail and Calendar so Vonza can build your inbox, calendar, and operator summary."
+        ? "Connect Google Calendar so Today can pull your schedule, recent appointments, and approval-first follow-up suggestions."
         : "Google connection is not configured on this deployment yet. Add the Google env vars before owner activation.",
       buttonLabel: googleConnectReady ? "Connect Google" : "Review deployment setup",
       actionType: googleConnectReady ? "connect_google" : "open_customize",
@@ -488,11 +486,11 @@ export function buildOperatorSingleNextAction({
     };
   }
 
-  if (!activation.inboxContextSelected || !activation.calendarContextSelected) {
+  if (!activation.calendarContextSelected) {
     return {
       key: "choose_context",
       title: "Choose your operator context",
-      description: "Pick the inbox Vonza should watch first and confirm the calendar context before syncing live data.",
+      description: "Confirm the primary calendar context before syncing live data into Today.",
       buttonLabel: "Save context",
       actionType: "review_context",
       targetSection: "overview",
@@ -503,7 +501,7 @@ export function buildOperatorSingleNextAction({
     return {
       key: "run_first_sync",
       title: "Run first sync",
-      description: "Pull in the inbox and calendar now so Today can show what actually needs attention.",
+      description: "Pull in the calendar now so Today can show today’s schedule, recent appointments, and follow-up suggestions.",
       buttonLabel: "Run first sync",
       actionType: "run_first_sync",
       targetSection: "overview",
@@ -532,36 +530,36 @@ export function buildOperatorSingleNextAction({
     };
   }
 
-  if (overdueThread && !activation.firstInboxReviewCompleted) {
-    return {
-      key: "review_inbox",
-      title: overdueThread.subject || "Review inbox classifications",
-      description: "Start with the inbox so urgent threads and reply drafts are reviewed before they go cold.",
-      buttonLabel: "Review inbox",
-      actionType: "open_inbox",
-      targetSection: "inbox",
-    };
-  }
-
   if (!activation.firstCalendarActionReviewed && (events.length || suggestedSlots.length)) {
     return {
       key: "review_calendar",
       title: "Review today’s calendar",
-      description: "Check today’s events, open gaps, and any scheduling opportunities before automations.",
+      description: "Check today’s schedule, recent appointments, and open gaps before moving on.",
       buttonLabel: "Review calendar",
       actionType: "open_calendar",
       targetSection: "calendar",
     };
   }
 
-  if (!activation.firstCampaignDraftCreated) {
+  if (followUpAppointment) {
     return {
-      key: "create_first_automation",
-      title: "Create your first automation draft",
-      description: "Generate one approval-first campaign so the workspace becomes useful beyond passive monitoring.",
-      buttonLabel: "Create automation",
-      actionType: "open_automations",
-      targetSection: "automations",
+      key: "review_appointment_follow_up",
+      title: cleanText(followUpAppointment.title) || "Review appointment follow-up",
+      description: cleanText(followUpAppointment.followUpReason) || "A recent appointment likely needs a clear next step.",
+      buttonLabel: "Review Today cards",
+      actionType: "review_context",
+      targetSection: "overview",
+    };
+  }
+
+  if (unlinkedAppointment) {
+    return {
+      key: "review_unlinked_appointment",
+      title: cleanText(unlinkedAppointment.title) || "Review unlinked appointment",
+      description: cleanText(unlinkedAppointment.unlinkedReason) || "An appointment is not linked to a contact yet.",
+      buttonLabel: "Review Today cards",
+      actionType: "review_context",
+      targetSection: "overview",
     };
   }
 
@@ -570,28 +568,17 @@ export function buildOperatorSingleNextAction({
       key: "review_follow_up",
       title: leadTask.title || "Review follow-up",
       description: leadTask.description || "A lead needs the next step defined.",
-      buttonLabel: "Review lead follow-up",
-      actionType: "open_automations",
-      targetSection: "automations",
-    };
-  }
-
-  if ((followUps || []).length) {
-    return {
-      key: "review_follow_ups",
-      title: "Review follow-ups waiting on you",
-      description: "Vonza has prepared follow-ups that still need owner review or approval.",
       buttonLabel: "Open automations",
       actionType: "open_automations",
       targetSection: "automations",
     };
   }
 
-  if ((campaigns || []).length) {
+  if ((followUps || []).length || (campaigns || []).length) {
     return {
-      key: "review_campaigns",
-      title: "Review active automations",
-      description: "Check queued campaigns and send timing so the workspace stays current.",
+      key: "review_follow_ups",
+      title: "Review approval-first follow-up work",
+      description: "Vonza has prepared follow-ups or tasks that still need owner review.",
       buttonLabel: "Open automations",
       actionType: "open_automations",
       targetSection: "automations",
@@ -613,7 +600,6 @@ export function buildOperatorSingleNextAction({
 export function buildOperatorActivationChecklist({
   activation = createDefaultOperatorActivationState(),
   status = {},
-  threads = [],
   events = [],
   suggestedSlots = [],
 } = {}) {
@@ -625,43 +611,29 @@ export function buildOperatorActivationChecklist({
       key: "connect_google",
       title: "Connect Google",
       description: googleConnectReady
-        ? "Authorize Gmail and Calendar so Vonza can build the operator workspace."
+        ? "Authorize basic identity plus read-only Google Calendar access so Today can summarize the day."
         : "Google env vars still need to be configured before owners can connect.",
       complete: googleConnected,
     },
     {
       key: "choose_context",
-      title: "Choose inbox and calendar context",
-      description: "Select the inbox focus and confirm the calendar context for first-run sync.",
-      complete: activation.inboxContextSelected && activation.calendarContextSelected,
+      title: "Confirm calendar context",
+      description: "Use the primary Google calendar as the source of truth for Today.",
+      complete: activation.calendarContextSelected,
     },
     {
       key: "run_first_sync",
       title: "Run first sync",
-      description: "Pull in the current inbox and calendar so Today stops feeling empty.",
-      complete: activation.inboxSynced && activation.calendarSynced,
-    },
-    {
-      key: "review_inbox",
-      title: "Review inbox classifications",
-      description: (threads || []).length
-        ? "Confirm the first important thread bucket so replies and complaints are grounded."
-        : "Open the inbox state even if there are no synced threads yet so the workflow is clear.",
-      complete: activation.firstInboxReviewCompleted,
+      description: "Pull in today’s schedule plus very recent appointments so Today stops feeling empty.",
+      complete: activation.calendarSynced,
     },
     {
       key: "review_calendar",
       title: "Review today’s calendar summary",
       description: (events || []).length || (suggestedSlots || []).length
-        ? "Review today’s schedule, open slots, and the first recommended calendar action."
+        ? "Review today’s schedule, open slots, and the first follow-up or linking suggestion."
         : "Acknowledge the calendar state so the owner still gets a useful empty summary.",
       complete: activation.firstCalendarActionReviewed,
-    },
-    {
-      key: "create_first_automation",
-      title: "Create first automation draft",
-      description: "Generate one approval-first campaign so Vonza becomes operational, not just connected.",
-      complete: activation.firstCampaignDraftCreated,
     },
   ];
 }
@@ -686,25 +658,21 @@ export function buildOperatorBriefing({
   if (status.googleConnected !== true) {
     return {
       title: "Start by connecting Google",
-      text: "Google is not connected yet, so Vonza cannot summarize inbox work, calendar load, or approval-first automations today.",
+      text: "Google is not connected yet, so Today cannot summarize the calendar, recent appointments, or approval-first follow-up suggestions.",
     };
   }
 
-  if (!activation.inboxSynced || !activation.calendarSynced) {
+  if (!activation.calendarSynced) {
     return {
       title: "Run the first sync",
-      text: "Google is connected, but the first sync has not finished yet, so Today is still waiting on live inbox and calendar data.",
+      text: "Google is connected, but the first sync has not finished yet, so Today is still waiting on live calendar data.",
     };
   }
 
   const taskCounts = getOpenTaskCounts(tasks);
   const parts = [];
-
-  if (Number(summary.inboxNeedingAttention || 0) > 0) {
-    parts.push(`${summary.inboxNeedingAttention} inbox thread${summary.inboxNeedingAttention === 1 ? " needs" : "s need"} attention`);
-  } else {
-    parts.push("the inbox is currently quiet");
-  }
+  const followUpAppointments = (events || []).filter((event) => event.needsFollowUp).length;
+  const unlinkedAppointments = (events || []).filter((event) => event.isUnlinked && (event.isUpcomingToday || event.isRecentPast || event.isInProgress)).length;
 
   if (taskCounts.complaintsNeedingReview > 0) {
     parts.push(`${taskCounts.complaintsNeedingReview} complaint${taskCounts.complaintsNeedingReview === 1 ? " needs" : "s need"} review`);
@@ -712,31 +680,36 @@ export function buildOperatorBriefing({
     parts.push(`${taskCounts.supportNeedingReview} support item${taskCounts.supportNeedingReview === 1 ? " needs" : "s need"} follow-up`);
   }
 
-  if (Number(summary.overdueThreads || 0) > 0) {
-    parts.push(`${summary.overdueThreads} thread${summary.overdueThreads === 1 ? " is" : "s are"} overdue`);
-  }
-
   if ((events || []).length > 0) {
-    parts.push(`${events.length} calendar event${events.length === 1 ? " is" : "s are"} visible today`);
+    parts.push(`${events.length} calendar event${events.length === 1 ? " is" : "s are"} visible in Today`);
   } else if ((suggestedSlots || []).length > 0) {
     parts.push(`the best open slot is ${suggestedSlots[0].label}`);
+  }
+
+  if (followUpAppointments > 0) {
+    parts.push(`${followUpAppointments} recent appointment${followUpAppointments === 1 ? " likely needs" : "s likely need"} follow-up`);
+  }
+
+  if (unlinkedAppointments > 0) {
+    parts.push(`${unlinkedAppointments} appointment${unlinkedAppointments === 1 ? " is" : "s are"} not linked to a contact yet`);
   }
 
   if (taskCounts.leadsNeedingAction > 0) {
     parts.push(`${taskCounts.leadsNeedingAction} lead or follow-up item${taskCounts.leadsNeedingAction === 1 ? " still needs" : "s still need"} action`);
   }
 
-  if (Number(summary.activeCampaigns || 0) > 0) {
-    parts.push(`${summary.activeCampaigns} automation${summary.activeCampaigns === 1 ? " is" : "s are"} active`);
-  } else if ((followUps || []).length > 0) {
+  if ((followUps || []).length > 0) {
     parts.push(`${followUps.length} prepared follow-up${followUps.length === 1 ? " is" : "s are"} waiting`);
   }
 
   const recommendation = cleanText(nextAction?.title || nextAction?.description);
+  const summaryText = parts.length
+    ? `${parts.join(". ")}.`
+    : "Calendar access is live, but there are no appointments or queued follow-up items standing out right now.";
 
   return {
     title: "Operator briefing",
-    text: `${parts.join(". ")}.${recommendation ? ` Recommended next step: ${recommendation}.` : ""}`.replace(/\.\./g, "."),
+    text: `${summaryText}${recommendation ? ` Recommended next step: ${recommendation}.` : ""}`.replace(/\.\./g, "."),
   };
 }
 
@@ -751,12 +724,23 @@ export function buildOperatorTodaySummary({
   recentOutcomes = [],
   contacts = [],
   contactsSummary = {},
+  calendarInsights = {},
 } = {}) {
   const taskCounts = getOpenTaskCounts(tasks);
+  const nowTimestamp = Date.now();
   const nextEvent = (events || [])
-    .filter((event) => event.startAt || event.start_at)
+    .filter((event) =>
+      event.isInProgress
+      || event.isUpcomingToday
+      || parseTimestamp(event.startAt || event.start_at) >= nowTimestamp
+    )
     .slice()
-    .sort((left, right) => String(left.startAt || left.start_at).localeCompare(String(right.startAt || right.start_at)))[0];
+    .sort((left, right) => parseTimestamp(left.startAt || left.start_at) - parseTimestamp(right.startAt || right.start_at))[0]
+    || (events || [])
+      .filter((event) => event.startAt || event.start_at)
+      .slice()
+      .sort((left, right) => parseTimestamp(left.startAt || left.start_at) - parseTimestamp(right.startAt || right.start_at))[0]
+    || null;
 
   return {
     googleConnectionLabel: "",
@@ -768,6 +752,8 @@ export function buildOperatorTodaySummary({
     followUpsAwaitingApproval: Number(summary.followUpsNeedingApproval || 0),
     activeCampaigns: Number(summary.activeCampaigns || 0),
     upcomingBookings: Number(summary.upcomingBookings || 0),
+    appointmentsNeedingFollowUp: Array.isArray(calendarInsights.followUpItems) ? calendarInsights.followUpItems.length : 0,
+    unlinkedAppointments: Array.isArray(calendarInsights.unlinkedItems) ? calendarInsights.unlinkedItems.length : 0,
     nextEventTitle: cleanText(nextEvent?.title),
     nextEventAt: nextEvent?.startAt || nextEvent?.start_at || null,
     openAvailabilityCount: Number(summary.openAvailabilityCount || suggestedSlots.length || 0),

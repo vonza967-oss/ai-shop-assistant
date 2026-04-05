@@ -16,6 +16,11 @@ function isSameDay(left, right) {
   return String(left || "").slice(0, 10) === String(right || "").slice(0, 10);
 }
 
+function parseTimestamp(value) {
+  const timestamp = new Date(value || "").getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
@@ -643,6 +648,173 @@ function buildOutcomeReviewProposal(contact = {}) {
   });
 }
 
+function buildAppointmentFollowUpRecommendation(appointment = {}) {
+  if (!appointment?.id) {
+    return null;
+  }
+
+  const contactId = cleanText(appointment.linkedContactId);
+  const contactLabel = cleanText(appointment.linkedContactName || appointment.title || "this appointment");
+  const targetSection = contactId ? "contacts" : cleanText(appointment.actionTargetSection || "calendar");
+  const targetId = contactId || cleanText(appointment.actionTargetId || appointment.id);
+  const surfaceLabel = contactId ? "Open Contacts" : cleanText(appointment.actionLabel || "Open Calendar");
+
+  return createRecommendation({
+    id: `appointment-follow-up:${cleanText(appointment.id)}`,
+    type: "appointment_follow_up",
+    title: contactId
+      ? `Review follow-up for ${contactLabel}`
+      : `Review the next step after ${cleanText(appointment.title || "this appointment")}`,
+    summary: cleanText(appointment.followUpReason) || "A recent appointment likely needs a next step.",
+    priority: "high",
+    confidence: "high",
+    rationale: "Recent completed appointments are deterministic follow-up opportunities, so Copilot should surface them before lower-signal work.",
+    source: {
+      eventId: cleanText(appointment.id),
+      contactId,
+      contactEmail: cleanText(appointment.linkedContactEmail),
+      actionKey: cleanText(appointment.relatedActionKey),
+    },
+    targetSection,
+    targetId,
+    actionType: contactId ? "open_contact" : "open_calendar_event",
+    surfaceLabel,
+    proposal: {
+      key: `appointment-outcome-review:${cleanText(appointment.id)}`,
+      type: "create_outcome_review",
+      hash: createProposalHash([
+        "create_outcome_review",
+        appointment.id,
+        appointment.linkedContactId,
+        appointment.title,
+        appointment.followUpReason,
+      ]),
+      summary: contactId
+        ? `Create outcome review for ${contactLabel}`
+        : `Create follow-up review for ${cleanText(appointment.title || "this appointment")}`,
+      rationale: "Copilot can safely create a review task for a recent appointment, but it should never mark the outcome or send follow-up automatically.",
+      effect: "Create a review task so the owner can confirm the next step, follow-up, or real outcome from this appointment.",
+      approvalNote: "This creates a review task only. It does not send follow-up or mark the outcome automatically.",
+      applyLabel: "Create review",
+      dismissLabel: "Dismiss",
+      openLabel: surfaceLabel,
+      target: {
+        section: targetSection,
+        id: targetId,
+        label: surfaceLabel,
+      },
+      applyPayload: {
+        taskType: "appointment_outcome_review",
+        contactId,
+        actionKey: cleanText(appointment.relatedActionKey),
+        title: contactId
+          ? `Review next step for ${contactLabel}`
+          : `Review attendee follow-up for ${cleanText(appointment.title || "this appointment")}`,
+        description: cleanText(appointment.followUpReason) || "Confirm the next step, follow-up, or outcome after this appointment.",
+        targetSection,
+        targetId,
+      },
+    },
+  });
+}
+
+function buildUnlinkedAppointmentRecommendation(appointment = {}) {
+  if (!appointment?.id) {
+    return null;
+  }
+
+  return createRecommendation({
+    id: `unlinked-appointment:${cleanText(appointment.id)}`,
+    type: "unlinked_appointment",
+    title: cleanText(appointment.title) || "Review unlinked appointment",
+    summary: cleanText(appointment.unlinkedReason) || "An appointment attendee is not linked to a contact yet.",
+    priority: "medium",
+    confidence: "high",
+    rationale: "Unlinked appointments fragment follow-up and outcome attribution, so Copilot should surface them explicitly instead of hiding them.",
+    source: {
+      eventId: cleanText(appointment.id),
+      contactEmail: cleanText(appointment.linkedContactEmail),
+    },
+    targetSection: cleanText(appointment.actionTargetSection || "calendar"),
+    targetId: cleanText(appointment.actionTargetId || appointment.id),
+    actionType: "open_calendar_event",
+    surfaceLabel: cleanText(appointment.actionLabel || "Open Calendar"),
+    proposal: {
+      key: `unlinked-appointment:${cleanText(appointment.id)}`,
+      type: "create_operator_task",
+      hash: createProposalHash([
+        "create_operator_task",
+        appointment.id,
+        appointment.title,
+        appointment.unlinkedReason,
+      ]),
+      summary: `Create a linking review for ${cleanText(appointment.title || "this appointment")}`,
+      rationale: "Copilot can safely create a review task for attendee linking, but it should not create or merge contacts automatically.",
+      effect: "Create an approval-first operator task to review whether this attendee should be linked to an existing or new contact.",
+      approvalNote: "This creates a review task only. It does not link contacts automatically.",
+      applyLabel: "Create task",
+      dismissLabel: "Dismiss",
+      openLabel: cleanText(appointment.actionLabel || "Open Calendar"),
+      target: {
+        section: cleanText(appointment.actionTargetSection || "calendar"),
+        id: cleanText(appointment.actionTargetId || appointment.id),
+        label: cleanText(appointment.actionLabel || "Open Calendar"),
+      },
+      applyPayload: {
+        taskType: "link_calendar_attendee",
+        title: `Review attendee linking for ${cleanText(appointment.title || "this appointment")}`,
+        description: cleanText(appointment.unlinkedReason) || "Review whether this attendee should be linked to a contact.",
+        targetSection: cleanText(appointment.actionTargetSection || "calendar"),
+        targetId: cleanText(appointment.actionTargetId || appointment.id),
+      },
+    },
+  });
+}
+
+function buildAppointmentFollowUpDraft(appointment = {}, agent = {}) {
+  if (!appointment?.id) {
+    return null;
+  }
+
+  const contactEmail = cleanText(appointment.linkedContactEmail);
+  const contactPhone = cleanText(appointment.linkedContactPhone);
+  if (!contactEmail && !contactPhone) {
+    return null;
+  }
+
+  const targetSection = cleanText(appointment.linkedContactId) ? "contacts" : cleanText(appointment.actionTargetSection || "calendar");
+  const targetId = cleanText(appointment.linkedContactId || appointment.actionTargetId || appointment.id);
+  const surfaceLabel = cleanText(appointment.linkedContactId ? "Open Contacts" : appointment.actionLabel || "Open Calendar");
+  const appointmentTitle = cleanText(appointment.title || "your appointment");
+
+  return buildGeneratedDraft({
+    contactId: cleanText(appointment.linkedContactId),
+    actionKey: cleanText(appointment.relatedActionKey),
+    contactName: cleanText(appointment.linkedContactName),
+    contactEmail,
+    contactPhone,
+    channel: contactEmail ? "email" : "phone",
+    topic: `your ${appointmentTitle}`,
+  }, {
+    businessName: cleanText(agent.name),
+    assistantName: cleanText(agent.assistantName || agent.name),
+    id: `appointment-follow-up-draft:${cleanText(appointment.id)}`,
+    title: cleanText(appointment.linkedContactName)
+      ? `Draft post-appointment follow-up for ${cleanText(appointment.linkedContactName)}`
+      : `Draft post-appointment follow-up for ${appointmentTitle}`,
+    rationale: cleanText(appointment.followUpReason) || "A recent appointment ended without a clear next step, so Copilot prepared an approval-first follow-up draft.",
+    targetSection,
+    targetId,
+    actionType: cleanText(appointment.linkedContactId) ? "open_contact" : "open_calendar_event",
+    surfaceLabel,
+    subject: `${cleanText(agent.name)}: following up after ${appointmentTitle}`,
+    proposalKey: `appointment-follow-up-draft:${cleanText(appointment.id)}`,
+    followUpActionType: "post_appointment_follow_up",
+    evidence: cleanText(appointment.followUpReason),
+    contextSnippet: cleanText(appointment.followUpReason),
+  });
+}
+
 export function createEmptyTodayCopilotState({ featureEnabled = false } = {}) {
   return {
     enabled: featureEnabled === true,
@@ -668,6 +840,7 @@ export function createEmptyTodayCopilotState({ featureEnabled = false } = {}) {
         knowledgeFixes: 0,
         recentOutcomes: 0,
         widgetEvents: 0,
+        calendarEvents: 0,
       },
       installLive: false,
       websiteKnowledgeReady: false,
@@ -712,6 +885,11 @@ export function buildTodayCopilotSnapshot(options = {}) {
   const knowledgeFixes = normalizeArray(options.knowledgeFixes);
   const routingEvents = normalizeArray(options.routingEvents);
   const recentOutcomes = normalizeArray(options.recentOutcomes);
+  const calendar = options.calendar && typeof options.calendar === "object" ? options.calendar : {};
+  const calendarEvents = normalizeArray(calendar.events);
+  const scheduleItems = normalizeArray(calendar.scheduleItems);
+  const appointmentFollowUpItems = normalizeArray(calendar.followUpItems);
+  const unlinkedAppointments = normalizeArray(calendar.unlinkedItems);
   const queueItems = normalizeArray(actionQueue.items);
   const attentionQueueItems = queueItems.filter((item) => item.ownerWorkflow?.attention === true);
   const followUpCandidates = followUps.filter((workflow) =>
@@ -749,14 +927,27 @@ export function buildTodayCopilotSnapshot(options = {}) {
     followUps.length,
     recentOutcomes.length,
     routingEvents.length,
+    calendarEvents.length,
   ].every((count) => count === 0);
   const loadWarnings = normalizeArray(options.loadWarnings).map((value) => cleanText(value)).filter(Boolean);
 
   const topComplaintRiskContact = findComplaintRiskContact(contacts);
   const topLeadContact = findLeadContact(contacts);
   const topOutcomeReviewContact = findOutcomeReviewContact(contacts);
+  const topAppointmentFollowUp = appointmentFollowUpItems[0] || null;
+  const topUnlinkedAppointment = unlinkedAppointments[0] || null;
 
   const recommendations = [];
+  const appointmentFollowUpRecommendation = buildAppointmentFollowUpRecommendation(topAppointmentFollowUp);
+  if (appointmentFollowUpRecommendation) {
+    recommendations.push(appointmentFollowUpRecommendation);
+  }
+
+  const unlinkedAppointmentRecommendation = buildUnlinkedAppointmentRecommendation(topUnlinkedAppointment);
+  if (unlinkedAppointmentRecommendation) {
+    recommendations.push(unlinkedAppointmentRecommendation);
+  }
+
   const supportRiskRecommendation = buildSupportRiskRecommendation(topComplaintRiskContact);
   if (supportRiskRecommendation) {
     recommendations.push(supportRiskRecommendation);
@@ -878,6 +1069,11 @@ export function buildTodayCopilotSnapshot(options = {}) {
   }
 
   const drafts = [];
+  const appointmentDraft = buildAppointmentFollowUpDraft(topAppointmentFollowUp, agent);
+  if (appointmentDraft) {
+    drafts.push(appointmentDraft);
+  }
+
   const storedDraft = followUpCandidates.find((workflow) =>
     cleanText(workflow.subject) && cleanText(workflow.draftContent)
   );
@@ -992,21 +1188,49 @@ export function buildTodayCopilotSnapshot(options = {}) {
       confidence: sparseData ? "low" : "high",
       rationale: sparseData
         ? "Copilot only has setup-level context so far."
-        : "This summary is grounded in the action queue, contacts, follow-up workflows, and outcomes.",
+        : "This summary is grounded in calendar context, the action queue, contacts, follow-up workflows, and outcomes.",
       recommendationIds: topRecommendation ? [topRecommendation.id] : [],
     }),
     createSummaryCard({
-      id: "lead_follow_up",
-      label: "Leads needing follow-up",
-      text: followUpCandidates.length
-        ? `${pluralize(followUpCandidates.length, "follow-up workflow")} are already open for review.`
-        : leadsNeedingFollowUp.length
-          ? `${pluralize(leadsNeedingFollowUp.length, "lead")} still need a concrete next step.`
-          : "No lead currently stands out as needing a fresh follow-up.",
-      confidence: followUpCandidates.length ? "high" : "medium",
-      rationale: "This is based on stored follow-up workflows plus deterministic contact next actions.",
+      id: "calendar_day",
+      label: "Today's schedule",
+      text: scheduleItems.length
+        ? `${pluralize(scheduleItems.length, "appointment")} are still on today’s schedule. Next up: ${cleanText(scheduleItems[0].title || "the next appointment")}.`
+        : calendarEvents.length
+          ? "No more upcoming appointments are visible on today’s schedule."
+          : "No calendar appointments are visible yet in Copilot context.",
+      confidence: scheduleItems.length ? "high" : "medium",
+      rationale: "This summary is grounded in read-only Google Calendar context.",
       recommendationIds: recommendations
-        .filter((entry) => ["contact_next_step", "pricing_gap"].includes(entry.type))
+        .filter((entry) => ["appointment_follow_up", "unlinked_appointment"].includes(entry.type))
+        .map((entry) => entry.id),
+    }),
+    createSummaryCard({
+      id: "appointment_follow_up",
+      label: "Appointments needing follow-up",
+      text: appointmentFollowUpItems.length
+        ? `${pluralize(appointmentFollowUpItems.length, "recent appointment")} likely need a next step or outcome review.`
+        : followUpCandidates.length
+          ? `${pluralize(followUpCandidates.length, "follow-up workflow")} are already open for review.`
+          : leadsNeedingFollowUp.length
+            ? `${pluralize(leadsNeedingFollowUp.length, "lead")} still need a concrete next step.`
+            : "No recent appointment or lead currently stands out as needing a fresh follow-up.",
+      confidence: appointmentFollowUpItems.length || followUpCandidates.length ? "high" : "medium",
+      rationale: "This combines recent completed appointments, stored follow-up workflows, and deterministic contact next actions.",
+      recommendationIds: recommendations
+        .filter((entry) => ["appointment_follow_up", "contact_next_step", "pricing_gap"].includes(entry.type))
+        .map((entry) => entry.id),
+    }),
+    createSummaryCard({
+      id: "unlinked_appointments",
+      label: "Appointments not linked to contacts",
+      text: unlinkedAppointments.length
+        ? `${pluralize(unlinkedAppointments.length, "appointment")} still need attendee linking so follow-up and outcomes stay grounded.`
+        : "No appointment currently stands out as missing contact linking.",
+      confidence: unlinkedAppointments.length ? "high" : "medium",
+      rationale: "This is based on attendee-to-contact matching from the calendar and contacts workspace.",
+      recommendationIds: recommendations
+        .filter((entry) => entry.type === "unlinked_appointment")
         .map((entry) => entry.id),
     }),
     createSummaryCard({
@@ -1056,21 +1280,25 @@ export function buildTodayCopilotSnapshot(options = {}) {
       confidence: sparseData ? "low" : "high",
       rationale: sparseData
         ? "Copilot only has setup-level context so far."
-        : "This answer is grounded in recommendations built from contacts, queue, follow-up work, and outcomes.",
+        : "This answer is grounded in recommendations built from calendar context, contacts, queue, follow-up work, and outcomes.",
       recommendationIds: topRecommendation ? [topRecommendation.id] : [],
     }),
     createAnswer({
       key: "leads_needing_follow_up",
       question: COPILOT_QUESTIONS[1],
-      answer: followUpCandidates.length
-        ? `${pluralize(followUpCandidates.length, "lead")} already have approval-first follow-up work prepared or still open.`
-        : contactsNeedingAttention.length
-          ? `${pluralize(contactsNeedingAttention.length, "contact")} need a next step, but no prepared follow-up draft is stored yet.`
+      answer: appointmentFollowUpItems.length
+        ? followUpCandidates.length
+          ? `${pluralize(appointmentFollowUpItems.length, "recent appointment")} likely need a next step, and ${pluralize(followUpCandidates.length, "approval-first follow-up draft")} are already prepared or still open.`
+          : `${pluralize(appointmentFollowUpItems.length, "recent appointment")} likely need a next step, and no stored follow-up draft is open for them yet.`
+        : followUpCandidates.length
+          ? `${pluralize(followUpCandidates.length, "approval-first follow-up draft")} are already prepared or still open.`
+        : leadsNeedingFollowUp.length
+          ? `${pluralize(leadsNeedingFollowUp.length, "lead")} still need a concrete next step, but no prepared follow-up draft is stored yet.`
           : "No stable-core lead currently looks like it needs a follow-up.",
-      confidence: followUpCandidates.length ? "high" : "medium",
-      rationale: "Copilot is checking stored follow-up workflows first, then falling back to contact next-action signals.",
+      confidence: appointmentFollowUpItems.length || followUpCandidates.length ? "high" : "medium",
+      rationale: "Copilot is checking recent appointments first, then stored follow-up workflows, then falling back to contact next-action signals.",
       recommendationIds: recommendations
-        .filter((entry) => ["contact_next_step", "pricing_gap"].includes(entry.type))
+        .filter((entry) => ["appointment_follow_up", "contact_next_step", "pricing_gap"].includes(entry.type))
         .map((entry) => entry.id),
     }),
     createAnswer({
@@ -1119,9 +1347,11 @@ export function buildTodayCopilotSnapshot(options = {}) {
       question: COPILOT_QUESTIONS[6],
       answer: sparseData
         ? "The front desk is still mostly in setup mode, so Copilot only sees sparse stable-core activity."
-        : `${pluralize(todaysMessages.length, "message")} arrived today. Website knowledge is ${websiteReady ? "ready" : "still limited"}, the widget is ${installLive ? "live or recently detected" : "not yet confirmed live"}, and ${pluralize(routingEvents.length, "routing event")} have been recorded.`,
+        : scheduleItems.length || appointmentFollowUpItems.length || unlinkedAppointments.length
+          ? `${pluralize(scheduleItems.length, "appointment")} remain on today’s schedule, ${pluralize(appointmentFollowUpItems.length, "recent appointment")} likely need follow-up, and ${pluralize(unlinkedAppointments.length, "appointment")} are still unlinked to contacts.`
+          : `${pluralize(todaysMessages.length, "message")} arrived today. Website knowledge is ${websiteReady ? "ready" : "still limited"}, the widget is ${installLive ? "live or recently detected" : "not yet confirmed live"}, and ${pluralize(routingEvents.length, "routing event")} have been recorded.`,
       confidence: sparseData ? "low" : "high",
-      rationale: "This summary combines messages, website knowledge state, install detection, and routing telemetry without depending on Google-connected beta data.",
+      rationale: "This summary combines calendar context, messages, website knowledge state, install detection, and routing telemetry without creating autonomous actions.",
     }),
     createAnswer({
       key: "draft_follow_up",
@@ -1143,6 +1373,7 @@ export function buildTodayCopilotSnapshot(options = {}) {
     knowledgeFixes: knowledgeFixes.length,
     recentOutcomes: recentOutcomes.length,
     widgetEvents: routingEvents.length,
+    calendarEvents: calendarEvents.length,
   };
 
   return hydrateTodayCopilotProposals({
@@ -1160,7 +1391,7 @@ export function buildTodayCopilotSnapshot(options = {}) {
         : "Today looks stable across the current core.",
     summary: sparseData
       ? "Copilot is intentionally read-first and draft-first. It will stay conservative until stable-core activity gives it something real to summarize."
-      : `${cleanText(topRecommendation?.summary || "Copilot is summarizing stable-core data only.")} It is staying inside front desk activity, contacts, outcomes, follow-up workflows, action queue, and knowledge-fix context.`,
+      : `${cleanText(topRecommendation?.summary || "Copilot is summarizing stable-core data only.")} It is staying inside calendar context, front-desk activity, contacts, outcomes, follow-up workflows, action queue, and knowledge-fix context.`,
     questions: [...COPILOT_QUESTIONS],
     summaryCards,
     recommendedNextActionId: cleanText(topRecommendation?.id),

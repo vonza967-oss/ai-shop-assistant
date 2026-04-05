@@ -96,8 +96,7 @@ test("activation checklist reflects durable first-run progress", () => {
   assert.equal(checklist.find((step) => step.key === "connect_google")?.complete, true);
   assert.equal(checklist.find((step) => step.key === "choose_context")?.complete, true);
   assert.equal(checklist.find((step) => step.key === "run_first_sync")?.complete, false);
-  assert.equal(checklist.find((step) => step.key === "review_inbox")?.complete, true);
-  assert.equal(checklist.find((step) => step.key === "create_first_automation")?.complete, false);
+  assert.equal(checklist.find((step) => step.key === "review_calendar")?.complete, false);
 });
 
 test("operator briefing uses structured fallback copy before sync", () => {
@@ -136,8 +135,6 @@ test("operator briefing summarizes live workload with next recommendation", () =
       firstCampaignDraftCreated: true,
     }),
     summary: {
-      inboxNeedingAttention: 3,
-      overdueThreads: 1,
       activeCampaigns: 1,
     },
     tasks: [
@@ -151,6 +148,7 @@ test("operator briefing summarizes live workload with next recommendation", () =
       {
         title: "Morning booking",
         startAt: "2026-04-06T09:00:00.000Z",
+        needsFollowUp: true,
       },
     ],
     nextAction: {
@@ -158,8 +156,9 @@ test("operator briefing summarizes live workload with next recommendation", () =
     },
   });
 
-  assert.match(briefing.text, /3 inbox threads need attention/i);
   assert.match(briefing.text, /1 complaint needs review/i);
+  assert.match(briefing.text, /1 calendar event is visible in Today/i);
+  assert.match(briefing.text, /1 recent appointment likely needs follow-up/i);
   assert.match(briefing.text, /recommended next step: Review complaints/i);
 });
 
@@ -174,10 +173,16 @@ test("today summary includes people-centered attention counts", () => {
       leadsWithoutNextStep: 1,
       customersAwaitingFollowUp: 3,
     },
+    calendarInsights: {
+      followUpItems: [{ id: "event-1" }],
+      unlinkedItems: [{ id: "event-2" }, { id: "event-3" }],
+    },
   });
 
   assert.equal(today.contactsNeedingAttention, 4);
   assert.equal(today.complaintRiskContacts, 2);
   assert.equal(today.leadsWithoutNextStep, 1);
   assert.equal(today.customersAwaitingFollowUp, 3);
+  assert.equal(today.appointmentsNeedingFollowUp, 1);
+  assert.equal(today.unlinkedAppointments, 2);
 });
