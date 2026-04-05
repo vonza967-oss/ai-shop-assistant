@@ -29,9 +29,6 @@ jobs:
           --health-retries=5
     env:
       CLEAN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/vonza_ci
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
 
     steps:
@@ -58,21 +55,8 @@ jobs:
       - name: Validate clean database from supabase migrations
         run: npm run validate:clean-db
 
-      - name: Set up Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - name: Link production Supabase project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
-
-      - name: Apply production migrations
-        run: supabase db push --linked --include-all --password "$SUPABASE_DB_PASSWORD"
-
-      - name: Confirm applied migration versions
-        run: |
-          supabase migration list --linked --password "$SUPABASE_DB_PASSWORD" | tee supabase-migration-list.txt
-          node scripts/assert-linked-migration-state.js supabase-migration-list.txt
+      # TODO: Reintroduce Supabase CLI linking and production migration automation
+      # once production database credentials are configured correctly.
 
       - name: Trigger Render deploy
         run: curl --fail --silent --show-error --request POST "$RENDER_DEPLOY_HOOK_URL"
